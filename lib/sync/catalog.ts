@@ -51,11 +51,17 @@ function styleSku(p: ShopifyProduct) {
 export async function upsertShopifyProducts(db: SupabaseClient, store: Store, allProducts: ShopifyProduct[]) {
   const exclusions = await loadExclusions(db);
   // Pomijamy wykluczenia z Ustawień oraz produkty, w których żaden rozmiar nie ma śledzenia stanu (usługi).
-  const products = allProducts.filter(
-    (p) =>
-      !isExcluded(exclusions, p.variants.nodes.map((v) => v.sku), p.title) &&
-      p.variants.nodes.some((v) => v.inventoryItem?.tracked !== false),
-  );
+  // Działa na pojedyncze rozmiary: np. „Wymiana ekranu” + wariant „iPhone 17 (oryginał)”.
+  const products = allProducts
+    .map((p) => ({
+      ...p,
+      variants: {
+        nodes: p.variants.nodes.filter(
+          (v) => v.inventoryItem?.tracked !== false && !isExcluded(exclusions, [v.sku], `${p.title} ${v.title}`),
+        ),
+      },
+    }))
+    .filter((p) => p.variants.nodes.length > 0);
   if (!products.length) return { products: 0, variants: 0, created: 0 };
   const gids = products.map((p) => p.id);
 
