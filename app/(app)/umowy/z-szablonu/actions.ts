@@ -45,7 +45,8 @@ export async function createLinkContract(_: unknown, formData: FormData): Promis
 
   // Sztuki już na stanie od razu wskazują umowę (czeka na podpis).
   const unitIds = items.map((i) => i.unit_id).filter(Boolean) as string[];
-  if (unitIds.length) await supabase.from("units").update({ contract_id: c.id }).in("id", unitIds);
+  // Nie nadpisujemy umowy, którą sztuka już ma (np. wgrany skan).
+  if (unitIds.length) await supabase.from("units").update({ contract_id: c.id }).in("id", unitIds).is("contract_id", null);
 
   redirect(`/umowy/${c.id}?ok=${encodeURIComponent("Umowa gotowa – wyślij sprzedającemu link do podpisu.")}`);
 }

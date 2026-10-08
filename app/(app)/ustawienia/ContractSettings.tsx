@@ -1,4 +1,4 @@
-import { headers } from "next/headers";
+import { appUrl } from "@/lib/app-url";
 import type { Company } from "@/lib/contracts/purchase";
 import { SubmitButton } from "@/components/SubmitButton";
 import { SignaturePad } from "@/components/SignaturePad";
@@ -6,9 +6,7 @@ import { CopyLink } from "@/app/(app)/umowy/[id]/CopyLink";
 import { saveBuyerSignature, saveCompany, updateGeneralLink } from "./actions";
 
 export async function ContractSettings({ company, signature, general }: { company: Company; signature: string | null; general: { key?: string; enabled?: boolean } | null }) {
-  const h = await headers();
-  const host = h.get("x-forwarded-host") ?? h.get("host") ?? "";
-  const link = general?.key ? `${host.startsWith("localhost") ? "http" : "https"}://${host}/umowa/${general.key}` : "";
+  const link = general?.key ? `${await appUrl()}/umowa/${general.key}` : "";
   return (
     <section className="card space-y-5 p-4">
       <h2 className="h2">Umowy kupna</h2>

@@ -76,6 +76,7 @@ declare
 begin
   select * into c from public.contracts where id = p_contract_id for update;
   if not found then raise exception 'Nie ma takiej umowy'; end if;
+  if c.status <> 'signed' then raise exception 'Umowa nie jest podpisana'; end if;
   if c.units_created_at is not null then raise exception 'Sztuki z tej umowy zostały już utworzone'; end if;
   if exists (select 1 from jsonb_array_elements(coalesce(c.items, '[]'::jsonb)) e
              where nullif(e ->> 'unit_id', '') is null and nullif(e ->> 'variant_id', '') is null) then
@@ -88,8 +89,11 @@ begin
       set contract_id = c.id,
           purchase_price = coalesce((it ->> 'price')::numeric, purchase_price)
       where id = (it ->> 'unit_id')::uuid;
-      insert into public.unit_events (unit_id, type, data)
-      values ((it ->> 'unit_id')::uuid, 'contract', jsonb_build_object('contract_id', c.id, 'signed', true));
+      -- sztuka mogła zostać usunięta w międzyczasie – wtedy tylko pomijamy
+      if found then
+        insert into public.unit_events (unit_id, type, data)
+        values ((it ->> 'unit_id')::uuid, 'contract', jsonb_build_object('contract_id', c.id, 'signed', true));
+      end if;
     else
       if c.location_id is null then raise exception 'Umowa nie ma lokalizacji dla nowych sztuk'; end if;
       for i in 1..greatest(coalesce((it ->> 'qty')::int, 1), 1) loop
@@ -108,7 +112,7 @@ begin
   -- Pod zamówienie: pierwsza nowa sztuka obsługuje sprzedaż bez sztuki.
   if c.sale_id is not null and v_first is not null then
     update public.sales set unit_id = v_first, status = 'assigned'
-    where id = c.sale_id and unit_id is null;
+    where id = c.sale_id and unit_id is null and status = 'no_unit';
   end if;
 
   update public.contracts set units_created_at = now() where id = c.id;

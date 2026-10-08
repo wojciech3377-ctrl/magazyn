@@ -4,8 +4,8 @@ import { requireProfile } from "@/lib/auth";
 import { CONTRACT_TYPE, dateOnly, money } from "@/lib/labels";
 import { Field, Notice, PageHeader, StatusBadge } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
-import { attachUnits, cancelContract, deleteContract, detachUnit, replaceFile, sendSigningEmail } from "../actions";
-import { headers } from "next/headers";
+import { attachUnits, cancelContract, deleteContract, detachUnit, replaceFile, retryFinalize, sendSigningEmail } from "../actions";
+import { appUrl } from "@/lib/app-url";
 import { mailConfigured } from "@/lib/mail";
 import { contractTotal, formatPln } from "@/lib/contracts/purchase";
 import { Pill } from "@/components/ui";
@@ -38,7 +38,7 @@ export default async function ContractPage({ params, searchParams }: { params: P
         sub={`${CONTRACT_TYPE[c.type]} · ${dateOnly(c.contract_date ?? c.created_at)}`}
         actions={
           <>
-            {c.template && <a className="btn-secondary" href={`/api/umowy/${c.id}/pdf`} target="_blank" rel="noreferrer">{c.status === "signed" ? "PDF umowy" : "Podgląd PDF"}</a>}
+            {c.template && profile.can_see_prices && <a className="btn-secondary" href={`/api/umowy/${c.id}/pdf`} target="_blank" rel="noreferrer">{c.status === "signed" ? "PDF umowy" : "Podgląd PDF"}</a>}
             <Link className="btn-secondary" href="/umowy">Wróć do listy</Link>
           </>
         }
@@ -133,10 +133,7 @@ type TemplateContract = {
 
 async function TemplateSection({ c, canSeePrices }: { c: TemplateContract; canSeePrices: boolean }) {
   const { supabase } = await requireProfile();
-  const h = await headers();
-  const host = h.get("x-forwarded-host") ?? h.get("host") ?? "";
-  const proto = host.startsWith("localhost") ? "http" : "https";
-  const link = c.sign_token ? `${proto}://${host}/podpis/${c.sign_token}` : "";
+  const link = c.sign_token ? `${await appUrl()}/podpis/${c.sign_token}` : "";
   const items = c.items ?? [];
   const needsAssign = c.status === "signed" && c.source === "general" && !c.units_created_at;
   const { data: locations } = needsAssign ? await supabase.from("locations").select("id, name, store_id, store:stores(name)").eq("active", true) : { data: [] };
@@ -168,6 +165,13 @@ async function TemplateSection({ c, canSeePrices }: { c: TemplateContract; canSe
             {canSeePrices && <tr><td colSpan={3} className="text-right font-medium">Razem</td><td className="text-right font-semibold tabular-nums">{formatPln(contractTotal(items.map((i) => ({ ...i, qty: Number(i.qty ?? 1), price: Number(i.price) }))))}</td></tr>}
           </tbody>
         </table>
+        {c.status === "signed" && !c.units_created_at && !needsAssign && (
+          <form action={retryFinalize} className="flex items-center gap-3 border-t border-line pt-3 text-sm">
+            <input type="hidden" name="id" value={c.id} />
+            <span className="text-warn">Po podpisie nie udało się przypiąć sztuk do umowy.</span>
+            <SubmitButton className="btn-secondary" pendingText="…">Spróbuj ponownie</SubmitButton>
+          </form>
+        )}
         {needsAssign && (
           <div className="space-y-2 border-t border-line pt-3">
             <h3 className="font-medium">Przypisz do katalogu</h3>
@@ -192,7 +196,6 @@ async function TemplateSection({ c, canSeePrices }: { c: TemplateContract; canSe
             </div>
             <form action={sendSigningEmail} className="flex gap-2">
               <input type="hidden" name="id" value={c.id} />
-              <input type="hidden" name="link" value={link} />
               <input className="input" type="email" name="email" defaultValue={c.seller_email ?? ""} placeholder="e-mail sprzedającego" aria-label="E-mail sprzedającego" />
               <SubmitButton className="btn-secondary whitespace-nowrap" pendingText="Wysyłam…" disabled={!mailConfigured()}>E-mail</SubmitButton>
             </form>

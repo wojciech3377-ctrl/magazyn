@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useRef, useState, useTransition } from "react";
-import { finishPosOrder, scanUnit, searchUnits, type PosUnit } from "./actions";
+import { finishPosOrder, pickUnitForVariant, scanUnit, searchUnits, type PosUnit, type ScanChoice } from "./actions";
 
 type Line = PosUnit & { priceInput: string };
 const PAYMENTS = [["card", "Karta"], ["cash", "Gotówka"], ["blik", "BLIK"], ["transfer", "Przelew"]] as const;
@@ -16,6 +16,7 @@ export function PosForm({ stores }: { stores: { id: string; name: string }[] }) 
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<PosUnit[]>([]);
   const [payment, setPayment] = useState("card");
+  const [choices, setChoices] = useState<ScanChoice[] | null>(null);
   const [busy, start] = useTransition();
   const scanRef = useRef<HTMLInputElement>(null);
 
@@ -41,9 +42,24 @@ export function PosForm({ stores }: { stores: { id: string; name: string }[] }) 
     setScan("");
     if (!code.trim()) return;
     start(async () => {
-      const r = await scanUnit(code, storeId);
+      const r = await scanUnit(code, storeId, lines.map((l) => l.id));
+      setChoices(null);
       if (r.unit) add(r.unit);
-      else setMessage({ tone: "error", text: r.error ?? "Nie znaleziono." });
+      else if (r.choices) {
+        setChoices(r.choices);
+        setMessage({ tone: "ok", text: "To SKU modelu – wybierz rozmiar." });
+      } else setMessage({ tone: "error", text: r.error ?? "Nie znaleziono." });
+      scanRef.current?.focus();
+    });
+  }
+
+  function pick(ch: ScanChoice) {
+    start(async () => {
+      const r = await pickUnitForVariant(ch.variantId, storeId, lines.map((l) => l.id));
+      if (r.unit) {
+        add(r.unit);
+        setChoices(null);
+      } else setMessage({ tone: "error", text: r.error ?? "Brak sztuki." });
       scanRef.current?.focus();
     });
   }
@@ -57,7 +73,7 @@ export function PosForm({ stores }: { stores: { id: string; name: string }[] }) 
 
       <div className="min-w-0 space-y-5 lg:col-span-2">
         <section className="card space-y-3 p-4">
-          <label className="label" htmlFor="scan">Skanuj kod z etykiety albo IMEI</label>
+          <label className="label" htmlFor="scan">Skanuj albo wpisz kod</label>
           <input
             ref={scanRef}
             id="scan"
@@ -65,11 +81,24 @@ export function PosForm({ stores }: { stores: { id: string; name: string }[] }) 
             value={scan}
             onChange={(e) => setScan(e.target.value)}
             onKeyDown={onScan}
-            placeholder="S000123 albo IMEI, potem Enter"
+            placeholder="Etykieta S000123, IMEI, SKU z Base, SKU ze Shopify lub EAN – potem Enter"
             autoFocus
             autoComplete="off"
           />
           {message && <p className={`text-sm ${message.tone === "ok" ? "text-ok" : "text-bad"}`}>{message.text}</p>}
+          {choices && (
+            <div className="rounded-md border border-line p-3">
+              <div className="mb-2 text-sm font-medium">{choices[0]?.title}</div>
+              <div className="flex flex-wrap gap-1.5">
+                {choices.map((ch) => (
+                  <button type="button" key={ch.variantId} disabled={ch.inStock === 0} onClick={() => pick(ch)}
+                    className="rounded-md border border-line px-2.5 py-1.5 text-sm hover:border-accent disabled:opacity-40">
+                    <b>{ch.option}</b> <span className="text-xs text-muted">{ch.inStock} szt.</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <details className="text-sm" open={query.length > 0}>
             <summary className="cursor-pointer text-muted">Dodaj ręcznie – wyszukaj produkt</summary>
             <input className="input mt-2" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Nazwa, SKU modelu, SKU z Base, EAN" aria-label="Szukaj produktu" />

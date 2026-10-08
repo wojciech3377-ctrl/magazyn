@@ -109,18 +109,22 @@ export async function deleteContract(formData: FormData) {
 export async function sendSigningEmail(formData: FormData) {
   const { supabase } = await requireProfile();
   const id = String(formData.get("id"));
-  const link = String(formData.get("link"));
-  const to = String(formData.get("email") ?? "").trim();
+  const to = String(formData.get("email") ?? "").trim().toLowerCase();
+  const { data: contract } = await supabase.from("contracts").select("status, sign_token").eq("id", id).single();
+  const { appUrl } = await import("@/lib/app-url");
+  const link = contract?.sign_token ? `${await appUrl()}/podpis/${contract.sign_token}` : "";
   const { mailConfigured, sendMail } = await import("@/lib/mail");
   const { getCompany } = await import("@/lib/contracts/settings");
   let msg = "";
-  if (!to) msg = "blad=" + encodeURIComponent("Wpisz e-mail sprzedającego.");
+  if (!to || !/^[^@\s<>"]+@[^@\s<>"]+\.[^@\s<>"]+$/.test(to)) msg = "blad=" + encodeURIComponent("Wpisz poprawny e-mail sprzedającego.");
+  else if (contract?.status !== "sent" || !link) msg = "blad=" + encodeURIComponent("Ta umowa nie czeka na podpis.");
   else if (!mailConfigured()) msg = "blad=" + encodeURIComponent("Wysyłka e-maili nie jest ustawiona (SMTP w Vercel). Skopiuj link i wyślij go sam.");
   else {
     try {
       const company = await getCompany(supabase);
+      const { escapeHtml } = await import("@/lib/contracts/png");
       await sendMail(to, `Umowa kupna do podpisu – ${company.name}`,
-        `<p>Dzień dobry,</p><p>przygotowaliśmy umowę kupna. Uzupełnij swoje dane i podpisz ją tutaj:</p><p><a href="${link}">${link}</a></p><p>Link jest ważny 14 dni.</p><p>${company.name}</p>`);
+        `<p>Dzień dobry,</p><p>przygotowaliśmy umowę kupna. Uzupełnij swoje dane i podpisz ją tutaj:</p><p><a href="${escapeHtml(link)}">${escapeHtml(link)}</a></p><p>Link jest ważny 14 dni.</p><p>${escapeHtml(company.name)}</p>`);
       await supabase.from("contracts").update({ seller_email: to }).eq("id", id);
       msg = "ok=" + encodeURIComponent(`Wysłano link na ${to}.`);
     } catch (e) {
@@ -133,9 +137,9 @@ export async function sendSigningEmail(formData: FormData) {
 export async function cancelContract(formData: FormData) {
   const { supabase } = await requireProfile();
   const id = String(formData.get("id"));
-  const { data: c } = await supabase.from("contracts").select("status").eq("id", id).single();
-  if (c?.status !== "sent") redirect(`/umowy/${id}?blad=${encodeURIComponent("Anulować można tylko niepodpisaną umowę.")}`);
-  await supabase.from("contracts").update({ status: "cancelled" }).eq("id", id);
+  // Warunek na status: jeśli sprzedający właśnie podpisał, anulowanie nie przejdzie.
+  const { data: cancelled } = await supabase.from("contracts").update({ status: "cancelled" }).eq("id", id).eq("status", "sent").select("id");
+  if (!cancelled?.length) redirect(`/umowy/${id}?blad=${encodeURIComponent("Anulować można tylko niepodpisaną umowę.")}`);
   await supabase.from("units").update({ contract_id: null }).eq("contract_id", id);
   revalidatePath(`/umowy/${id}`);
   redirect(`/umowy/${id}?ok=${encodeURIComponent("Umowa anulowana, link nie działa.")}`);
@@ -160,4 +164,13 @@ export async function assignGeneralItems(_: unknown, formData: FormData): Promis
   if (fin.error) return { error: fin.error.message };
   revalidatePath(`/umowy/${id}`);
   redirect(`/umowy/${id}?ok=${encodeURIComponent(`Utworzono ${fin.data.created_units} szt. „w drodze”. Po dotarciu przyjmij je w Magazynie.`)}`);
+}
+
+/** Ponowne utworzenie sztuk z podpisanej umowy, gdy automatyczny krok po podpisie się nie udał. */
+export async function retryFinalize(formData: FormData) {
+  const { supabase } = await requireProfile();
+  const id = String(formData.get("id"));
+  const { data, error } = await supabase.rpc("finalize_contract", { p_contract_id: id });
+  revalidatePath(`/umowy/${id}`);
+  redirect(`/umowy/${id}?${error ? `blad=${encodeURIComponent(error.message)}` : `ok=${encodeURIComponent(`Gotowe: ${data.created_units} nowych sztuk „w drodze”.`)}`}`);
 }

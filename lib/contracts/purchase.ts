@@ -35,6 +35,7 @@ const GROUPS: [string, string, string][] = [
   ["", "", ""],
   ["tysiąc", "tysiące", "tysięcy"],
   ["milion", "miliony", "milionów"],
+  ["miliard", "miliardy", "miliardów"],
 ];
 
 function plural(n: number, forms: [string, string, string]) {

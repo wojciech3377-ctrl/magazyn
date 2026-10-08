@@ -12,11 +12,11 @@ select public.register_sale(null, 5001, 1, '20000000-0000-0000-0000-000000000001
 select status from public.sales;
 -- umowa pod zamówienie + zwykły skup jednej pary
 insert into public.contracts (id, type, counterparty, template, status, sale_id, location_id, items)
-values ('40000000-0000-0000-0000-000000000001', 'purchase', 'Jan', 'purchase_v1', 'sent',
+values ('40000000-0000-0000-0000-000000000001', 'purchase', 'Jan', 'purchase_v1', 'signed',
   (select id from public.sales limit 1), '30000000-0000-0000-0000-000000000001',
   '[{"variant_id": "20000000-0000-0000-0000-000000000001", "title": "AJ4", "option": "42", "price": 900, "qty": 1}]');
 insert into public.contracts (id, type, counterparty, template, status, location_id, items)
-values ('40000000-0000-0000-0000-000000000002', 'purchase', 'Ola', 'purchase_v1', 'sent', '30000000-0000-0000-0000-000000000001',
+values ('40000000-0000-0000-0000-000000000002', 'purchase', 'Ola', 'purchase_v1', 'signed', '30000000-0000-0000-0000-000000000001',
   '[{"variant_id": "20000000-0000-0000-0000-000000000001", "title": "AJ4", "option": "42", "price": 800, "qty": 1}]');
 select public.finalize_contract('40000000-0000-0000-0000-000000000001');
 select public.finalize_contract('40000000-0000-0000-0000-000000000002');

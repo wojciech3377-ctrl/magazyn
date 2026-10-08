@@ -1,5 +1,6 @@
 import { type NextRequest } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { ensureContractPdf } from "@/lib/contracts/store";
 
 export const dynamic = "force-dynamic";
 
@@ -8,11 +9,11 @@ export async function GET(_: NextRequest, { params }: { params: Promise<{ token:
   const { token } = await params;
   if (!/^[a-f0-9]{32,64}$/.test(token)) return new Response("Nie znaleziono", { status: 404 });
   const db = createAdminClient();
-  const { data: c } = await db.from("contracts").select("number, status, file_path").eq("sign_token", token).maybeSingle();
-  if (!c || c.status !== "signed" || !c.file_path) return new Response("Umowa nie jest jeszcze gotowa", { status: 404 });
-  const { data: file } = await db.storage.from("contracts").download(c.file_path);
-  if (!file) return new Response("Nie znaleziono pliku", { status: 404 });
-  return new Response(await file.arrayBuffer(), {
+  const { data: c } = await db.from("contracts").select("id, number, status").eq("sign_token", token).maybeSingle();
+  if (!c || c.status !== "signed") return new Response("Umowa nie jest jeszcze podpisana", { status: 404 });
+  const pdf = await ensureContractPdf(c.id).catch(() => null);
+  if (!pdf) return new Response("Nie udało się przygotować PDF – napisz do nas", { status: 500 });
+  return new Response(new Uint8Array(pdf), {
     headers: { "Content-Type": "application/pdf", "Content-Disposition": `attachment; filename="umowa-kupna-${c.number}.pdf"`, "Cache-Control": "private, no-store" },
   });
 }

@@ -3,10 +3,10 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { contractPdf } from "@/lib/contracts/sign";
 import { getCompany } from "@/lib/contracts/settings";
-import { formatPln, contractTotal } from "@/lib/contracts/purchase";
-import { mailConfigured, sendMail } from "@/lib/mail";
+import { storePdfAndNotify } from "@/lib/contracts/store";
+import { contractTotal } from "@/lib/contracts/purchase";
+import { validateSignaturePng } from "@/lib/contracts/png";
 
 type Result = { error?: string };
 
@@ -26,12 +26,13 @@ function parseSeller(formData: FormData) {
   if (s.name.length < 5 || !s.name.includes(" ")) return { error: "Podaj imię i nazwisko." };
   if (s.idNumber.replace(/\s/g, "").length < 6) return { error: "Podaj PESEL albo numer dowodu osobistego." };
   if (!s.street || !s.city || !/^\d{2}-?\d{3}$/.test(s.postcode)) return { error: "Podaj pełny adres z kodem pocztowym (np. 61-850)." };
+  const letters = s.bank.replace(/[^A-Z]/g, "");
   const digits = s.bank.replace(/[^0-9]/g, "");
-  if (digits.length < 26) return { error: "Numer konta powinien mieć 26 cyfr." };
+  if ((letters && letters !== "PL") || digits.length !== 26) return { error: "Podaj polski numer konta: 26 cyfr (może być z PL na początku)." };
   if (s.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s.email)) return { error: "Nieprawidłowy adres e-mail." };
   const signature = String(formData.get("signature") ?? "");
-  if (!signature.startsWith("data:image/png;base64,") || signature.length < 2000) return { error: "Złóż podpis w ramce." };
-  if (signature.length > 600_000) return { error: "Podpis jest za duży – wyczyść ramkę i podpisz się jeszcze raz." };
+  const sigError = validateSignaturePng(signature);
+  if (sigError) return { error: sigError };
   if (!formData.get("consent")) return { error: "Zaznacz akceptację treści umowy." };
   const postcode = s.postcode.includes("-") ? s.postcode : `${s.postcode.slice(0, 2)}-${s.postcode.slice(2)}`;
   return {
@@ -39,7 +40,7 @@ function parseSeller(formData: FormData) {
       seller_name: s.name,
       seller_id_number: s.idNumber,
       seller_address: `${s.street}, ${postcode} ${s.city}`,
-      seller_bank_account: s.bank.startsWith("PL") ? s.bank : `PL${digits}`,
+      seller_bank_account: `PL${digits}`,
       seller_email: s.email || null,
       seller_phone: s.phone || null,
       counterparty: s.name,
@@ -54,36 +55,6 @@ async function requestMeta() {
     signer_ip: (h.get("x-forwarded-for") ?? "").split(",")[0].trim() || null,
     signer_user_agent: (h.get("user-agent") ?? "").slice(0, 300) || null,
   };
-}
-
-/** PDF do Storage + powiadomienia e-mail (jeśli SMTP jest ustawiony). */
-async function storePdfAndNotify(contractId: string) {
-  const db = createAdminClient();
-  const { data: c } = await db.from("contracts").select("*").eq("id", contractId).single();
-  const pdf = Buffer.from(await contractPdf(db, c));
-  const now = new Date();
-  const path = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, "0")}/${crypto.randomUUID()}.pdf`;
-  const { error } = await db.storage.from("contracts").upload(path, pdf, { contentType: "application/pdf" });
-  if (error) throw new Error(`Nie udało się zapisać PDF: ${error.message}`);
-  await db.from("contracts").update({ file_path: path, file_name: `umowa-kupna-${c.number}.pdf` }).eq("id", contractId);
-
-  if (mailConfigured()) {
-    const company = await getCompany(db);
-    const total = formatPln(contractTotal(c.items ?? []));
-    const filename = `umowa-kupna-${c.number}.pdf`;
-    try {
-      await sendMail(company.email, `Podpisana umowa kupna nr ${c.number} – ${c.seller_name}`,
-        `<p>${c.seller_name} podpisał(a) umowę kupna nr ${c.number} na kwotę ${total}.</p><p>Umowa jest w aplikacji w zakładce Umowy.</p>`,
-        [{ filename, content: pdf }]);
-      if (c.seller_email) {
-        await sendMail(c.seller_email, `Umowa kupna nr ${c.number} – ${company.name}`,
-          `<p>Dziękujemy! W załączniku kopia podpisanej umowy kupna nr ${c.number}.</p><p>${company.name}</p>`,
-          [{ filename, content: pdf }]);
-      }
-    } catch (e) {
-      await db.from("sync_log").insert({ job: "contract-mail", ok: false, message: e instanceof Error ? e.message : String(e) });
-    }
-  }
 }
 
 /** Umowa wygenerowana w aplikacji (link dla konkretnego sprzedającego). */
@@ -105,7 +76,7 @@ export async function signLinkedContract(token: string, _: Result | null, formDa
 
   const fin = await db.rpc("finalize_contract", { p_contract_id: c.id });
   if (fin.error) await db.from("sync_log").insert({ job: "contract-finalize", ok: false, message: `${c.id}: ${fin.error.message}` });
-  await storePdfAndNotify(c.id);
+  await storePdfAndNotify(c.id, { emailSeller: true });
   redirect(`/podpis/${token}`);
 }
 
@@ -119,13 +90,22 @@ export async function submitGeneralContract(key: string, _: Result | null, formD
 
   const parsed = parseSeller(formData);
   if ("error" in parsed) return { error: parsed.error };
-  let raw: { title: string; option: string; qty: string; price: string }[] = [];
+  // Prosty limit nadużyć: najwyżej 5 umów z ogólnego linku na godzinę z jednego adresu IP.
+  const meta = await requestMeta();
+  if (meta.signer_ip) {
+    const { count } = await db.from("contracts").select("id", { count: "exact", head: true })
+      .eq("source", "general").eq("signer_ip", meta.signer_ip).gte("created_at", new Date(Date.now() - 3600_000).toISOString());
+    if ((count ?? 0) >= 5) return { error: "Za dużo umów w krótkim czasie. Spróbuj później albo napisz do nas." };
+  }
+  let raw: unknown;
   try {
     raw = JSON.parse(String(formData.get("items") ?? "[]"));
   } catch {
     return { error: "Błąd listy przedmiotów." };
   }
-  const items = raw.slice(0, 20).map((i) => ({
+  if (!Array.isArray(raw)) return { error: "Błąd listy przedmiotów." };
+  const rows = raw.filter((i): i is Record<string, string> => !!i && typeof i === "object");
+  const items = rows.slice(0, 20).map((i) => ({
     title: clean(i.title, 150),
     option: clean(i.option, 40) || "–",
     qty: Math.min(50, Math.max(1, Math.floor(Number(i.qty) || 1))),
@@ -133,6 +113,7 @@ export async function submitGeneralContract(key: string, _: Result | null, formD
   })).filter((i) => i.title);
   if (!items.length) return { error: "Wpisz, co sprzedajesz." };
   if (items.some((i) => !Number.isFinite(i.price) || i.price <= 0 || i.price > 1_000_000)) return { error: "Podaj cenę każdej rzeczy." };
+  if (contractTotal(items) > 5_000_000) return { error: "Kwota umowy jest za wysoka – skontaktuj się z nami." };
 
   const token = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
   const { data: c, error } = await db.from("contracts").insert({
@@ -147,9 +128,10 @@ export async function submitGeneralContract(key: string, _: Result | null, formD
     items,
     sign_token: token,
     ...parsed.seller,
-    ...(await requestMeta()),
+    ...meta,
   }).select("id").single();
   if (error) return { error: "Nie udało się zapisać umowy. Spróbuj ponownie." };
-  await storePdfAndNotify(c.id);
+  // Ogólny link: bez wysyłki na adres podany przez klienta (nie może to być bramka do spamu) – PDF pobierze ze strony.
+  await storePdfAndNotify(c.id, { emailSeller: false });
   redirect(`/podpis/${token}`);
 }

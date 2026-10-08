@@ -58,6 +58,19 @@ export async function renderContractPdf(
     for (const r of runs) {
       const font = r.bold ? bold : regular;
       for (const w of r.text.split(/(\s+)/).filter((x) => x.length)) {
+        // Bardzo długie „słowo” (np. bez spacji) dzielimy na kawałki mieszczące się w wierszu.
+        if (font.widthOfTextAtSize(w, size) > maxWidth) {
+          let chunk = "";
+          for (const ch of w) {
+            if (font.widthOfTextAtSize(chunk + ch, size) > maxWidth) {
+              words.push({ text: chunk, font, width: font.widthOfTextAtSize(chunk, size) });
+              chunk = "";
+            }
+            chunk += ch;
+          }
+          if (chunk) words.push({ text: chunk, font, width: font.widthOfTextAtSize(chunk, size) });
+          continue;
+        }
         words.push({ text: w, font, width: font.widthOfTextAtSize(w, size) });
       }
     }

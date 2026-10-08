@@ -143,7 +143,9 @@ export async function saveCompany(formData: FormData) {
 export async function saveBuyerSignature(formData: FormData) {
   const { supabase } = await requireAdmin();
   const image = String(formData.get("signature") ?? "");
-  if (!image.startsWith("data:image/png;base64,") || image.length < 2000 || image.length > 600_000) done("Złóż podpis w ramce.", "blad");
+  const { validateSignaturePng } = await import("@/lib/contracts/png");
+  const err = validateSignaturePng(image);
+  if (err) done(err, "blad");
   const { error } = await supabase.from("app_settings").upsert({ key: "buyer_signature", value: { image }, updated_at: new Date().toISOString() });
   if (error) done(error.message, "blad");
   done("Podpis kupującego zapisany.");

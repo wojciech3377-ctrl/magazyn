@@ -10,6 +10,9 @@ export async function GET(_: NextRequest, { params }: { params: Promise<{ id: st
   const db = await createClient();
   const { data: auth } = await db.auth.getClaims();
   if (!auth?.claims?.sub) return new Response("unauthorized", { status: 401 });
+  // Umowa zawiera ceny zakupu – tylko dla osób z dostępem do cen.
+  const { data: profile } = await db.from("profiles").select("can_see_prices, active").eq("id", auth.claims.sub).single();
+  if (!profile?.active || !profile.can_see_prices) return new Response("Brak dostępu do cen zakupu", { status: 403 });
   const { data: c } = await db.from("contracts").select("*").eq("id", id).maybeSingle();
   if (!c) return new Response("Nie znaleziono", { status: 404 });
   if (c.file_path) {
