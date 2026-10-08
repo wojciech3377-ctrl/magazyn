@@ -63,17 +63,16 @@ export async function bulkAction(formData: FormData) {
   }
 
   if (action === "receive") {
-    const toReceive = units!.filter((u) => u.status === "in_transit");
-    if (!toReceive.length) back(returnTo, "Żadna z zaznaczonych sztuk nie jest „w drodze”.", "error");
-    // Warunek na status: dwa równoległe kliknięcia nie podniosą stanu w Base dwa razy.
-    const { data: updated, error: e } = await supabase.from("units")
-      .update({ status: "in_stock", received_at: new Date().toISOString() })
-      .in("id", toReceive.map((u) => u.id)).eq("status", "in_transit").select("id, variant_id, location_id");
+    // Towar „w drodze”: sztuki pod zamówienie od razu sprzedane, reszta na stan (+1 w Base).
+    const { data: received, error: e } = await supabase.rpc("receive_in_transit", { p_unit_ids: ids });
     if (e) back(returnTo, e.message, "error");
-    await supabase.from("unit_events").insert(updated!.map((u) => ({ unit_id: u.id, type: "status", data: { from: "in_transit", to: "in_stock" } })));
-    const results = await adjustBaseStock(supabase, updated!.map((u) => ({ variantId: u.variant_id, locationId: u.location_id, delta: 1 })));
+    const rows = (received ?? []) as { unit_id: string; variant_id: string; location_id: string; to_status: string }[];
+    if (!rows.length) back(returnTo, "Żadna z zaznaczonych sztuk nie jest „w drodze”.", "error");
+    const toStock = rows.filter((r) => r.to_status === "in_stock");
+    const results = await adjustBaseStock(supabase, toStock.map((u) => ({ variantId: u.variant_id, locationId: u.location_id, delta: 1 })));
     revalidatePath("/magazyn");
-    back(returnTo, `Przyjęto na stan ${updated!.length} szt.${baseSummary(results)}`, results.some((r) => !r.ok) ? "error" : "ok");
+    const forOrders = rows.length - toStock.length;
+    back(returnTo, `Przyjęto ${rows.length} szt.: na stan ${toStock.length}${forOrders ? `, do zamówień ${forOrders} (sprzedane)` : ""}.${baseSummary(results)}`, results.some((r) => !r.ok) ? "error" : "ok");
   }
 
   if (action === "delete") {
@@ -145,6 +144,16 @@ export async function changeStatus(formData: FormData) {
     const results = to === "return_to_stock" ? await adjustBaseStock(supabase, [{ variantId: u!.variant_id, locationId: u!.location_id, delta: 1 }]) : [];
     revalidatePath(path);
     back(path, `Zwrot zapisany.${baseSummary(results)}`, results.some((r) => !r.ok) ? "error" : "ok");
+  }
+
+  // Przyjęcie towaru w drodze (także pod zamówienie) – przez funkcję w bazie.
+  if (u!.status === "in_transit" && to === "in_stock") {
+    const { data: received, error } = await supabase.rpc("receive_in_transit", { p_unit_ids: [id] });
+    if (error) back(path, error.message, "error");
+    const row = ((received ?? []) as { to_status: string }[])[0];
+    const results = row?.to_status === "in_stock" ? await adjustBaseStock(supabase, [{ variantId: u!.variant_id, locationId: u!.location_id, delta: 1 }]) : [];
+    revalidatePath(path);
+    back(path, row?.to_status === "sold" ? "Sztuka dotarła i jest przypisana do zamówienia (sprzedana)." : `Przyjęto na stan.${baseSummary(results)}`, results.some((r) => !r.ok) ? "error" : "ok");
   }
 
   // Dozwolone przejścia i ich wpływ na stan w Base.

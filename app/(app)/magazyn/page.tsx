@@ -154,7 +154,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
                     {u.contract ? (
                       <Link href={`/umowy/${u.contract.id}`} className="text-accent hover:underline">{u.contract.counterparty}</Link>
                     ) : (
-                      <Link href={`/umowy/nowa?sztuki=${u.code}&wroc=${encodeURIComponent(returnTo)}`} className="btn-secondary px-2.5 py-1 text-xs">
+                      <Link href={`/umowy/z-szablonu?ids=${u.id}`} className="btn-secondary px-2.5 py-1 text-xs">
                         Dodaj umowę
                       </Link>
                     )}
@@ -181,7 +181,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
             </select>
             <SubmitButton className="btn-secondary" name="action" value="contract">Przypnij umowę</SubmitButton>
           </div>
-          <button type="submit" className="btn-secondary" formAction="/umowy/nowa" formMethod="get">Nowa umowa dla zaznaczonych</button>
+          <button type="submit" className="btn-secondary" formAction="/umowy/z-szablonu" formMethod="get">Umowa dla zaznaczonych</button>
           <SubmitButton className="btn-secondary" name="action" value="receive">Przyjmij na stan (z „w drodze”)</SubmitButton>
           <button type="submit" className="btn-secondary" formAction="/etykiety" formMethod="get" formTarget="_blank">Drukuj etykietę</button>
           {profile.role === "admin" && (

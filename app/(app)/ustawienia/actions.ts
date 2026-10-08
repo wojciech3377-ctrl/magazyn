@@ -123,3 +123,42 @@ export async function purgeExcluded() {
   if (error) done(error.message, "blad");
   done(`Usunięto z magazynu ${data.variants ?? 0} rozmiarów/wariantów (${data.products} całych produktów) i ${data.units} sztuk. Stany w Base bez zmian.`);
 }
+
+export async function saveCompany(formData: FormData) {
+  const { supabase } = await requireAdmin();
+  const value = {
+    name: String(formData.get("name") ?? "").trim(),
+    street: String(formData.get("street") ?? "").trim(),
+    city: String(formData.get("city") ?? "").trim(),
+    nip: String(formData.get("nip") ?? "").replace(/[^0-9]/g, ""),
+    email: String(formData.get("email") ?? "").trim(),
+    payment_days: Math.max(0, Math.min(60, Number(formData.get("payment_days") ?? 7) || 7)),
+  };
+  if (!value.name || !value.street || !value.city || value.nip.length !== 10) done("Uzupełnij nazwę, adres i NIP (10 cyfr).", "blad");
+  const { error } = await supabase.from("app_settings").upsert({ key: "company", value, updated_at: new Date().toISOString() });
+  if (error) done(error.message, "blad");
+  done("Dane firmy zapisane – będą na nowych umowach.");
+}
+
+export async function saveBuyerSignature(formData: FormData) {
+  const { supabase } = await requireAdmin();
+  const image = String(formData.get("signature") ?? "");
+  if (!image.startsWith("data:image/png;base64,") || image.length < 2000 || image.length > 600_000) done("Złóż podpis w ramce.", "blad");
+  const { error } = await supabase.from("app_settings").upsert({ key: "buyer_signature", value: { image }, updated_at: new Date().toISOString() });
+  if (error) done(error.message, "blad");
+  done("Podpis kupującego zapisany.");
+}
+
+export async function updateGeneralLink(formData: FormData) {
+  const { supabase } = await requireAdmin();
+  const { data } = await supabase.from("app_settings").select("value").eq("key", "general_contract_link").maybeSingle();
+  const cur = (data?.value ?? {}) as { key?: string; enabled?: boolean };
+  const op = String(formData.get("op"));
+  const value = {
+    key: op === "regenerate" || !cur.key ? crypto.randomUUID().replace(/-/g, "") : cur.key,
+    enabled: op === "disable" ? false : op === "enable" ? true : cur.enabled ?? true,
+  };
+  const { error } = await supabase.from("app_settings").upsert({ key: "general_contract_link", value, updated_at: new Date().toISOString() });
+  if (error) done(error.message, "blad");
+  done(op === "regenerate" ? "Nowy link utworzony – stary przestał działać." : "Zapisano.");
+}

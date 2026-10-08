@@ -17,7 +17,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
 
   let query = supabase
     .from("sales")
-    .select("id, order_ref, product_name, status, sold_at, store:stores(name), unit:units(id, code, identifier, owner_type, consignor:consignors(name)), variant:variants(option, product:products(title))", { count: "exact" })
+    .select("id, order_ref, product_name, status, sold_at, store:stores(name), unit:units(id, code, identifier, owner_type, status, consignor:consignors(name), contract:contracts(id, counterparty, status)), variant:variants(option, product:products(title))", { count: "exact" })
     .order("sold_at", { ascending: false })
     .range((page - 1) * PER_PAGE, page * PER_PAGE - 1);
   if (status) query = query.eq("status", status);
@@ -29,6 +29,11 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
     supabase.from("sales").select("id", { count: "exact", head: true }).eq("status", "no_unit"),
     supabase.from("sync_log").select("ok, message, created_at").eq("job", "base-orders").order("created_at", { ascending: false }).limit(1).maybeSingle(),
   ]);
+  const saleIds = (sales ?? []).map((x) => x.id);
+  const { data: pendingContracts } = saleIds.length
+    ? await supabase.from("contracts").select("id, status, sale_id").in("sale_id", saleIds).neq("status", "cancelled")
+    : { data: [] };
+  const pendingBySale = new Map((pendingContracts ?? []).map((c) => [c.sale_id as string, c]));
 
   return (
     <>
@@ -54,11 +59,12 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
 
       <div className="card overflow-x-auto">
         <table className="table">
-          <thead><tr><th>Data</th><th>Zamówienie</th><th>Produkt</th><th>Sztuka</th><th>Status</th><th>Zmień sztukę przy pakowaniu</th></tr></thead>
+          <thead><tr><th>Data</th><th>Zamówienie</th><th>Produkt</th><th>Sztuka</th><th>Status</th><th>Umowa</th><th>Zmień sztukę przy pakowaniu</th></tr></thead>
           <tbody>
-            {!sales?.length && <tr><td colSpan={6} className="py-10 text-center text-muted">Brak sprzedaży.</td></tr>}
+            {!sales?.length && <tr><td colSpan={7} className="py-10 text-center text-muted">Brak sprzedaży.</td></tr>}
             {sales?.map((s) => {
-              const unit = s.unit as unknown as { id: string; code: string; identifier: string | null; owner_type: string; consignor: { name: string } | null } | null;
+              const unit = s.unit as unknown as { id: string; code: string; identifier: string | null; owner_type: string; status: string; consignor: { name: string } | null; contract: { id: string; counterparty: string; status: string } | null } | null;
+              const pending = pendingBySale.get(s.id);
               const variant = s.variant as unknown as { option: string; product: { title: string } } | null;
               return (
                 <tr key={s.id}>
@@ -71,6 +77,18 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
                     {unit?.owner_type === "consignment" && <span className="block"><Pill tone="blue">komis · {unit.consignor?.name}</Pill></span>}
                   </td>
                   <td><Pill tone={s.status === "assigned" ? "green" : s.status === "cancelled" ? "slate" : "red"}>{SALE_STATUS[s.status]}</Pill></td>
+                  <td className="whitespace-nowrap">
+                    {unit?.contract ? (
+                      <Link className="text-accent hover:underline" href={`/umowy/${unit.contract.id}`}>{unit.contract.status === "sent" ? "czeka na podpis" : unit.contract.counterparty}</Link>
+                    ) : pending ? (
+                      <Link className="text-accent hover:underline" href={`/umowy/${pending.id}`}>{pending.status === "sent" ? "czeka na podpis" : "podpisana"}</Link>
+                    ) : s.status === "no_unit" && s.variant ? (
+                      <Link className="btn-secondary px-2.5 py-1 text-xs" href={`/umowy/z-szablonu?sprzedaz=${s.id}`}>Generuj umowę</Link>
+                    ) : unit ? (
+                      <Link className="btn-secondary px-2.5 py-1 text-xs" href={`/umowy/z-szablonu?ids=${unit.id}`}>Dodaj umowę</Link>
+                    ) : null}
+                    {unit?.status === "in_transit" && <span className="block text-xs text-warn">towar w drodze</span>}
+                  </td>
                   <td>{s.status !== "cancelled" && s.status !== "unmatched" && <SwapForm saleId={s.id} />}</td>
                 </tr>
               );

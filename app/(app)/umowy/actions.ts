@@ -104,3 +104,60 @@ export async function deleteContract(formData: FormData) {
   revalidatePath("/umowy");
   redirect("/umowy");
 }
+
+/** Link do podpisu e-mailem (SMTP z Vercel). */
+export async function sendSigningEmail(formData: FormData) {
+  const { supabase } = await requireProfile();
+  const id = String(formData.get("id"));
+  const link = String(formData.get("link"));
+  const to = String(formData.get("email") ?? "").trim();
+  const { mailConfigured, sendMail } = await import("@/lib/mail");
+  const { getCompany } = await import("@/lib/contracts/settings");
+  let msg = "";
+  if (!to) msg = "blad=" + encodeURIComponent("Wpisz e-mail sprzedającego.");
+  else if (!mailConfigured()) msg = "blad=" + encodeURIComponent("Wysyłka e-maili nie jest ustawiona (SMTP w Vercel). Skopiuj link i wyślij go sam.");
+  else {
+    try {
+      const company = await getCompany(supabase);
+      await sendMail(to, `Umowa kupna do podpisu – ${company.name}`,
+        `<p>Dzień dobry,</p><p>przygotowaliśmy umowę kupna. Uzupełnij swoje dane i podpisz ją tutaj:</p><p><a href="${link}">${link}</a></p><p>Link jest ważny 14 dni.</p><p>${company.name}</p>`);
+      await supabase.from("contracts").update({ seller_email: to }).eq("id", id);
+      msg = "ok=" + encodeURIComponent(`Wysłano link na ${to}.`);
+    } catch (e) {
+      msg = "blad=" + encodeURIComponent(e instanceof Error ? e.message : String(e));
+    }
+  }
+  redirect(`/umowy/${id}?${msg}`);
+}
+
+export async function cancelContract(formData: FormData) {
+  const { supabase } = await requireProfile();
+  const id = String(formData.get("id"));
+  const { data: c } = await supabase.from("contracts").select("status").eq("id", id).single();
+  if (c?.status !== "sent") redirect(`/umowy/${id}?blad=${encodeURIComponent("Anulować można tylko niepodpisaną umowę.")}`);
+  await supabase.from("contracts").update({ status: "cancelled" }).eq("id", id);
+  await supabase.from("units").update({ contract_id: null }).eq("contract_id", id);
+  revalidatePath(`/umowy/${id}`);
+  redirect(`/umowy/${id}?ok=${encodeURIComponent("Umowa anulowana, link nie działa.")}`);
+}
+
+/** Umowa z ogólnego linku: przypisanie pozycji do katalogu i utworzenie sztuk „w drodze”. */
+export async function assignGeneralItems(_: unknown, formData: FormData): Promise<{ error?: string }> {
+  const { supabase } = await requireProfile();
+  const id = String(formData.get("id"));
+  const variants = JSON.parse(String(formData.get("variants") ?? "[]")) as (string | null)[];
+  const locationId = String(formData.get("location_id") ?? "");
+  if (!locationId) return { error: "Wybierz lokalizację." };
+  const { data: c } = await supabase.from("contracts").select("items, units_created_at").eq("id", id).single();
+  if (!c) return { error: "Nie ma takiej umowy." };
+  if (c.units_created_at) return { error: "Sztuki z tej umowy już są w magazynie." };
+  const items = (c.items ?? []) as Record<string, unknown>[];
+  if (variants.length !== items.length || variants.some((v) => !v)) return { error: "Przypisz produkt z katalogu do każdej pozycji." };
+  const updated = items.map((it, i) => ({ ...it, variant_id: variants[i] }));
+  const { error } = await supabase.from("contracts").update({ items: updated, location_id: locationId }).eq("id", id);
+  if (error) return { error: error.message };
+  const fin = await supabase.rpc("finalize_contract", { p_contract_id: id });
+  if (fin.error) return { error: fin.error.message };
+  revalidatePath(`/umowy/${id}`);
+  redirect(`/umowy/${id}?ok=${encodeURIComponent(`Utworzono ${fin.data.created_units} szt. „w drodze”. Po dotarciu przyjmij je w Magazynie.`)}`);
+}

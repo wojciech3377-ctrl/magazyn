@@ -4,6 +4,9 @@ import { Notice, PageHeader, Pill } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
 import { getInventories, getInventoryWarehouses, getOrderSources } from "@/lib/integrations/base";
 import { shopifyCredentials } from "@/lib/integrations/shopify";
+import { getBuyerSignature, getCompany } from "@/lib/contracts/settings";
+import { mailConfigured } from "@/lib/mail";
+import { ContractSettings } from "./ContractSettings";
 import { addExclusion, createUser, deleteExclusion, importInitialStock, purgeExcluded, registerWebhooks, saveLocation, saveStore, saveUser } from "./actions";
 
 async function safe<T>(fn: () => Promise<T>): Promise<{ data: T | null; error: string | null }> {
@@ -27,6 +30,9 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
     supabase.from("sync_state").select("value").eq("key", "initial_stock_imported").maybeSingle(),
     supabase.from("catalog_exclusions").select("id, kind, value").order("created_at"),
   ]);
+  const [company, buyerSignature, { data: generalLink }] = isAdmin
+    ? await Promise.all([getCompany(supabase), getBuyerSignature(supabase), supabase.from("app_settings").select("value").eq("key", "general_contract_link").maybeSingle()])
+    : [null, null, { data: null }];
   const hasBase = !!process.env.BASE_API_TOKEN;
   const [inventories, warehouses, sources] = isAdmin && hasBase
     ? await Promise.all([safe(getInventories), safe(getInventoryWarehouses), safe(getOrderSources)])
@@ -43,6 +49,7 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
       return [`Shopify ${s.name}`, !!(c.clientId && c.clientSecret)] as [string, boolean];
     }),
     ["Zadanie cykliczne (CRON_SECRET)", !!process.env.CRON_SECRET],
+    ["E-mail (SMTP)", mailConfigured()],
   ] as [string, boolean][];
 
   return (
@@ -125,6 +132,8 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
               </form>
             </div>
           </section>
+
+          {company && <ContractSettings company={company} signature={buyerSignature} general={(generalLink?.value as { key?: string; enabled?: boolean }) ?? null} />}
 
           <section className="card p-4">
             <h2 className="h2 mb-1">Wykluczenia z magazynu</h2>
