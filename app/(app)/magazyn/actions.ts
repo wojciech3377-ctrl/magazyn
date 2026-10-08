@@ -22,7 +22,7 @@ function baseSummary(results: { ok: boolean; message: string }[]) {
 
 /** Akcje zbiorcze z listy Magazyn. */
 export async function bulkAction(formData: FormData) {
-  const { supabase } = await requireProfile();
+  const { supabase, profile } = await requireProfile();
   const ids = formData.getAll("ids").map(String).filter(Boolean);
   const action = String(formData.get("action") ?? "");
   const returnTo = String(formData.get("returnTo") ?? "/magazyn");
@@ -74,6 +74,20 @@ export async function bulkAction(formData: FormData) {
     const results = await adjustBaseStock(supabase, updated!.map((u) => ({ variantId: u.variant_id, locationId: u.location_id, delta: 1 })));
     revalidatePath("/magazyn");
     back(returnTo, `Przyjęto na stan ${updated!.length} szt.${baseSummary(results)}`, results.some((r) => !r.ok) ? "error" : "ok");
+  }
+
+  if (action === "delete") {
+    // Usuwanie z aplikacji (np. pomyłki, usługi z importu) – tylko administrator, stan w Base bez zmian.
+    if (profile.role !== "admin") back(returnTo, "Usuwać sztuki może tylko administrator.", "error");
+    const { data: sold } = await supabase.from("sales").select("unit_id").in("unit_id", ids);
+    const blocked = new Set((sold ?? []).map((s) => s.unit_id as string));
+    const toDelete = ids.filter((id) => !blocked.has(id));
+    if (toDelete.length) {
+      const { error: e } = await supabase.from("units").delete().in("id", toDelete);
+      if (e) back(returnTo, e.message, "error");
+    }
+    revalidatePath("/magazyn");
+    back(returnTo, `Usunięto ${toDelete.length} szt. Stan w Base bez zmian.${blocked.size ? ` ${blocked.size} szt. ze sprzedażą pominięto.` : ""}`);
   }
 
   back(returnTo, "Nieznana akcja.", "error");

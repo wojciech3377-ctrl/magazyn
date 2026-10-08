@@ -4,6 +4,7 @@ import { queryUnits, type UnitFilters } from "@/lib/queries/units";
 import { money, dateOnly, OWNER_TYPE, PURCHASE_FORM, UNIT_STATUS } from "@/lib/labels";
 import { Notice, PageHeader, Pagination, Pill, StatusBadge, Thumb } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
+import { ConfirmSubmit } from "@/components/ConfirmSubmit";
 import { bulkAction } from "./actions";
 
 const PER_PAGE = 100;
@@ -77,6 +78,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
 
       <form action={bulkAction}>
         <input type="hidden" name="returnTo" value={returnTo} />
+        <input type="hidden" name="wroc" value={returnTo} />
         <div className="card overflow-x-auto">
           <table className="table">
             <thead>
@@ -89,8 +91,8 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
                 <th>Status</th>
                 <th>Właściciel</th>
                 {profile.can_see_prices && <th className="text-right">Cena zakupu</th>}
-                <th>Umowa</th>
                 <th>Przyjęta</th>
+                <th className="text-right">Umowa</th>
               </tr>
             </thead>
             <tbody>
@@ -130,14 +132,16 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
                     <span className="block text-xs text-muted">{PURCHASE_FORM[u.purchase_form]}</span>
                   </td>
                   {profile.can_see_prices && <td className="whitespace-nowrap text-right tabular-nums">{money(u.purchase_price)}</td>}
-                  <td>
+                  <td className="whitespace-nowrap text-muted">{dateOnly(u.received_at)}</td>
+                  <td className="whitespace-nowrap text-right">
                     {u.contract ? (
                       <Link href={`/umowy/${u.contract.id}`} className="text-accent hover:underline">{u.contract.counterparty}</Link>
                     ) : (
-                      <Pill tone="red">brak umowy</Pill>
+                      <Link href={`/umowy/nowa?sztuki=${u.code}&wroc=${encodeURIComponent(returnTo)}`} className="btn-secondary px-2.5 py-1 text-xs">
+                        Dodaj umowę
+                      </Link>
                     )}
                   </td>
-                  <td className="whitespace-nowrap text-muted">{dateOnly(u.received_at)}</td>
                 </tr>
               ))}
             </tbody>
@@ -160,8 +164,14 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
             </select>
             <SubmitButton className="btn-secondary" name="action" value="contract">Przypnij umowę</SubmitButton>
           </div>
+          <button type="submit" className="btn-secondary" formAction="/umowy/nowa" formMethod="get">Nowa umowa dla zaznaczonych</button>
           <SubmitButton className="btn-secondary" name="action" value="receive">Przyjmij na stan (z „w drodze”)</SubmitButton>
           <button type="submit" className="btn-secondary" formAction="/etykiety" formMethod="get" formTarget="_blank">Drukuj etykiety</button>
+          {profile.role === "admin" && (
+            <ConfirmSubmit name="action" value="delete" className="btn-danger ml-auto" message="Usunąć zaznaczone sztuki z aplikacji? Stan w Base się nie zmieni. Sztuk ze sprzedażą nie da się usunąć.">
+              Usuń zaznaczone
+            </ConfirmSubmit>
+          )}
         </div>
       </form>
 

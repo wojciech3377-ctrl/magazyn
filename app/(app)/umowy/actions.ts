@@ -51,6 +51,11 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
     return { error: e instanceof Error ? e.message : String((e as { message?: string }).message ?? e) };
   }
   revalidatePath("/umowy");
+  revalidatePath("/magazyn");
+  const returnTo = String(formData.get("returnTo") ?? "");
+  if (returnTo.startsWith("/") && !returnTo.startsWith("//") && !note) {
+    redirect(`${returnTo}${returnTo.includes("?") ? "&" : "?"}ok=${encodeURIComponent("Umowa zapisana i przypięta.")}`);
+  }
   redirect(`/umowy/${id}${note}`);
 }
 
