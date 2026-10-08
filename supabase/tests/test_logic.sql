@@ -64,9 +64,28 @@ select status from public.sales where base_order_id = 1003;
 -- zwrot sztuki na stan i zamiana przy pakowaniu skanem IMEI
 select public.return_unit((select id from public.units where identifier = 'IMEI-B'), true);
 select order_ref, line_index, status from public.sales where base_order_id = 1002 order by line_index;
+
+-- zamiana na anulowanej sprzedaży jest zablokowana (inaczej zwolniłaby sztukę innej sprzedaży)
+do $$ begin
+  perform public.swap_sale_unit((select id from public.sales where base_order_id = 1002 and line_index = 0), 'IMEI-A');
+  raise exception 'swap na anulowanej sprzedaży powinien być zablokowany';
+exception when others then
+  if sqlerrm like 'swap na anulowanej%' then raise; end if;
+  raise notice 'OK, blokada: %', sqlerrm;
+end $$;
 select public.swap_sale_unit((select id from public.sales where base_order_id = 1001), 'imei-b');
 select s.order_ref, u.code, u.identifier, s.status from public.sales s join public.units u on u.id = s.unit_id where s.base_order_id = 1001;
 select code, identifier, status from public.units order by number;
+
+-- pracownik nie usuwa sztuk (tylko administrator)
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000002', true);
+update public.profiles set active = true where false; -- pracownik nieaktywny, dopóki admin go nie włączy
+select count(*) as widoczne_dla_nieaktywnego from public.units;
+reset role;
+update public.profiles set active = true where id = '00000000-0000-0000-0000-000000000002';
+set local role authenticated;
+delete from public.units where code = 'S000002';
+select count(*) as po_probie_usuniecia from public.units;
 
 -- RLS: konto bez profilu nie widzi nic
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000099', true);
