@@ -6,7 +6,7 @@ import { purchaseBlocks } from "./purchase";
 import { renderContractPdf } from "./pdf";
 
 /** PDF umowy z bazy (podpisany albo szkic do podglądu). */
-export async function contractPdf(db: SupabaseClient, c: ContractRow & { seller_signature?: string | null; signed_at?: string | null; signer_ip?: string | null }) {
+export async function contractPdf(db: SupabaseClient, c: ContractRow & { status?: string | null; seller_signature?: string | null; signed_at?: string | null; signer_ip?: string | null }) {
   const [company, buyerSignature] = await Promise.all([getCompany(db), getBuyerSignature(db)]);
   const data = toPurchaseContract(c, company);
   const signedNote = c.signed_at
@@ -14,7 +14,8 @@ export async function contractPdf(db: SupabaseClient, c: ContractRow & { seller_
     : null;
   return renderContractPdf(purchaseBlocks(data), {
     title: `Umowa kupna nr ${data.number}`,
-    buyerSignature,
+    // Podpis kupującego dopiero po zatwierdzeniu umowy przez sklep.
+    buyerSignature: c.status === "accepted" ? buyerSignature : null,
     sellerSignature: c.seller_signature ?? null,
     signedNote,
   });

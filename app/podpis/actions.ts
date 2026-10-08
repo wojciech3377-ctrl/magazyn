@@ -4,10 +4,10 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getCompany } from "@/lib/contracts/settings";
-import { storePdfAndNotify } from "@/lib/contracts/store";
+import { notifyAwaitingApproval } from "@/lib/contracts/store";
 import { contractTotal } from "@/lib/contracts/purchase";
 import { validateSignaturePng } from "@/lib/contracts/png";
-import { COUNTRIES, CURRENCIES, normalizeAccount } from "@/lib/contracts/options";
+import { COUNTRIES, CURRENCIES } from "@/lib/contracts/options";
 
 type Result = { error?: string };
 
@@ -34,11 +34,13 @@ function parseSeller(formData: FormData) {
   if (paymentMethod !== "transfer" && paymentMethod !== "cash") return { error: "Wybierz formę zapłaty: przelew albo gotówka. / Choose a payment method." };
   const currency = String(formData.get("currency") ?? "");
   if (!CURRENCIES.some((c) => c.code === currency)) return { error: "Wybierz walutę. / Choose a currency." };
-  let account: string | null = null;
-  if (paymentMethod === "transfer") {
-    const acc = normalizeAccount(s.bank);
-    if (acc.error) return { error: acc.error };
-    account = acc.value!;
+  // Numer konta bez ograniczeń formatu – sprzedający wpisuje, co chce (wymagany tylko przy przelewie).
+  const account = paymentMethod === "transfer" ? clean(formData.get("bank"), 80) : null;
+  if (paymentMethod === "transfer" && !account) return { error: "Wpisz numer konta. / Enter your bank account number." };
+  const contractDate = String(formData.get("contract_date") ?? "");
+  const d = new Date(`${contractDate}T12:00:00Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(contractDate) || Number.isNaN(d.getTime()) || Math.abs(d.getTime() - Date.now()) > 366 * 86400_000) {
+    return { error: "Podaj poprawną datę zawarcia umowy. / Enter a valid date." };
   }
   const language = formData.get("language") === "en" ? "en" : "pl";
   if (s.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s.email)) return { error: "Nieprawidłowy adres e-mail." };
@@ -57,6 +59,7 @@ function parseSeller(formData: FormData) {
       payment_method: paymentMethod,
       currency,
       language,
+      contract_date: contractDate,
       seller_email: s.email || null,
       seller_phone: s.phone || null,
       counterparty: s.name,
@@ -85,14 +88,13 @@ export async function signLinkedContract(token: string, _: Result | null, formDa
   if (c.sign_expires_at && new Date(c.sign_expires_at) < new Date()) return { error: "Link wygasł – poproś o nowy." };
 
   const { data: updated, error } = await db.from("contracts")
-    .update({ ...parsed.seller, ...(await requestMeta()), status: "signed", signed_at: new Date().toISOString(), contract_date: new Date().toISOString().slice(0, 10) })
+    .update({ ...parsed.seller, ...(await requestMeta()), status: "signed", signed_at: new Date().toISOString() })
     .eq("id", c.id).eq("status", "sent").select("id");
   if (error) return { error: "Nie udało się zapisać umowy. Spróbuj ponownie." };
   if (!updated?.length) redirect(`/podpis/${token}`);
 
-  const fin = await db.rpc("finalize_contract", { p_contract_id: c.id });
-  if (fin.error) await db.from("sync_log").insert({ job: "contract-finalize", ok: false, message: `${c.id}: ${fin.error.message}` });
-  await storePdfAndNotify(c.id, { emailSeller: true });
+  // Dalej sklep zatwierdza umowę w aplikacji – dopiero wtedy podpis kupującego, PDF i sztuki „w drodze”.
+  await notifyAwaitingApproval(c.id);
   redirect(`/podpis/${token}`);
 }
 
@@ -138,7 +140,6 @@ export async function submitGeneralContract(key: string, _: Result | null, formD
     source: "general",
     status: "signed",
     signed_at: new Date().toISOString(),
-    contract_date: new Date().toISOString().slice(0, 10),
     amount: contractTotal(items),
     payment_days: (await getCompany(db)).payment_days ?? 7,
     items,
@@ -147,7 +148,6 @@ export async function submitGeneralContract(key: string, _: Result | null, formD
     ...meta,
   }).select("id").single();
   if (error) return { error: "Nie udało się zapisać umowy. Spróbuj ponownie." };
-  // Ogólny link: bez wysyłki na adres podany przez klienta (nie może to być bramka do spamu) – PDF pobierze ze strony.
-  await storePdfAndNotify(c.id, { emailSeller: false });
+  await notifyAwaitingApproval(c.id);
   redirect(`/podpis/${token}`);
 }

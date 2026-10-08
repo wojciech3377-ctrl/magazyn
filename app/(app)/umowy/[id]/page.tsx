@@ -4,7 +4,7 @@ import { requireProfile } from "@/lib/auth";
 import { CONTRACT_TYPE, dateOnly, money } from "@/lib/labels";
 import { Field, Notice, PageHeader, StatusBadge } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
-import { attachUnits, cancelContract, deleteContract, detachUnit, replaceFile, retryFinalize, sendSigningEmail } from "../actions";
+import { acceptContract, attachUnits, cancelContract, deleteContract, detachUnit, rejectContract, replaceFile, retryFinalize, sendSigningEmail } from "../actions";
 import { appUrl } from "@/lib/app-url";
 import { mailConfigured } from "@/lib/mail";
 import { contractTotal, formatMoney } from "@/lib/contracts/purchase";
@@ -137,7 +137,8 @@ async function TemplateSection({ c, canSeePrices }: { c: TemplateContract; canSe
   const { supabase } = await requireProfile();
   const link = c.sign_token ? `${await appUrl()}/podpis/${c.sign_token}` : "";
   const items = c.items ?? [];
-  const needsAssign = c.status === "signed" && c.source === "general" && !c.units_created_at;
+  const needsAssign = c.status === "accepted" && c.source === "general" && !c.units_created_at
+    && items.some((i) => !i.unit_id && !i.variant_id);
   const { data: locations } = needsAssign ? await supabase.from("locations").select("id, name, store_id, store:stores(name)").eq("active", true) : { data: [] };
   const { data: sale } = c.sale_id ? await supabase.from("sales").select("order_ref").eq("id", c.sale_id).maybeSingle() : { data: null };
   const smsBody = encodeURIComponent(`Umowa kupna do podpisu: ${link}`);
@@ -148,7 +149,9 @@ async function TemplateSection({ c, canSeePrices }: { c: TemplateContract; canSe
         <div className="flex flex-wrap items-center gap-2">
           <h2 className="h2">Umowa z szablonu</h2>
           {c.status === "sent" && <Pill tone="amber">czeka na podpis</Pill>}
-          {c.status === "signed" && <Pill tone="green">podpisana</Pill>}
+          {c.status === "signed" && <Pill tone="red">do zatwierdzenia</Pill>}
+          {c.status === "accepted" && <Pill tone="green">zatwierdzona</Pill>}
+          {c.status === "rejected" && <Pill tone="slate">odrzucona</Pill>}
           {c.status === "cancelled" && <Pill tone="slate">anulowana</Pill>}
           {c.source === "general" && <Pill tone="blue">z ogólnego linku</Pill>}
           {sale && <Pill tone="blue">pod zamówienie {sale.order_ref}</Pill>}
@@ -167,7 +170,22 @@ async function TemplateSection({ c, canSeePrices }: { c: TemplateContract; canSe
             {canSeePrices && <tr><td colSpan={3} className="text-right font-medium">Razem</td><td className="text-right font-semibold tabular-nums">{formatMoney(contractTotal(items.map((i) => ({ ...i, qty: Number(i.qty ?? 1), price: Number(i.price) }))), c.currency ?? "PLN")}</td></tr>}
           </tbody>
         </table>
-        {c.status === "signed" && !c.units_created_at && !needsAssign && (
+        {c.status === "signed" && (
+          <div className="space-y-2 border-t border-line pt-3">
+            <p className="text-sm">Sprzedający podpisał umowę. Sprawdź dane i pozycje – po zatwierdzeniu dostanie umowę z Waszym podpisem{c.source !== "general" ? ", a towar pojawi się w Magazynie jako „w drodze”" : ""}.</p>
+            <div className="flex flex-wrap gap-2">
+              <form action={acceptContract}>
+                <input type="hidden" name="id" value={c.id} />
+                <SubmitButton pendingText="Zatwierdzam…">Zatwierdź i podpisz umowę</SubmitButton>
+              </form>
+              <form action={rejectContract}>
+                <input type="hidden" name="id" value={c.id} />
+                <SubmitButton className="btn-danger" pendingText="…">Odrzuć</SubmitButton>
+              </form>
+            </div>
+          </div>
+        )}
+        {c.status === "accepted" && !c.units_created_at && !needsAssign && (
           <form action={retryFinalize} className="flex items-center gap-3 border-t border-line pt-3 text-sm">
             <input type="hidden" name="id" value={c.id} />
             <span className="text-warn">Po podpisie nie udało się przypiąć sztuk do umowy.</span>
@@ -208,7 +226,7 @@ async function TemplateSection({ c, canSeePrices }: { c: TemplateContract; canSe
             </form>
           </>
         )}
-        {c.status === "signed" && (
+        {(c.status === "signed" || c.status === "accepted" || c.status === "rejected") && (
           <div className="space-y-1 text-sm">
             <h3 className="font-medium">Sprzedający</h3>
             <p>{c.seller_name}<br />{c.seller_address}{c.seller_country && c.seller_country !== "PL" ? `, ${countryName(c.seller_country)}` : ""}<br />PESEL/dowód: {c.seller_id_number}</p>

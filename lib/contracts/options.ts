@@ -3,10 +3,6 @@ export type Lang = "pl" | "en";
 export const CURRENCIES: { code: string; pl: [string, string, string]; en: [string, string]; minorPl: string }[] = [
   { code: "PLN", pl: ["złoty", "złote", "złotych"], en: ["zloty", "zlotys"], minorPl: "gr" },
   { code: "EUR", pl: ["euro", "euro", "euro"], en: ["euro", "euros"], minorPl: "ct" },
-  { code: "USD", pl: ["dolar", "dolary", "dolarów"], en: ["dollar", "dollars"], minorPl: "ct" },
-  { code: "GBP", pl: ["funt", "funty", "funtów"], en: ["pound", "pounds"], minorPl: "p" },
-  { code: "CHF", pl: ["frank", "franki", "franków"], en: ["franc", "francs"], minorPl: "rp" },
-  { code: "CZK", pl: ["korona", "korony", "koron"], en: ["koruna", "korunas"], minorPl: "h" },
 ];
 
 export const COUNTRIES: { code: string; pl: string; en: string }[] = [
@@ -66,6 +62,7 @@ function ibanOk(iban: string) {
   return rem === 1;
 }
 
-export function formatAccount(iban: string | null | undefined) {
-  return (iban ?? "").replace(/(.{4})/g, "$1 ").trim();
+/** Numer konta wyświetlamy tak, jak wpisał go sprzedający. */
+export function formatAccount(account: string | null | undefined) {
+  return (account ?? "").trim();
 }

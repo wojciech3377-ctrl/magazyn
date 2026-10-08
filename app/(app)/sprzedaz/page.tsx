@@ -31,7 +31,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
   ]);
   const saleIds = (sales ?? []).map((x) => x.id);
   const { data: pendingContracts } = saleIds.length
-    ? await supabase.from("contracts").select("id, status, sale_id").in("sale_id", saleIds).neq("status", "cancelled")
+    ? await supabase.from("contracts").select("id, status, sale_id").in("sale_id", saleIds).not("status", "in", "(cancelled,rejected)")
     : { data: [] };
   const pendingBySale = new Map((pendingContracts ?? []).map((c) => [c.sale_id as string, c]));
 
@@ -79,9 +79,9 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
                   <td><Pill tone={s.status === "assigned" ? "green" : s.status === "cancelled" ? "slate" : "red"}>{SALE_STATUS[s.status]}</Pill></td>
                   <td className="whitespace-nowrap">
                     {unit?.contract ? (
-                      <Link className="text-accent hover:underline" href={`/umowy/${unit.contract.id}`}>{unit.contract.status === "sent" ? "czeka na podpis" : unit.contract.counterparty}</Link>
+                      <Link className="text-accent hover:underline" href={`/umowy/${unit.contract.id}`}>{unit.contract.status === "sent" ? "czeka na podpis" : unit.contract.status === "signed" ? "do zatwierdzenia" : unit.contract.counterparty}</Link>
                     ) : pending ? (
-                      <Link className="text-accent hover:underline" href={`/umowy/${pending.id}`}>{pending.status === "sent" ? "czeka na podpis" : "podpisana"}</Link>
+                      <Link className="text-accent hover:underline" href={`/umowy/${pending.id}`}>{pending.status === "sent" ? "czeka na podpis" : pending.status === "signed" ? "do zatwierdzenia" : pending.status === "rejected" ? "odrzucona" : "zatwierdzona"}</Link>
                     ) : s.status === "no_unit" && s.variant ? (
                       <Link className="btn-secondary px-2.5 py-1 text-xs" href={`/umowy/z-szablonu?sprzedaz=${s.id}`}>Generuj umowę</Link>
                     ) : unit ? (

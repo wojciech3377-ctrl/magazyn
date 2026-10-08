@@ -11,14 +11,15 @@ export default async function UmowyPage({ searchParams }: { searchParams: Promis
   const page = Math.max(1, Number(sp.strona ?? 1));
   let query = supabase
     .from("contracts")
-    .select("id, number, type, counterparty, contract_date, amount, file_path, created_at, status, source, units_created_at, units(count)", { count: "exact" })
+    .select("id, number, type, counterparty, contract_date, amount, file_path, created_at, status, source, template, units_created_at, units(count)", { count: "exact" })
     .order("created_at", { ascending: false })
     .range((page - 1) * PER_PAGE, page * PER_PAGE - 1);
   if (sp.q) query = query.ilike("counterparty", `%${sp.q.replace(/[%,()]/g, "")}%`);
   if (sp.typ) query = query.eq("type", sp.typ);
   if (sp.plik === "brak") query = query.is("file_path", null);
   if (sp.stan === "czeka") query = query.eq("status", "sent");
-  if (sp.stan === "przypisz") query = query.eq("status", "signed").eq("source", "general").is("units_created_at", null);
+  if (sp.stan === "zatwierdz") query = query.eq("status", "signed").not("template", "is", null);
+  if (sp.stan === "przypisz") query = query.eq("status", "accepted").eq("source", "general").is("units_created_at", null);
   const [{ data, count }, { count: noContract }] = await Promise.all([
     query,
     supabase.from("units").select("id", { count: "exact", head: true }).is("contract_id", null).in("status", ["in_stock", "in_transit", "reserved"]),
@@ -45,6 +46,7 @@ export default async function UmowyPage({ searchParams }: { searchParams: Promis
         <select className="input w-56" name="stan" defaultValue={sp.stan ?? ""}>
           <option value="">Wszystkie stany</option>
           <option value="czeka">czeka na podpis</option>
+          <option value="zatwierdz">do zatwierdzenia</option>
           <option value="przypisz">z ogólnego linku – do przypisania</option>
         </select>
         <select className="input w-40" name="plik" defaultValue={sp.plik ?? ""}>
@@ -64,9 +66,11 @@ export default async function UmowyPage({ searchParams }: { searchParams: Promis
                 <td><Link className="font-medium text-accent hover:underline" href={`/umowy/${c.id}`}>{c.counterparty}</Link></td>
                 <td>
                   {c.status === "sent" ? <Pill tone="amber">czeka na podpis</Pill>
+                    : c.status === "signed" && c.template ? <Pill tone="red">do zatwierdzenia</Pill>
                     : c.status === "cancelled" ? <Pill tone="slate">anulowana</Pill>
+                    : c.status === "rejected" ? <Pill tone="slate">odrzucona</Pill>
                     : c.source === "general" && !c.units_created_at ? <Pill tone="blue">do przypisania</Pill>
-                    : <Pill tone="green">podpisana</Pill>}
+                    : <Pill tone="green">{c.template ? "zatwierdzona" : "wgrana"}</Pill>}
                 </td>
                 <td>{CONTRACT_TYPE[c.type]}</td>
                 <td className="whitespace-nowrap">{dateOnly(c.contract_date)}</td>

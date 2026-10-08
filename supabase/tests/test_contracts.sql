@@ -12,11 +12,11 @@ select public.register_sale(null, 5001, 1, '20000000-0000-0000-0000-000000000001
 select status from public.sales;
 -- umowa pod zamówienie + zwykły skup jednej pary
 insert into public.contracts (id, type, counterparty, template, status, sale_id, location_id, items)
-values ('40000000-0000-0000-0000-000000000001', 'purchase', 'Jan', 'purchase_v1', 'signed',
+values ('40000000-0000-0000-0000-000000000001', 'purchase', 'Jan', 'purchase_v1', 'accepted',
   (select id from public.sales limit 1), '30000000-0000-0000-0000-000000000001',
   '[{"variant_id": "20000000-0000-0000-0000-000000000001", "title": "AJ4", "option": "42", "price": 900, "qty": 1}]');
 insert into public.contracts (id, type, counterparty, template, status, location_id, items)
-values ('40000000-0000-0000-0000-000000000002', 'purchase', 'Ola', 'purchase_v1', 'signed', '30000000-0000-0000-0000-000000000001',
+values ('40000000-0000-0000-0000-000000000002', 'purchase', 'Ola', 'purchase_v1', 'accepted', '30000000-0000-0000-0000-000000000001',
   '[{"variant_id": "20000000-0000-0000-0000-000000000001", "title": "AJ4", "option": "42", "price": 800, "qty": 1}]');
 select public.finalize_contract('40000000-0000-0000-0000-000000000001');
 select public.finalize_contract('40000000-0000-0000-0000-000000000002');
@@ -32,7 +32,7 @@ exception when others then
   raise notice 'OK: %', sqlerrm;
 end $$;
 insert into public.contracts (id, type, counterparty, template, status, items)
-values ('40000000-0000-0000-0000-000000000003', 'purchase', 'Ewa', 'purchase_v1', 'signed', '[{"title": "Yeezy", "option": "43", "price": 500, "qty": 1}]');
+values ('40000000-0000-0000-0000-000000000003', 'purchase', 'Ewa', 'purchase_v1', 'accepted', '[{"title": "Yeezy", "option": "43", "price": 500, "qty": 1}]');
 do $$ begin
   perform public.finalize_contract('40000000-0000-0000-0000-000000000003');
   raise exception 'bez produktu powinno być zablokowane';

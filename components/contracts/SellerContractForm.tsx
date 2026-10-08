@@ -30,7 +30,7 @@ const L = {
     transfer: "Przelew na konto",
     cash: "Gotówka",
     currency: "Waluta",
-    bank: "Numer konta (IBAN)",
+    bank: "Numer konta",
     email: "E-mail (wyślemy kopię umowy)",
     phone: "Telefon",
     signature: "Podpis sprzedającego",
@@ -62,7 +62,7 @@ const L = {
     transfer: "Bank transfer",
     cash: "Cash",
     currency: "Currency",
-    bank: "Bank account number (IBAN)",
+    bank: "Bank account number",
     email: "E-mail (we will send you a copy)",
     phone: "Phone",
     signature: "Seller's signature",
@@ -92,6 +92,7 @@ export function SellerContractForm({
   const T = L[lang];
   const [f, setF] = useState({ name: "", idNumber: "", street: "", postcode: "", city: "", bank: "", email: "", phone: "" });
   const [country, setCountry] = useState("PL");
+  const [contractDate, setContractDate] = useState(date);
   const [payment, setPayment] = useState<"" | "transfer" | "cash">("");
   const [currency, setCurrency] = useState("");
   const [items, setItems] = useState<{ title: string; option: string; qty: string; price: string }[]>(
@@ -105,7 +106,7 @@ export function SellerContractForm({
     : items.filter((i) => i.title).map((i) => ({ title: i.title, option: i.option || "–", qty: Math.max(1, Number(i.qty) || 1), price: Number(i.price.replace(",", ".")) || 0 }));
 
   const blocks = useMemo(() => purchaseBlocks({
-    number, date, company, paymentDays, items: previewItems,
+    number, date: contractDate || date, company, paymentDays, items: previewItems,
     paymentMethod: payment || null,
     currency: currency || null,
     seller: {
@@ -115,7 +116,7 @@ export function SellerContractForm({
       bankAccount: f.bank,
       country,
     },
-  }, lang), [f, number, date, company, paymentDays, previewItems, payment, currency, country, lang]);
+  }, lang), [f, number, date, contractDate, company, paymentDays, previewItems, payment, currency, country, lang]);
 
   const input = (key: keyof typeof f, label: string, props: React.InputHTMLAttributes<HTMLInputElement> = {}) => (
     <div>
@@ -154,8 +155,8 @@ export function SellerContractForm({
           <input type="text" name="website" className="hidden" tabIndex={-1} autoComplete="off" />
           <section className="card grid grid-cols-2 gap-3 p-4">
             <div>
-              <div className="label">{T.date}</div>
-              <div className="py-2 text-sm font-medium">{date}</div>
+              <label className="label" htmlFor="contract_date">{T.date}</label>
+              <input className="input" id="contract_date" name="contract_date" type="date" value={contractDate} onChange={(e) => setContractDate(e.target.value)} required />
             </div>
             <div>
               <label className="label" htmlFor="country">{T.country}</label>
@@ -214,7 +215,7 @@ export function SellerContractForm({
             {payment === "transfer" && input("bank", T.bank, { required: true, autoComplete: "off" })}
             <div>
               <div className="label">{T.currency}</div>
-              <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+              <div className="grid grid-cols-2 gap-2">
                 {CURRENCIES.map((c) => <span key={c.code}>{choice(c.code, currency, setCurrency, c.code, "currency")}</span>)}
               </div>
             </div>

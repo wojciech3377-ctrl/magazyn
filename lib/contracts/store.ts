@@ -1,4 +1,5 @@
 import "server-only";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { contractPdf } from "./sign";
 import { getCompany } from "./settings";
@@ -6,34 +7,30 @@ import { contractTotal, formatMoney } from "./purchase";
 import { escapeHtml } from "./png";
 import { mailConfigured, sendMail } from "@/lib/mail";
 
-/** PDF do Storage + powiadomienia e-mail (jeśli SMTP jest ustawiony). Błędy tylko do dziennika – umowa jest już podpisana. */
-export async function storePdfAndNotify(contractId: string, opts: { emailSeller: boolean }) {
+async function logError(db: SupabaseClient, job: string, id: string, e: unknown) {
+  await db.from("sync_log").insert({ job, ok: false, message: `${id}: ${e instanceof Error ? e.message : String(e)}` });
+}
+
+/** Sprzedający podpisał – e-mail do sklepu, że umowa czeka na zatwierdzenie (jeśli SMTP jest ustawiony). */
+export async function notifyAwaitingApproval(contractId: string) {
   const db = createAdminClient();
   try {
+    if (!mailConfigured()) return;
     const { data: c } = await db.from("contracts").select("*").eq("id", contractId).single();
-    const pdf = await ensureContractPdf(contractId);
-    if (!pdf || !mailConfigured()) return;
     const company = await getCompany(db);
-    const total = formatMoney(contractTotal(c.items ?? []), c.currency);
-    const filename = `umowa-kupna-${c.number}.pdf`;
-    await sendMail(company.email, `Podpisana umowa kupna nr ${c.number}`,
-      `<p>${escapeHtml(c.seller_name)} podpisał(a) umowę kupna nr ${c.number} na kwotę ${escapeHtml(total)}.</p><p>Umowa jest w aplikacji w zakładce Umowy.</p>`,
-      [{ filename, content: pdf }]);
-    if (opts.emailSeller && c.seller_email) {
-      await sendMail(c.seller_email, `Umowa kupna nr ${c.number} – ${company.name}`,
-        `<p>Dziękujemy! W załączniku kopia podpisanej umowy kupna nr ${c.number}.</p><p>${escapeHtml(company.name)}</p>`,
-        [{ filename, content: pdf }]);
-    }
+    await sendMail(company.email, `Umowa kupna nr ${c.number} czeka na zatwierdzenie`,
+      `<p>${escapeHtml(c.seller_name)} podpisał(a) umowę kupna nr ${c.number} na kwotę ${escapeHtml(formatMoney(contractTotal(c.items ?? []), c.currency))}.</p>` +
+      `<p>Zatwierdź ją w aplikacji w zakładce Umowy – dopiero wtedy sprzedający dostanie umowę z Waszym podpisem.</p>`);
   } catch (e) {
-    await db.from("sync_log").insert({ job: "contract-pdf", ok: false, message: `${contractId}: ${e instanceof Error ? e.message : String(e)}` });
+    await logError(db, "contract-mail", contractId, e);
   }
 }
 
-/** Zapisany PDF podpisanej umowy; gdy go brak – generuje i zapisuje. */
+/** PDF zatwierdzonej umowy (z oboma podpisami); gdy go brak – generuje i zapisuje. */
 export async function ensureContractPdf(contractId: string): Promise<Buffer | null> {
   const db = createAdminClient();
   const { data: c } = await db.from("contracts").select("*").eq("id", contractId).single();
-  if (!c || c.status !== "signed") return null;
+  if (!c || c.status !== "accepted") return null;
   if (c.file_path) {
     const { data } = await db.storage.from("contracts").download(c.file_path);
     if (data) return Buffer.from(await data.arrayBuffer());
@@ -47,3 +44,21 @@ export async function ensureContractPdf(contractId: string): Promise<Buffer | nu
   return pdf;
 }
 
+/** Po zatwierdzeniu: PDF z oboma podpisami do Storage i kopia e-mailem do sprzedającego (jeśli podał e-mail). */
+export async function deliverAcceptedContract(contractId: string): Promise<{ emailed: boolean; error?: string }> {
+  const db = createAdminClient();
+  try {
+    const pdf = await ensureContractPdf(contractId);
+    if (!pdf) return { emailed: false, error: "Umowa nie jest zatwierdzona." };
+    const { data: c } = await db.from("contracts").select("number, seller_email").eq("id", contractId).single();
+    if (!c?.seller_email || !mailConfigured()) return { emailed: false };
+    const company = await getCompany(db);
+    await sendMail(c.seller_email, `Umowa kupna nr ${c.number} – ${company.name}`,
+      `<p>Dziękujemy! W załączniku umowa kupna nr ${c.number} podpisana przez obie strony.</p><p>${escapeHtml(company.name)}</p>`,
+      [{ filename: `umowa-kupna-${c.number}.pdf`, content: pdf }]);
+    return { emailed: true };
+  } catch (e) {
+    await logError(db, "contract-pdf", contractId, e);
+    return { emailed: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}

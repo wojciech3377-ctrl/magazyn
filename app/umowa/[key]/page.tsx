@@ -25,7 +25,7 @@ export default async function GeneralContractPage({ params }: { params: Promise<
         mode="free"
         company={company}
         number="(nadamy po podpisaniu)"
-        date={new Date().toISOString().slice(0, 10)}
+        date={new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Warsaw" }).format(new Date())}
         paymentDays={company.payment_days ?? 7}
         buyerSignature={buyerSignature}
         items={[]}

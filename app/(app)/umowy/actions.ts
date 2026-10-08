@@ -152,8 +152,9 @@ export async function assignGeneralItems(_: unknown, formData: FormData): Promis
   const variants = JSON.parse(String(formData.get("variants") ?? "[]")) as (string | null)[];
   const locationId = String(formData.get("location_id") ?? "");
   if (!locationId) return { error: "Wybierz lokalizację." };
-  const { data: c } = await supabase.from("contracts").select("items, units_created_at").eq("id", id).single();
+  const { data: c } = await supabase.from("contracts").select("items, units_created_at, status").eq("id", id).single();
   if (!c) return { error: "Nie ma takiej umowy." };
+  if (c.status !== "accepted") return { error: "Najpierw zatwierdź umowę." };
   if (c.units_created_at) return { error: "Sztuki z tej umowy już są w magazynie." };
   const items = (c.items ?? []) as Record<string, unknown>[];
   if (variants.length !== items.length || variants.some((v) => !v)) return { error: "Przypisz produkt z katalogu do każdej pozycji." };
@@ -173,4 +174,40 @@ export async function retryFinalize(formData: FormData) {
   const { data, error } = await supabase.rpc("finalize_contract", { p_contract_id: id });
   revalidatePath(`/umowy/${id}`);
   redirect(`/umowy/${id}?${error ? `blad=${encodeURIComponent(error.message)}` : `ok=${encodeURIComponent(`Gotowe: ${data.created_units} nowych sztuk „w drodze”.`)}`}`);
+}
+
+/** Zatwierdzenie umowy podpisanej przez sprzedającego: nasz podpis, PDF dla sprzedającego, sztuki „w drodze”. */
+export async function acceptContract(formData: FormData) {
+  const { supabase, profile } = await requireProfile();
+  const id = String(formData.get("id"));
+  const { data: accepted } = await supabase.from("contracts")
+    .update({ status: "accepted", accepted_at: new Date().toISOString(), accepted_by: profile.id })
+    .eq("id", id).eq("status", "signed").select("id, source, items");
+  if (!accepted?.length) redirect(`/umowy/${id}?blad=${encodeURIComponent("Zatwierdzić można tylko umowę podpisaną przez sprzedającego.")}`);
+
+  // Umowa z ogólnego linku czeka jeszcze na przypisanie pozycji do katalogu; pozostałe od razu tworzą sztuki.
+  const msgs: string[] = ["Umowa zatwierdzona."];
+  const items = (accepted[0].items ?? []) as { unit_id?: string; variant_id?: string }[];
+  if (items.every((i) => i.unit_id || i.variant_id)) {
+    const fin = await supabase.rpc("finalize_contract", { p_contract_id: id });
+    if (fin.error) msgs.push(`Sztuki: ${fin.error.message}`);
+    else if (fin.data.created_units) msgs.push(`${fin.data.created_units} szt. „w drodze”.`);
+  } else msgs.push("Przypisz pozycje do katalogu, żeby utworzyć sztuki.");
+
+  const { deliverAcceptedContract } = await import("@/lib/contracts/store");
+  const d = await deliverAcceptedContract(id);
+  if (d.error) msgs.push(`PDF: ${d.error}`);
+  else msgs.push(d.emailed ? "Sprzedający dostał umowę e-mailem." : "Sprzedający pobierze umowę ze swojego linku.");
+  revalidatePath(`/umowy/${id}`);
+  redirect(`/umowy/${id}?${d.error ? "blad" : "ok"}=${encodeURIComponent(msgs.join(" "))}`);
+}
+
+export async function rejectContract(formData: FormData) {
+  const { supabase } = await requireProfile();
+  const id = String(formData.get("id"));
+  const { data: rejected } = await supabase.from("contracts").update({ status: "rejected" }).eq("id", id).eq("status", "signed").select("id");
+  if (!rejected?.length) redirect(`/umowy/${id}?blad=${encodeURIComponent("Odrzucić można tylko umowę czekającą na zatwierdzenie.")}`);
+  await supabase.from("units").update({ contract_id: null }).eq("contract_id", id);
+  revalidatePath(`/umowy/${id}`);
+  redirect(`/umowy/${id}?ok=${encodeURIComponent("Umowa odrzucona.")}`);
 }
