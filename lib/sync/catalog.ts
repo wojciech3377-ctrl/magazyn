@@ -1,6 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getProduct, shopifyGraphql, type ShopifyProduct } from "@/lib/integrations/shopify";
+import { isServiceSku } from "@/lib/services";
 
 export type Store = {
   id: string;
@@ -47,11 +48,8 @@ function styleSku(p: ShopifyProduct) {
  * Zapis paczki produktów Shopify jednego sklepu. Ten sam model w obu sklepach łączy się
  * w jeden produkt po SKU modelu, a warianty po rozmiarze.
  */
-/** Usługi (np. naprawy TF-SRV) nie są towarem – nie trafiają do magazynu. */
-export const SERVICE_SKU_PREFIXES = ["TF-SRV"];
-
 function isService(p: ShopifyProduct) {
-  return p.variants.nodes.some((v) => SERVICE_SKU_PREFIXES.some((x) => (v.sku ?? "").toUpperCase().startsWith(x)));
+  return p.variants.nodes.some((v) => isServiceSku(v.sku));
 }
 
 export async function upsertShopifyProducts(db: SupabaseClient, store: Store, allProducts: ShopifyProduct[]) {

@@ -1,9 +1,9 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getOrdersConfirmedFrom, type BaseOrder } from "@/lib/integrations/base";
+import { isServiceSku } from "@/lib/services";
 
 const STATE_KEY = "base_orders";
-const SKIP_SKU_PREFIXES = ["TF-SRV"]; // usługi (naprawy) – bez sztuk w magazynie
 
 /**
  * Odczyt nowych zamówień z Base i oznaczenie sprzedanych sztuk (najpierw własne, potem komis,
@@ -71,7 +71,7 @@ async function processOrders(db: SupabaseClient, orders: BaseOrder[], storeBySou
     const storeId = o.order_source === "shop" && o.order_source_id ? storeBySource.get(Number(o.order_source_id)) ?? null : null;
     const ref = o.external_order_id || (o.shop_order_id ? String(o.shop_order_id) : `Base ${o.order_id}`);
     for (const p of o.products ?? []) {
-      if (p.sku && SKIP_SKU_PREFIXES.some((x) => p.sku!.toUpperCase().startsWith(x))) continue;
+      if (isServiceSku(p.sku)) continue;
       const id = p.variant_id && p.variant_id !== "0" ? p.variant_id : p.product_id;
       const variantId = !id ? null
         : p.storage === "shop" ? variantByShop.get(`gid://shopify/ProductVariant/${id}`) ?? null
