@@ -17,7 +17,8 @@ select
     when c.paid_at is not null or c.template is null then 'done'          -- opłacone; wgrane skany traktujemy jako zamknięte
     when count(u.id) filter (where u.status = 'in_transit') > 0 then 'in_transit'
     else 'to_pay'
-  end as category
+  end as category,
+  c.items
 from public.contracts c
 left join public.units u on u.contract_id = c.id
 group by c.id;

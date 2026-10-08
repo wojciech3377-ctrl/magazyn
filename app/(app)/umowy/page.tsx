@@ -19,6 +19,7 @@ type Row = {
   id: string; number: number | null; type: string; counterparty: string; contract_date: string | null; amount: number | null;
   currency: string | null; file_path: string | null; created_at: string; status: string; source: string | null; template: string | null;
   units_created_at: string | null; units_total: number; units_in_transit: number; category: string; paid_at: string | null;
+  items: { title: string; option: string; qty?: number }[] | null;
 };
 
 function StatePill({ c }: { c: Row }) {
@@ -61,6 +62,17 @@ export default async function UmowyPage({ searchParams }: { searchParams: Promis
     supabase.from("units").select("id", { count: "exact", head: true }).is("contract_id", null).in("status", ["in_stock", "in_transit", "reserved"]),
   ]);
   const rows = (data ?? []) as Row[];
+  // Wgrane skany nie mają pozycji – nazwy produktów bierzemy z przypiętych sztuk.
+  const scanIds = rows.filter((r) => !r.items?.length && r.units_total > 0).map((r) => r.id);
+  const { data: scanUnits } = scanIds.length
+    ? await supabase.from("units").select("contract_id, variant:variants(option, product:products(title))").in("contract_id", scanIds)
+    : { data: [] };
+  const productsOf = new Map<string, string[]>();
+  for (const r of rows) productsOf.set(r.id, (r.items ?? []).map((i) => `${i.title} · ${i.option}${(i.qty ?? 1) > 1 ? ` ×${i.qty}` : ""}`));
+  for (const u of scanUnits ?? []) {
+    const v = u.variant as unknown as { option: string; product: { title: string } };
+    productsOf.get(u.contract_id as string)?.push(`${v.product.title} · ${v.option}`);
+  }
   const href = (k: string) => `/umowy${k ? `?kategoria=${k}` : ""}`;
 
   return (
@@ -106,7 +118,7 @@ export default async function UmowyPage({ searchParams }: { searchParams: Promis
 
       <div className="card overflow-x-auto">
         <table className="table">
-          <thead><tr><th>Nr</th><th>Od kogo</th><th>Stan</th><th /><th>Typ</th><th>Data</th>{profile.can_see_prices && <th className="text-right">Kwota</th>}<th className="text-right">Sztuki</th><th>Plik</th></tr></thead>
+          <thead><tr><th>Nr</th><th>Od kogo</th><th>Stan</th><th /><th>Typ</th><th>Data</th>{profile.can_see_prices && <th className="text-right">Kwota</th>}<th>Produkty</th><th>Plik</th></tr></thead>
           <tbody>
             {!rows.length && <tr><td colSpan={9} className="py-10 text-center text-muted">Brak umów w tej kategorii.</td></tr>}
             {rows.map((c) => (
@@ -126,7 +138,7 @@ export default async function UmowyPage({ searchParams }: { searchParams: Promis
                 <td>{CONTRACT_TYPE[c.type]}</td>
                 <td className="whitespace-nowrap">{dateOnly(c.contract_date ?? c.created_at)}</td>
                 {profile.can_see_prices && <td className="text-right tabular-nums">{c.currency && c.currency !== "PLN" ? `${Number(c.amount ?? 0).toFixed(2)} ${c.currency}` : money(c.amount)}</td>}
-                <td className="text-right tabular-nums">{c.units_total}</td>
+                <td className="max-w-80"><Products names={productsOf.get(c.id) ?? []} /></td>
                 <td>{c.file_path ? <a className="text-accent hover:underline" href={`/api/umowy/${c.id}/pdf`} target="_blank" rel="noreferrer">otwórz</a> : <span className="text-muted">–</span>}</td>
               </tr>
             ))}
@@ -135,5 +147,19 @@ export default async function UmowyPage({ searchParams }: { searchParams: Promis
       </div>
       <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={{ kategoria: tab || undefined, q: sp.q, typ: sp.typ, plik: sp.plik }} />
     </>
+  );
+}
+
+/** Nazwy produktów z umowy; przy kilku pozycjach lista zwinięta. */
+function Products({ names }: { names: string[] }) {
+  if (!names.length) return <span className="text-muted">–</span>;
+  if (names.length === 1) return <span className="line-clamp-2 text-sm">{names[0]}</span>;
+  return (
+    <details className="text-sm">
+      <summary className="cursor-pointer"><span className="line-clamp-1 inline">{names[0]}</span> <span className="text-muted">+{names.length - 1}</span></summary>
+      <ul className="mt-1 space-y-0.5 text-muted">
+        {names.slice(1).map((n, i) => <li key={i}>{n}</li>)}
+      </ul>
+    </details>
   );
 }
