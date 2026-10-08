@@ -9,7 +9,12 @@ export async function signIn(_: unknown, formData: FormData) {
   const next = String(formData.get("next") ?? "/magazyn");
   const supabase = await createClient();
   const { error } = await supabase.auth.signInWithPassword({ email, password });
-  if (error) return { error: "Nieprawidłowy e-mail lub hasło." };
+  if (error) {
+    // Konkretny powód ułatwia ustawienie konta i kluczy (np. błędny klucz Supabase w Vercel).
+    if (error.code === "invalid_credentials") return { error: "Nieprawidłowy e-mail lub hasło." };
+    if (error.code === "email_not_confirmed") return { error: "Konto nie jest potwierdzone. W Supabase → Authentication → Users potwierdź je albo dodaj ponownie z „Auto Confirm User”." };
+    return { error: `Logowanie nie działa: ${error.message}${error.code ? ` (${error.code})` : ""}. Sprawdź adres i klucz Supabase w Vercel.` };
+  }
   redirect(safeNext(next));
 }
 
