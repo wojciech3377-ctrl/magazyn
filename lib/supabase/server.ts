@@ -1,11 +1,12 @@
 import { createServerClient } from "@supabase/ssr";
+import { supabaseUrl } from "./url";
 import { cookies } from "next/headers";
 
 /** Klient Supabase działający w imieniu zalogowanej osoby (RLS obowiązuje). */
 export async function createClient() {
   const cookieStore = await cookies();
   return createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    supabaseUrl(),
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       cookies: {

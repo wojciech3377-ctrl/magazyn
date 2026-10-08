@@ -1,4 +1,5 @@
 import { createServerClient } from "@supabase/ssr";
+import { supabaseUrl } from "@/lib/supabase/url";
 import { NextResponse, type NextRequest } from "next/server";
 
 const PUBLIC_PATHS = ["/login", "/api/shopify/webhook", "/api/cron"];
@@ -9,7 +10,7 @@ export async function proxy(request: NextRequest) {
   if (PUBLIC_PATHS.some((p) => path.startsWith(p))) return response;
 
   const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    supabaseUrl(),
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       cookies: {
