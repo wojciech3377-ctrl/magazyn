@@ -15,7 +15,7 @@ export const UNIT_SELECT = `
   consignor:consignors(id, name),
   contract:contracts(id, type, counterparty),
   location:locations!inner(id, name, store_id, store:stores(id, name)),
-  variant:variants!inner(id, option, product:products!inner(id, title, style_sku, image_url))
+  variant:variants!inner(id, option, links:variant_store_links(store_id, base_sku), product:products!inner(id, title, style_sku, image_url))
 `;
 
 export type UnitRow = {
@@ -35,7 +35,7 @@ export type UnitRow = {
   consignor: { id: string; name: string } | null;
   contract: { id: string; type: string; counterparty: string } | null;
   location: { id: string; name: string; store_id: string; store: { id: string; name: string } };
-  variant: { id: string; option: string; product: { id: string; title: string; style_sku: string | null; image_url: string | null } };
+  variant: { id: string; option: string; links: { store_id: string; base_sku: string | null }[]; product: { id: string; title: string; style_sku: string | null; image_url: string | null } };
 };
 
 /** Lista sztuk z filtrami (ekran Magazyn i eksport CSV). */

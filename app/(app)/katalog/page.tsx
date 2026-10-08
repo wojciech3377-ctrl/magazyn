@@ -70,7 +70,7 @@ export default async function KatalogPage({ searchParams }: { searchParams: Prom
             <tbody>
               {!data?.length && <tr><td colSpan={3} className="py-10 text-center text-muted">Brak produktów. Uruchom import z Shopify.</td></tr>}
               {data?.map((p) => {
-                const variants = (p.variants as { id: string; option: string; position: number; links: { store_id: string; base_product_id: number | null }[] }[])
+                const variants = (p.variants as { id: string; option: string; position: number; links: { store_id: string; base_product_id: number | null; base_sku: string | null }[] }[])
                   .sort((a, b) => collator.compare(a.option, b.option));
                 return (
                   <tr key={p.id}>
@@ -86,9 +86,10 @@ export default async function KatalogPage({ searchParams }: { searchParams: Prom
                         {variants.map((v) => {
                           const missing = v.links.some((l) => !l.base_product_id);
                           return (
-                            <Link key={v.id} href={`/magazyn?q=${encodeURIComponent(p.title)}`} title={missing ? "brak powiązania z Base" : "powiązany z Base"}
+                            <Link key={v.id} href={`/magazyn?q=${encodeURIComponent(p.title)}`} title={missing ? "brak powiązania z Base" : `SKU w Base: ${[...new Set(v.links.map((l) => l.base_sku).filter(Boolean))].join(", ")}`}
                               className={`rounded border px-1.5 py-0.5 text-xs ${missing ? "border-amber-300 bg-amber-50" : "border-line"}`}>
                               {v.option} <b>{counts.get(v.id) ?? 0}</b>
+                              {!missing && v.links[0]?.base_sku && <span className="ml-1 text-muted">· {v.links.find((l) => l.base_sku)?.base_sku}</span>}
                             </Link>
                           );
                         })}

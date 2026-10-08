@@ -109,7 +109,13 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
                       </span>
                     </Link>
                   </td>
-                  <td className="whitespace-nowrap font-medium">{u.variant.option}</td>
+                  <td className="whitespace-nowrap font-medium">
+                    {u.variant.option}
+                    {(() => {
+                      const sku = u.variant.links.find((l) => l.store_id === u.location.store_id && l.base_sku)?.base_sku ?? u.variant.links.find((l) => l.base_sku)?.base_sku;
+                      return sku ? <span className="block text-xs font-normal text-muted">Base {sku}</span> : null;
+                    })()}
+                  </td>
                   <td className="whitespace-nowrap font-mono text-xs">
                     {u.code}
                     {u.identifier && <span className="block text-muted">{u.identifier}</span>}
