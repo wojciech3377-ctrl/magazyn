@@ -83,6 +83,7 @@ export type ShopifyProduct = {
       sku: string | null;
       barcode: string | null;
       position: number;
+      price: string | null;
       inventoryItem: { id: string; tracked: boolean } | null;
     }[];
   };
@@ -91,7 +92,7 @@ export type ShopifyProduct = {
 const PRODUCT_FIELDS = `
   id title handle vendor productType status
   featuredMedia { preview { image { url } } }
-  variants(first: 250) { nodes { id title sku barcode position inventoryItem { id tracked } } }
+  variants(first: 250) { nodes { id title sku barcode position price inventoryItem { id tracked } } }
 `;
 
 export async function* iterateProducts(domain: string, storeCode: string) {

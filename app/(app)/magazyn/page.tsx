@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { requireProfile } from "@/lib/auth";
-import { queryUnits, type UnitFilters } from "@/lib/queries/units";
+import { queryUnits, type UnitFilters, type UnitRow } from "@/lib/queries/units";
 import { money, dateOnly, OWNER_TYPE, PURCHASE_FORM, UNIT_STATUS } from "@/lib/labels";
 import { Notice, PageHeader, Pagination, Pill, StatusBadge, Thumb } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
@@ -9,6 +9,13 @@ import { SelectAll } from "@/components/SelectAll";
 import { bulkAction } from "./actions";
 
 const PER_PAGE = 100;
+
+/** Cena w sklepie, z którego jest lokalizacja sztuki (albo z dowolnego sklepu). */
+function shopPrice(u: UnitRow) {
+  return u.variant.links.find((l) => l.store_id === u.location.store_id && l.price !== null)?.price
+    ?? u.variant.links.find((l) => l.price !== null)?.price
+    ?? null;
+}
 
 export default async function MagazynPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const sp = await searchParams;
@@ -90,7 +97,8 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
                 <th>Kod</th>
                 <th>Lokalizacja</th>
                 <th>Status</th>
-                <th>Właściciel</th>
+                <th>Komisant</th>
+                <th className="text-right">Cena w sklepie</th>
                 {profile.can_see_prices && <th className="text-right">Cena zakupu</th>}
                 <th>Przyjęta</th>
                 <th className="text-right">Umowa</th>
@@ -98,7 +106,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
             </thead>
             <tbody>
               {rows.length === 0 && (
-                <tr><td colSpan={10} className="py-10 text-center text-muted">Brak sztuk dla tych filtrów.</td></tr>
+                <tr><td colSpan={12} className="py-10 text-center text-muted">Brak sztuk dla tych filtrów.</td></tr>
               )}
               {rows.map((u) => (
                 <tr key={u.id}>
@@ -129,9 +137,17 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
                   </td>
                   <td><StatusBadge status={u.status} /></td>
                   <td className="whitespace-nowrap">
-                    {u.owner_type === "consignment" ? <Pill tone="blue">komis · {u.consignor?.name}</Pill> : <span className="text-muted">{OWNER_TYPE.own}</span>}
+                    {u.owner_type === "consignment" ? (
+                      <>
+                        <Link href={`/magazyn?wlasciciel=consignment&komisant=${u.consignor?.id}`} className="font-medium text-accent hover:underline">{u.consignor?.name}</Link>
+                        {profile.can_see_prices && u.payout_amount !== null && <span className="block text-xs text-muted">w komisie {money(u.payout_amount)}</span>}
+                      </>
+                    ) : (
+                      <span className="text-muted">– {OWNER_TYPE.own}</span>
+                    )}
                     <span className="block text-xs text-muted">{PURCHASE_FORM[u.purchase_form]}</span>
                   </td>
+                  <td className="whitespace-nowrap text-right tabular-nums">{money(shopPrice(u))}</td>
                   {profile.can_see_prices && <td className="whitespace-nowrap text-right tabular-nums">{money(u.purchase_price)}</td>}
                   <td className="whitespace-nowrap text-muted">{dateOnly(u.received_at)}</td>
                   <td className="whitespace-nowrap text-right">
@@ -167,7 +183,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
           </div>
           <button type="submit" className="btn-secondary" formAction="/umowy/nowa" formMethod="get">Nowa umowa dla zaznaczonych</button>
           <SubmitButton className="btn-secondary" name="action" value="receive">Przyjmij na stan (z „w drodze”)</SubmitButton>
-          <button type="submit" className="btn-secondary" formAction="/etykiety" formMethod="get" formTarget="_blank">Drukuj etykiety</button>
+          <button type="submit" className="btn-secondary" formAction="/etykiety" formMethod="get" formTarget="_blank">Drukuj etykietę</button>
           {profile.role === "admin" && (
             <ConfirmSubmit name="action" value="delete" className="btn-danger ml-auto" message="Usunąć zaznaczone sztuki z aplikacji? Stan w Base się nie zmieni. Sztuk ze sprzedażą nie da się usunąć.">
               Usuń zaznaczone

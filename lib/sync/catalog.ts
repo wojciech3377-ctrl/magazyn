@@ -152,6 +152,7 @@ export async function upsertShopifyProducts(db: SupabaseClient, store: Store, al
       shopify_variant_id: v.id,
       shopify_inventory_item_id: v.inventoryItem?.id ?? null,
       inventory_tracked: v.inventoryItem?.tracked !== false,
+      price: v.price !== null && v.price !== undefined && v.price !== "" ? Number(v.price) : null,
       sku: v.sku || null,
       updated_at: new Date().toISOString(),
   }));
@@ -168,7 +169,7 @@ const PAGE_QUERY = `query($after: String) {
     nodes {
       id title handle vendor productType status
       featuredMedia { preview { image { url } } }
-      variants(first: 100) { nodes { id title sku barcode position inventoryItem { id tracked } } }
+      variants(first: 100) { nodes { id title sku barcode position price inventoryItem { id tracked } } }
     }
     pageInfo { hasNextPage endCursor }
   }

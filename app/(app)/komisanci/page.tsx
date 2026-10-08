@@ -19,7 +19,7 @@ export default async function KomisanciPage() {
       <div className="grid gap-5 lg:grid-cols-3">
         <div className="card min-w-0 overflow-x-auto lg:col-span-2">
           <table className="table">
-            <thead><tr><th>Komisant</th><th>Kontakt</th><th className="text-right">Na stanie</th><th className="text-right">Sprzedane</th>{profile.can_see_prices && <th className="text-right">Suma wypłat za sprzedane</th>}</tr></thead>
+            <thead><tr><th>Komisant</th><th>Kontakt</th><th className="text-right">Na stanie</th><th className="text-right">Sprzedane</th>{profile.can_see_prices && <th className="text-right">Suma cen w komisie (sprzedane)</th>}</tr></thead>
             <tbody>
               {!consignors?.length && <tr><td colSpan={5} className="py-10 text-center text-muted">Brak komisantów.</td></tr>}
               {consignors?.map((c) => {

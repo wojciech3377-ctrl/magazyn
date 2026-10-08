@@ -127,7 +127,7 @@ export function DeliveryForm({
                 <th>Rozmiar</th>
                 <th className="w-20">Ilość</th>
                 {canSeePrices && <th className="w-28">Cena zakupu / szt.</th>}
-                {canSeePrices && ownerType === "consignment" && <th className="w-28">Wypłata / szt.</th>}
+                {canSeePrices && ownerType === "consignment" && <th className="w-28">Cena w komisie / szt.</th>}
                 <th>IMEI / nr seryjne</th>
                 <th />
               </tr>
@@ -140,7 +140,7 @@ export function DeliveryForm({
                   <td className="font-medium">{l.option}</td>
                   <td><input className="input" type="number" min={1} max={500} value={l.quantity} onChange={(e) => update(l.key, { quantity: Math.max(1, Number(e.target.value)) })} aria-label="Ilość" /></td>
                   {canSeePrices && <td><input className="input" inputMode="decimal" value={l.price} onChange={(e) => update(l.key, { price: e.target.value })} placeholder="zł" aria-label="Cena zakupu" /></td>}
-                  {canSeePrices && ownerType === "consignment" && <td><input className="input" inputMode="decimal" value={l.payout} onChange={(e) => update(l.key, { payout: e.target.value })} placeholder="zł" aria-label="Wypłata dla komisanta" /></td>}
+                  {canSeePrices && ownerType === "consignment" && <td><input className="input" inputMode="decimal" value={l.payout} onChange={(e) => update(l.key, { payout: e.target.value })} placeholder="zł" aria-label="Cena w komisie" /></td>}
                   <td><textarea className="input min-w-40" rows={1} value={l.identifiers} onChange={(e) => update(l.key, { identifiers: e.target.value })} placeholder="opcjonalnie, po jednym w linii" aria-label="IMEI lub numery seryjne" /></td>
                   <td><button type="button" className="text-sm text-bad hover:underline" onClick={() => setLines((p) => p.filter((x) => x.key !== l.key))}>Usuń</button></td>
                 </tr>

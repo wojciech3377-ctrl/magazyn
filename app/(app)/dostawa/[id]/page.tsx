@@ -25,7 +25,7 @@ export default async function DeliveryPage({ params }: { params: Promise<{ id: s
         sub={`${(d.store as { name: string }).name} · ${(d.location as { name: string }).name} · ${dateTime(d.created_at)}`}
         actions={
           <>
-            <Link className="btn" href={`/etykiety?ids=${ids}`} target="_blank">Drukuj etykiety ({units?.length})</Link>
+            <Link className="btn" href={`/etykiety?ids=${ids}`} target="_blank">Drukuj etykietę ({units?.length})</Link>
             <Link className="btn-secondary" href="/dostawa">Następna dostawa</Link>
           </>
         }

@@ -22,7 +22,7 @@ export default async function LabelsPage({ searchParams }: { searchParams: Promi
         <span className="text-sm text-muted">{units?.length ?? 0} etykiet · drukarka etykiet 50 × 30 mm</span>
         <PrintButton />
       </div>
-      {!units?.length && <p className="no-print p-4 text-sm text-muted">Nie wybrano żadnych sztuk. Zaznacz sztuki w Magazynie i kliknij „Drukuj etykiety”.</p>}
+      {!units?.length && <p className="no-print p-4 text-sm text-muted">Nie wybrano żadnych sztuk. Zaznacz sztuki w Magazynie i kliknij „Drukuj etykietę”.</p>}
       <div className="sheet flex flex-wrap gap-2 p-4">
         {units?.map((u) => {
           const v = u.variant as unknown as { option: string; product: { title: string; style_sku: string | null } };

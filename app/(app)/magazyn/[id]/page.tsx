@@ -72,10 +72,11 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
             <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
               <Field label="Przyjęta">{dateTime(u.received_at)}</Field>
               <Field label="Sprzedana">{dateTime(u.sold_at)}</Field>
+              <Field label="Cena w sklepie">{money(u.variant.links.find((l) => l.store_id === u.location.store_id && l.price !== null)?.price ?? u.variant.links.find((l) => l.price !== null)?.price ?? null)}</Field>
               <Field label="Forma sprzedaży">{PURCHASE_FORM[u.purchase_form]}</Field>
               <Field label="Właściciel">{u.owner_type === "consignment" ? `komis · ${u.consignor?.name}` : "własna"}</Field>
               {profile.can_see_prices && <Field label="Cena zakupu">{money(u.purchase_price)}</Field>}
-              {profile.can_see_prices && u.owner_type === "consignment" && <Field label="Wypłata dla komisanta">{money(u.payout_amount)}</Field>}
+              {profile.can_see_prices && u.owner_type === "consignment" && <Field label="Cena w komisie">{money(u.payout_amount)}</Field>}
             </div>
           </section>
 
@@ -126,7 +127,7 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
                     <input className="input" id="purchase_price" name="purchase_price" inputMode="decimal" defaultValue={u.purchase_price ?? ""} />
                   </div>
                   <div>
-                    <label className="label" htmlFor="payout_amount">Wypłata dla komisanta (zł)</label>
+                    <label className="label" htmlFor="payout_amount">Cena w komisie (zł)</label>
                     <input className="input" id="payout_amount" name="payout_amount" inputMode="decimal" defaultValue={u.payout_amount ?? ""} />
                   </div>
                 </>

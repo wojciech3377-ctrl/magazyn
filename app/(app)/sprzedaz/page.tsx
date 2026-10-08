@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { requireProfile } from "@/lib/auth";
-import { dateTime, SALE_STATUS } from "@/lib/labels";
+import { dateTime, money, SALE_STATUS } from "@/lib/labels";
 import { Notice, PageHeader, Pagination, Pill } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
 import { pullOrdersNow } from "./actions";
@@ -12,6 +12,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
   const sp = await searchParams;
   const { supabase, profile } = await requireProfile();
   const page = Math.max(1, Number(sp.strona ?? 1));
+  if (sp.widok === "stacjonarna") return <PosList page={page} />;
   const status = sp.status ?? "";
 
   let query = supabase
@@ -38,6 +39,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
           <form action={pullOrdersNow}><SubmitButton className="btn-secondary" pendingText="Pobieram…">Pobierz zamówienia teraz</SubmitButton></form>
         ) : null}
       />
+      <Tabs active="base" />
       {lastSync && !lastSync.ok && <div className="mb-4"><Notice tone="error">Ostatni odczyt zamówień nie udał się: {lastSync.message}</Notice></div>}
       {!!problems && <div className="mb-4"><Notice tone="error">{problems} {problems === 1 ? "linia zamówienia nie ma" : "linii zamówień nie ma"} sztuki na stanie. <Link className="underline" href="/sprzedaz?status=no_unit">Pokaż</Link> i przypisz sztukę skanem.</Notice></div>}
 
@@ -77,6 +79,53 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
         </table>
       </div>
       <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={{ q: sp.q, status: sp.status }} />
+    </>
+  );
+}
+
+function Tabs({ active }: { active: "base" | "pos" }) {
+  const cls = (on: boolean) => `rounded-md px-3 py-1.5 ${on ? "bg-ink text-white" : "text-muted hover:bg-panel"}`;
+  return (
+    <div className="mb-4 flex gap-1 text-sm">
+      <Link href="/sprzedaz" className={cls(active === "base")}>Zamówienia z Base</Link>
+      <Link href="/sprzedaz?widok=stacjonarna" className={cls(active === "pos")}>Sprzedaż stacjonarna</Link>
+    </div>
+  );
+}
+
+const PAYMENT: Record<string, string> = { card: "karta", cash: "gotówka", blik: "BLIK", transfer: "przelew", other: "inna" };
+
+async function PosList({ page }: { page: number }) {
+  const { supabase } = await requireProfile();
+  const { data, count } = await supabase
+    .from("pos_orders")
+    .select("id, code, total, payment_method, customer, created_at, base_sync_status, store:stores(name), items:pos_order_items(count)", { count: "exact" })
+    .order("created_at", { ascending: false })
+    .range((page - 1) * PER_PAGE, page * PER_PAGE - 1);
+  return (
+    <>
+      <PageHeader title="Sprzedaż" sub="Sprzedaż stacjonarna z kasy." actions={<Link className="btn" href="/kasa">Nowa sprzedaż</Link>} />
+      <Tabs active="pos" />
+      <div className="card overflow-x-auto">
+        <table className="table">
+          <thead><tr><th>Data</th><th>Numer</th><th>Sklep</th><th className="text-right">Sztuk</th><th>Płatność</th><th className="text-right">Kwota</th><th>Base</th></tr></thead>
+          <tbody>
+            {!data?.length && <tr><td colSpan={7} className="py-10 text-center text-muted">Brak sprzedaży stacjonarnej.</td></tr>}
+            {data?.map((o) => (
+              <tr key={o.id}>
+                <td className="whitespace-nowrap text-muted">{dateTime(o.created_at)}</td>
+                <td><Link className="font-medium text-accent hover:underline" href={`/kasa/${o.id}`}>{o.code}</Link>{o.customer && <span className="block text-xs text-muted">{o.customer}</span>}</td>
+                <td>{(o.store as unknown as { name: string }).name}</td>
+                <td className="text-right tabular-nums">{(o.items as unknown as { count: number }[])[0]?.count ?? 0}</td>
+                <td>{PAYMENT[o.payment_method] ?? o.payment_method}</td>
+                <td className="text-right tabular-nums">{money(o.total)}</td>
+                <td><Pill tone={o.base_sync_status === "ok" ? "green" : "red"}>{o.base_sync_status === "ok" ? "ok" : "do sprawdzenia"}</Pill></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={{ widok: "stacjonarna" }} />
     </>
   );
 }

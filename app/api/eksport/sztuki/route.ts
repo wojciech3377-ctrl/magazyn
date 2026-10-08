@@ -24,7 +24,7 @@ export async function GET(req: NextRequest) {
     if (batch.length < 1000) break;
   }
   const header = ["kod", "produkt", "sku_modelu", "rozmiar", "imei_nr", "sklep", "lokalizacja", "regal", "status", "wlasciciel", "komisant", "forma_sprzedazy",
-    ...(profile?.can_see_prices ? ["cena_zakupu", "wyplata_komis"] : []), "umowa", "przyjeta", "sprzedana"];
+    ...(profile?.can_see_prices ? ["cena_zakupu", "cena_w_komisie"] : []), "umowa", "przyjeta", "sprzedana"];
   const lines = rows.map((u) => [
     u.code, u.variant.product.title, u.variant.product.style_sku, u.variant.option, u.identifier, u.location.store.name, u.location.name, u.shelf,
     UNIT_STATUS[u.status], OWNER_TYPE[u.owner_type], u.consignor?.name, PURCHASE_FORM[u.purchase_form],
