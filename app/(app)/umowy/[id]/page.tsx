@@ -49,7 +49,7 @@ export default async function ContractPage({ params, searchParams }: { params: P
       {c.template && <TemplateSection c={c} canSeePrices={profile.can_see_prices} />}
       <div className="grid gap-5 lg:grid-cols-3">
         <div className="min-w-0 space-y-5 lg:col-span-2">
-          <section className="card p-4">
+          {!c.template && <section className="card p-4">
             <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
               <Field label="Typ">{CONTRACT_TYPE[c.type]}</Field>
               <Field label="Data">{dateOnly(c.contract_date)}</Field>
@@ -57,10 +57,14 @@ export default async function ContractPage({ params, searchParams }: { params: P
               {c.consignor && <Field label="Komisant">{(c.consignor as { name: string }).name}</Field>}
             </div>
             {c.notes && <p className="mt-3 text-sm text-muted">{c.notes}</p>}
-          </section>
+          </section>}
 
-          <section className="card overflow-x-auto">
-            <div className="flex items-center justify-between p-4 pb-2"><h2 className="h2">Sztuki na tej umowie ({units?.length ?? 0})</h2></div>
+          {/* Umowa z szablonu ma pozycje u góry; tu tylko sztuki w magazynie, które z niej powstały. */}
+          {(!c.template || (units?.length ?? 0) > 0) && <section className="card overflow-x-auto">
+            <div className="p-4 pb-2">
+              <h2 className="h2">{c.template ? "W magazynie" : "Sztuki na tej umowie"} ({units?.length ?? 0})</h2>
+              {c.template && <p className="text-sm text-muted">Sztuki utworzone z tej umowy – ich status (w drodze, na stanie, sprzedana).</p>}
+            </div>
             <table className="table">
               <thead><tr><th>Kod</th><th>Produkt</th><th>Rozmiar</th><th>Status</th><th /></tr></thead>
               <tbody>
@@ -85,16 +89,16 @@ export default async function ContractPage({ params, searchParams }: { params: P
                 })}
               </tbody>
             </table>
-            <form action={attachUnits} className="flex flex-wrap gap-2 border-t border-line p-4">
+            {!c.template && <form action={attachUnits} className="flex flex-wrap gap-2 border-t border-line p-4">
               <input type="hidden" name="id" value={c.id} />
               <input className="input flex-1 font-mono" name="units" placeholder="Dopnij sztuki: kody S000123 lub IMEI" aria-label="Kody sztuk" />
               <SubmitButton className="btn-secondary">Dopnij</SubmitButton>
-            </form>
-          </section>
+            </form>}
+          </section>}
         </div>
 
         <div className="min-w-0 space-y-5">
-          <section className="card space-y-3 p-4">
+          {!c.template && <section className="card space-y-3 p-4">
             <h2 className="h2">Plik</h2>
             {fileUrl ? (
               <>
@@ -111,7 +115,7 @@ export default async function ContractPage({ params, searchParams }: { params: P
               <ContractFileInput label="Nowy plik" />
               <SubmitButton className="btn-secondary w-full" pendingText="Wgrywam…">{c.file_path ? "Zastąp plik" : "Wgraj plik"}</SubmitButton>
             </form>
-          </section>
+          </section>}
           {profile.role === "admin" && (
             <form action={deleteContract} className="text-right">
               <input type="hidden" name="id" value={c.id} />
