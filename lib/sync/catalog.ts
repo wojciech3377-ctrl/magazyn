@@ -47,7 +47,15 @@ function styleSku(p: ShopifyProduct) {
  * Zapis paczki produktów Shopify jednego sklepu. Ten sam model w obu sklepach łączy się
  * w jeden produkt po SKU modelu, a warianty po rozmiarze.
  */
-export async function upsertShopifyProducts(db: SupabaseClient, store: Store, products: ShopifyProduct[]) {
+/** Usługi (np. naprawy TF-SRV) nie są towarem – nie trafiają do magazynu. */
+export const SERVICE_SKU_PREFIXES = ["TF-SRV"];
+
+function isService(p: ShopifyProduct) {
+  return p.variants.nodes.some((v) => SERVICE_SKU_PREFIXES.some((x) => (v.sku ?? "").toUpperCase().startsWith(x)));
+}
+
+export async function upsertShopifyProducts(db: SupabaseClient, store: Store, allProducts: ShopifyProduct[]) {
+  const products = allProducts.filter((p) => !isService(p));
   if (!products.length) return { products: 0, variants: 0, created: 0 };
   const gids = products.map((p) => p.id);
 
