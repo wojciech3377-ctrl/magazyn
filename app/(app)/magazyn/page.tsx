@@ -152,7 +152,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
                   <td className="whitespace-nowrap text-muted">{dateOnly(u.received_at)}</td>
                   <td className="whitespace-nowrap text-right">
                     {u.contract ? (
-                      <Link href={`/umowy/${u.contract.id}`} className="text-accent hover:underline">{u.contract.counterparty}</Link>
+                      <a href={`/api/umowy/${u.contract.id}/pdf`} target="_blank" rel="noreferrer" className="text-accent hover:underline" title="Otwórz umowę">{u.contract.counterparty}</a>
                     ) : (
                       <Link href={`/umowy/z-szablonu?ids=${u.id}`} className="btn-secondary px-2.5 py-1 text-xs">
                         Dodaj umowę

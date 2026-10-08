@@ -4,7 +4,7 @@ import { requireProfile } from "@/lib/auth";
 import { CONTRACT_TYPE, dateOnly, money } from "@/lib/labels";
 import { Field, Notice, PageHeader, StatusBadge } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
-import { acceptContract, attachUnits, cancelContract, deleteContract, detachUnit, rejectContract, replaceFile, retryFinalize, sendSigningEmail } from "../actions";
+import { acceptContract, attachUnits, cancelContract, deleteContract, detachUnit, markPaid, rejectContract, replaceFile, retryFinalize, sendSigningEmail } from "../actions";
 import { appUrl } from "@/lib/app-url";
 import { mailConfigured } from "@/lib/mail";
 import { contractTotal, formatMoney } from "@/lib/contracts/purchase";
@@ -129,7 +129,7 @@ type TemplateContract = {
   seller_name: string | null; seller_id_number: string | null; seller_address: string | null; seller_bank_account: string | null;
   seller_email: string | null; seller_phone: string | null; signed_at: string | null; signer_ip: string | null;
   payment_days: number | null; units_created_at: string | null; sale_id: string | null;
-  payment_method: string | null; currency: string | null; seller_country: string | null;
+  payment_method: string | null; currency: string | null; seller_country: string | null; paid_at: string | null;
   items: { title: string; option: string; qty: number; price: number; unit_id?: string; variant_id?: string; identifier?: string | null }[] | null;
 };
 
@@ -150,7 +150,7 @@ async function TemplateSection({ c, canSeePrices }: { c: TemplateContract; canSe
           <h2 className="h2">Umowa z szablonu</h2>
           {c.status === "sent" && <Pill tone="amber">czeka na podpis</Pill>}
           {c.status === "signed" && <Pill tone="red">do zatwierdzenia</Pill>}
-          {c.status === "accepted" && <Pill tone="green">zatwierdzona</Pill>}
+          {c.status === "accepted" && (c.paid_at ? <Pill tone="green">opłacona</Pill> : <Pill tone="amber">zaakceptowana – do opłaty</Pill>)}
           {c.status === "rejected" && <Pill tone="slate">odrzucona</Pill>}
           {c.status === "cancelled" && <Pill tone="slate">anulowana</Pill>}
           {c.source === "general" && <Pill tone="blue">z ogólnego linku</Pill>}
@@ -184,6 +184,23 @@ async function TemplateSection({ c, canSeePrices }: { c: TemplateContract; canSe
               </form>
             </div>
           </div>
+        )}
+        {c.status === "accepted" && (
+          <form action={markPaid} className="flex flex-wrap items-center gap-3 border-t border-line pt-3 text-sm">
+            <input type="hidden" name="id" value={c.id} />
+            {c.paid_at ? (
+              <>
+                <span className="text-ok">Opłacona {dateOnly(c.paid_at)}.</span>
+                <input type="hidden" name="undo" value="1" />
+                <SubmitButton className="text-sm text-muted underline" pendingText="…">Cofnij</SubmitButton>
+              </>
+            ) : (
+              <>
+                <span>{c.payment_method === "cash" ? "Do wypłaty gotówką." : `Do przelewu na konto: ${formatAccount(c.seller_bank_account) || "–"}`}</span>
+                <SubmitButton pendingText="…">Oznacz jako opłaconą</SubmitButton>
+              </>
+            )}
+          </form>
         )}
         {c.status === "accepted" && !c.units_created_at && !needsAssign && (
           <form action={retryFinalize} className="flex items-center gap-3 border-t border-line pt-3 text-sm">

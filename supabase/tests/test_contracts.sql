@@ -40,4 +40,8 @@ exception when others then
   if sqlerrm like 'bez produktu%' then raise; end if;
   raise notice 'OK: %', sqlerrm;
 end $$;
+-- kategorie: Jan (sztuka sprzedana, przyjęta) i Ola → do opłaty; Ewa bez sztuk → do opłaty; po opłaceniu → gotowe
+update public.contracts set paid_at = now() where counterparty = 'Ola';
+insert into public.contracts (type, counterparty, template, status) values ('purchase', 'Ula', 'purchase_v1', 'signed');
+select counterparty, category, units_in_transit from public.contract_overview order by counterparty;
 rollback;

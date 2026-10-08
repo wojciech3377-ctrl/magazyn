@@ -211,3 +211,17 @@ export async function rejectContract(formData: FormData) {
   revalidatePath(`/umowy/${id}`);
   redirect(`/umowy/${id}?ok=${encodeURIComponent("Umowa odrzucona.")}`);
 }
+
+/** Oznaczenie zapłaty sprzedającemu (przelew wysłany / gotówka wypłacona) → zakładka „Gotowe”. */
+export async function markPaid(formData: FormData) {
+  const { supabase, profile } = await requireProfile();
+  const id = String(formData.get("id"));
+  const undo = formData.get("undo") === "1";
+  const { data } = await supabase.from("contracts")
+    .update(undo ? { paid_at: null, paid_by: null } : { paid_at: new Date().toISOString(), paid_by: profile.id })
+    .eq("id", id).eq("status", "accepted").select("id");
+  const back = String(formData.get("back") ?? "") || `/umowy/${id}`;
+  revalidatePath("/umowy");
+  if (!data?.length) redirect(`${back}${back.includes("?") ? "&" : "?"}blad=${encodeURIComponent("Opłacić można tylko zaakceptowaną umowę.")}`);
+  redirect(`${back}${back.includes("?") ? "&" : "?"}ok=${encodeURIComponent(undo ? "Cofnięto oznaczenie zapłaty." : "Umowa opłacona – przeniesiona do Gotowe.")}`);
+}
