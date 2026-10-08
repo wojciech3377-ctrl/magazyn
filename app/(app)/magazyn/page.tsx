@@ -5,6 +5,7 @@ import { money, dateOnly, OWNER_TYPE, PURCHASE_FORM, UNIT_STATUS } from "@/lib/l
 import { Notice, PageHeader, Pagination, Pill, StatusBadge, Thumb } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
 import { ConfirmSubmit } from "@/components/ConfirmSubmit";
+import { SelectAll } from "@/components/SelectAll";
 import { bulkAction } from "./actions";
 
 const PER_PAGE = 100;
@@ -83,7 +84,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
           <table className="table">
             <thead>
               <tr>
-                <th className="w-8"><span className="sr-only">Zaznacz</span></th>
+                <th className="w-8"><SelectAll /></th>
                 <th>Produkt</th>
                 <th>Rozmiar</th>
                 <th>Kod</th>
