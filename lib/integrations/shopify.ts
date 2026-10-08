@@ -30,7 +30,11 @@ export async function shopifyToken(domain: string, storeCode: string) {
     body: new URLSearchParams({ grant_type: "client_credentials", client_id: clientId, client_secret: clientSecret }),
     cache: "no-store",
   });
-  if (!res.ok) throw new Error(`Shopify ${domain}: nie udało się pobrać tokenu (${res.status}) – sprawdź, czy aplikacja jest zainstalowana w sklepie`);
+  if (!res.ok) {
+    // Odpowiedź Shopify (np. invalid_client, shop_not_permitted) – bez sekretów, pomaga ustalić przyczynę.
+    const detail = (await res.text()).replace(/\s+/g, " ").slice(0, 300);
+    throw new Error(`Shopify ${domain}: nie udało się pobrać tokenu (${res.status}): ${detail}`);
+  }
   const data = (await res.json()) as { access_token: string; expires_in: number };
   tokenCache.set(domain, { token: data.access_token, expires: Date.now() + data.expires_in * 1000 });
   return data.access_token;
