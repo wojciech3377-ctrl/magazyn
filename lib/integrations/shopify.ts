@@ -32,7 +32,9 @@ export async function shopifyToken(domain: string, storeCode: string) {
   });
   if (!res.ok) {
     // Odpowiedź Shopify (np. invalid_client, shop_not_permitted) – bez sekretów, pomaga ustalić przyczynę.
-    const detail = (await res.text()).replace(/\s+/g, " ").slice(0, 300);
+    const text = await res.text();
+    const title = text.match(/<title>([^<]+)<\/title>/i)?.[1];
+    const detail = (title ?? text).replace(/\s+/g, " ").slice(0, 300);
     throw new Error(`Shopify ${domain}: nie udało się pobrać tokenu (${res.status}): ${detail}`);
   }
   const data = (await res.json()) as { access_token: string; expires_in: number };
