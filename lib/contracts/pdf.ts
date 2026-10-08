@@ -109,7 +109,7 @@ export async function renderContractPdf(
   for (const block of blocks) {
     switch (block.kind) {
       case "date": {
-        for (const [text, s] of [[block.text, SIZE], [block.note, SIZE]] as const) {
+        for (const [text, s] of [[block.text, SIZE], [block.note, SIZE], ...(block.extra ? [[block.extra, SIZE]] : [])] as [string, number][]) {
           const w = regular.widthOfTextAtSize(text, s);
           page.drawText(text, { x: A4[0] - MARGIN_X - w, y: y - s, size: s, font: regular });
           y -= LEADING;
@@ -136,8 +136,8 @@ export async function renderContractPdf(
         const boxW = 170, boxH = 60;
         const leftX = MARGIN_X + 20, rightX = A4[0] - MARGIN_X - boxW - 20;
         for (const [sig, x, label] of [
-          [opts.buyerSignature, leftX, "Kupujący"],
-          [opts.sellerSignature, rightX, "Sprzedający"],
+          [opts.buyerSignature, leftX, block.buyer],
+          [opts.sellerSignature, rightX, block.seller],
         ] as const) {
           if (sig) {
             const img = await doc.embedPng(dataUrlToBytes(sig));

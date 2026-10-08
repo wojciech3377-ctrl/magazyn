@@ -2,7 +2,7 @@ import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { contractPdf } from "./sign";
 import { getCompany } from "./settings";
-import { contractTotal, formatPln } from "./purchase";
+import { contractTotal, formatMoney } from "./purchase";
 import { escapeHtml } from "./png";
 import { mailConfigured, sendMail } from "@/lib/mail";
 
@@ -14,7 +14,7 @@ export async function storePdfAndNotify(contractId: string, opts: { emailSeller:
     const pdf = await ensureContractPdf(contractId);
     if (!pdf || !mailConfigured()) return;
     const company = await getCompany(db);
-    const total = formatPln(contractTotal(c.items ?? []));
+    const total = formatMoney(contractTotal(c.items ?? []), c.currency);
     const filename = `umowa-kupna-${c.number}.pdf`;
     await sendMail(company.email, `Podpisana umowa kupna nr ${c.number}`,
       `<p>${escapeHtml(c.seller_name)} podpisał(a) umowę kupna nr ${c.number} na kwotę ${escapeHtml(total)}.</p><p>Umowa jest w aplikacji w zakładce Umowy.</p>`,

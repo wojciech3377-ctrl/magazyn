@@ -7,6 +7,7 @@ import { getCompany } from "@/lib/contracts/settings";
 import { storePdfAndNotify } from "@/lib/contracts/store";
 import { contractTotal } from "@/lib/contracts/purchase";
 import { validateSignaturePng } from "@/lib/contracts/png";
+import { COUNTRIES, CURRENCIES, normalizeAccount } from "@/lib/contracts/options";
 
 type Result = { error?: string };
 
@@ -25,22 +26,37 @@ function parseSeller(formData: FormData) {
   };
   if (s.name.length < 5 || !s.name.includes(" ")) return { error: "Podaj imię i nazwisko." };
   if (s.idNumber.replace(/\s/g, "").length < 6) return { error: "Podaj PESEL albo numer dowodu osobistego." };
-  if (!s.street || !s.city || !/^\d{2}-?\d{3}$/.test(s.postcode)) return { error: "Podaj pełny adres z kodem pocztowym (np. 61-850)." };
-  const letters = s.bank.replace(/[^A-Z]/g, "");
-  const digits = s.bank.replace(/[^0-9]/g, "");
-  if ((letters && letters !== "PL") || digits.length !== 26) return { error: "Podaj polski numer konta: 26 cyfr (może być z PL na początku)." };
+  const country = clean(formData.get("country"), 10).toUpperCase();
+  if (!COUNTRIES.some((c) => c.code === country)) return { error: "Wybierz kraj. / Choose a country." };
+  if (!s.street || !s.city || !s.postcode) return { error: "Podaj pełny adres z kodem pocztowym. / Enter your full address." };
+  if (country === "PL" && !/^\d{2}-?\d{3}$/.test(s.postcode)) return { error: "Kod pocztowy w formacie 00-000." };
+  const paymentMethod = String(formData.get("payment_method") ?? "");
+  if (paymentMethod !== "transfer" && paymentMethod !== "cash") return { error: "Wybierz formę zapłaty: przelew albo gotówka. / Choose a payment method." };
+  const currency = String(formData.get("currency") ?? "");
+  if (!CURRENCIES.some((c) => c.code === currency)) return { error: "Wybierz walutę. / Choose a currency." };
+  let account: string | null = null;
+  if (paymentMethod === "transfer") {
+    const acc = normalizeAccount(s.bank);
+    if (acc.error) return { error: acc.error };
+    account = acc.value!;
+  }
+  const language = formData.get("language") === "en" ? "en" : "pl";
   if (s.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s.email)) return { error: "Nieprawidłowy adres e-mail." };
   const signature = String(formData.get("signature") ?? "");
   const sigError = validateSignaturePng(signature);
   if (sigError) return { error: sigError };
   if (!formData.get("consent")) return { error: "Zaznacz akceptację treści umowy." };
-  const postcode = s.postcode.includes("-") ? s.postcode : `${s.postcode.slice(0, 2)}-${s.postcode.slice(2)}`;
+  const postcode = country === "PL" && !s.postcode.includes("-") ? `${s.postcode.slice(0, 2)}-${s.postcode.slice(2)}` : s.postcode;
   return {
     seller: {
       seller_name: s.name,
       seller_id_number: s.idNumber,
       seller_address: `${s.street}, ${postcode} ${s.city}`,
-      seller_bank_account: `PL${digits}`,
+      seller_bank_account: account,
+      seller_country: country,
+      payment_method: paymentMethod,
+      currency,
+      language,
       seller_email: s.email || null,
       seller_phone: s.phone || null,
       counterparty: s.name,

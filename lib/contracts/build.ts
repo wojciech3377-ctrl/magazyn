@@ -10,6 +10,9 @@ export type ContractRow = {
   seller_address: string | null;
   seller_bank_account: string | null;
   payment_days: number | null;
+  payment_method?: "transfer" | "cash" | null;
+  currency?: string | null;
+  seller_country?: string | null;
   items: (ContractItem & { unit_id?: string; variant_id?: string })[] | null;
 };
 
@@ -25,7 +28,10 @@ export function toPurchaseContract(c: ContractRow, company: Company, sellerOverr
       idNumber: sellerOverride?.idNumber || c.seller_id_number || dash,
       address: sellerOverride?.address || c.seller_address || dash,
       bankAccount: sellerOverride?.bankAccount || c.seller_bank_account || dash,
+      country: c.seller_country ?? null,
     },
+    paymentMethod: c.payment_method ?? null,
+    currency: c.currency ?? null,
     items: (c.items ?? []).map((i) => ({ title: i.title, option: i.option, identifier: i.identifier ?? null, qty: Number(i.qty ?? 1), price: Number(i.price) })),
     paymentDays: c.payment_days ?? company.payment_days ?? 7,
   };
