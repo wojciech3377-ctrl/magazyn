@@ -16,11 +16,10 @@ export const UNIT_STATUS_TONE: Record<string, string> = {
   returned: "bg-rose-50 text-rose-800 ring-rose-200",
 };
 
+/** Forma sprzedaży sztuki (kolumna purchase_form). */
 export const PURCHASE_FORM: Record<string, string> = {
   vat_margin: "VAT marża",
-  invoice: "FV",
-  receipt_0: "paragon 0%",
-  consignment: "komis",
+  vat_23: "23% VAT",
 };
 
 export const OWNER_TYPE: Record<string, string> = {

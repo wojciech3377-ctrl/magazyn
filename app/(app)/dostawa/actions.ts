@@ -52,7 +52,7 @@ export async function createDelivery(_: unknown, formData: FormData): Promise<{ 
     const status = formData.get("in_transit") ? "in_transit" : "in_stock";
     const ownerType = String(formData.get("owner_type") ?? "own");
     const consignorId = String(formData.get("consignor_id") ?? "") || null;
-    const purchaseForm = String(formData.get("purchase_form") ?? "vat_margin");
+    const purchaseForm = String(formData.get("purchase_form")) === "vat_23" ? "vat_23" : "vat_margin";
     const shelf = String(formData.get("shelf") ?? "").trim() || null;
     const note = String(formData.get("note") ?? "").trim() || null;
     const lines = JSON.parse(String(formData.get("lines") ?? "[]")) as Line[];

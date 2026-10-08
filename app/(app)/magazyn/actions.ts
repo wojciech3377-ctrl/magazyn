@@ -106,7 +106,7 @@ export async function updateUnit(formData: FormData) {
     contract_id: String(formData.get("contract_id") ?? "") || null,
     owner_type: ownerType,
     consignor_id: ownerType === "consignment" ? String(formData.get("consignor_id") ?? "") || null : null,
-    purchase_form: ownerType === "consignment" ? "consignment" : String(formData.get("purchase_form") ?? "vat_margin"),
+    purchase_form: String(formData.get("purchase_form")) === "vat_23" ? "vat_23" : "vat_margin",
   };
   if (profile.can_see_prices) {
     try {

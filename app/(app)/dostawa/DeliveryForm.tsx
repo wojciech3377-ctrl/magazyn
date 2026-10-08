@@ -187,7 +187,7 @@ export function DeliveryForm({
               </label>
             ))}
           </div>
-          {ownerType === "consignment" ? (
+          {ownerType === "consignment" && (
             <div>
               <label className="label" htmlFor="consignor_id">Komisant</label>
               <select className="input" id="consignor_id" name="consignor_id" defaultValue="">
@@ -195,16 +195,14 @@ export function DeliveryForm({
                 {consignors.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </div>
-          ) : (
-            <div>
-              <label className="label" htmlFor="purchase_form">Forma zakupu</label>
-              <select className="input" id="purchase_form" name="purchase_form" defaultValue="vat_margin">
-                <option value="vat_margin">VAT marża</option>
-                <option value="receipt_0">paragon 0%</option>
-                <option value="invoice">FV</option>
-              </select>
-            </div>
           )}
+          <div>
+            <label className="label" htmlFor="purchase_form">Forma sprzedaży</label>
+            <select className="input" id="purchase_form" name="purchase_form" defaultValue="vat_margin">
+              <option value="vat_margin">VAT marża</option>
+              <option value="vat_23">23% VAT</option>
+            </select>
+          </div>
 
           <div className="label mt-2">Umowa</div>
           <div className="grid grid-cols-3 gap-1.5 text-sm">

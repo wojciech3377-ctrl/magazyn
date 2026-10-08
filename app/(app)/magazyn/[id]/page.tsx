@@ -72,7 +72,7 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
             <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
               <Field label="Przyjęta">{dateTime(u.received_at)}</Field>
               <Field label="Sprzedana">{dateTime(u.sold_at)}</Field>
-              <Field label="Forma zakupu">{PURCHASE_FORM[u.purchase_form]}</Field>
+              <Field label="Forma sprzedaży">{PURCHASE_FORM[u.purchase_form]}</Field>
               <Field label="Właściciel">{u.owner_type === "consignment" ? `komis · ${u.consignor?.name}` : "własna"}</Field>
               {profile.can_see_prices && <Field label="Cena zakupu">{money(u.purchase_price)}</Field>}
               {profile.can_see_prices && u.owner_type === "consignment" && <Field label="Wypłata dla komisanta">{money(u.payout_amount)}</Field>}
@@ -106,11 +106,10 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
                 </select>
               </div>
               <div>
-                <label className="label" htmlFor="purchase_form">Forma zakupu</label>
+                <label className="label" htmlFor="purchase_form">Forma sprzedaży</label>
                 <select className="input" id="purchase_form" name="purchase_form" defaultValue={u.purchase_form}>
                   <option value="vat_margin">VAT marża</option>
-                  <option value="invoice">FV</option>
-                  <option value="receipt_0">paragon 0%</option>
+                  <option value="vat_23">23% VAT</option>
                 </select>
               </div>
               <div>
