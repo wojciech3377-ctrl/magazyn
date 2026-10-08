@@ -121,5 +121,5 @@ export async function purgeExcluded() {
   const { supabase } = await requireAdmin();
   const { data, error } = await supabase.rpc("purge_excluded");
   if (error) done(error.message, "blad");
-  done(`Usunięto z magazynu ${data.products} produktów i ${data.units} sztuk. Stany w Base bez zmian.`);
+  done(`Usunięto z magazynu ${data.variants ?? 0} rozmiarów/wariantów (${data.products} całych produktów) i ${data.units} sztuk. Stany w Base bez zmian.`);
 }
