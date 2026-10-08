@@ -1,7 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getOrdersConfirmedFrom, type BaseOrder } from "@/lib/integrations/base";
-import { isServiceSku } from "@/lib/services";
+import { isExcluded, loadExclusions, type Exclusions } from "@/lib/services";
 
 const STATE_KEY = "base_orders";
 
@@ -19,12 +19,13 @@ export async function syncBaseOrders(db: SupabaseClient, maxPages = 10) {
   const { data: stores } = await db.from("stores").select("id, base_order_source_id");
   const storeBySource = new Map((stores ?? []).filter((s) => s.base_order_source_id).map((s) => [Number(s.base_order_source_id), s.id as string]));
 
+  const exclusions = await loadExclusions(db);
   let orders = 0;
   let lines = 0;
   for (let page = 0; page < maxPages; page++) {
     const batch = await getOrdersConfirmedFrom(from);
     if (!batch.length) break;
-    lines += await processOrders(db, batch, storeBySource);
+    lines += await processOrders(db, batch, storeBySource, exclusions);
     orders += batch.length;
 
     // Kursor zostaje na ostatniej sekundzie (zamówienia z tej sekundy mogą jeszcze dojść; zapis jest
@@ -39,7 +40,7 @@ export async function syncBaseOrders(db: SupabaseClient, maxPages = 10) {
   return { orders, lines, from };
 }
 
-async function processOrders(db: SupabaseClient, orders: BaseOrder[], storeBySource: Map<number, string>) {
+async function processOrders(db: SupabaseClient, orders: BaseOrder[], storeBySource: Map<number, string>, exclusions: Exclusions) {
   const baseIds = new Set<number>();
   const shopVariantIds = new Set<string>();
   for (const o of orders) {
@@ -71,7 +72,7 @@ async function processOrders(db: SupabaseClient, orders: BaseOrder[], storeBySou
     const storeId = o.order_source === "shop" && o.order_source_id ? storeBySource.get(Number(o.order_source_id)) ?? null : null;
     const ref = o.external_order_id || (o.shop_order_id ? String(o.shop_order_id) : `Base ${o.order_id}`);
     for (const p of o.products ?? []) {
-      if (isServiceSku(p.sku)) continue;
+      if (isExcluded(exclusions, [p.sku], p.name)) continue;
       const id = p.variant_id && p.variant_id !== "0" ? p.variant_id : p.product_id;
       const variantId = !id ? null
         : p.storage === "shop" ? variantByShop.get(`gid://shopify/ProductVariant/${id}`) ?? null

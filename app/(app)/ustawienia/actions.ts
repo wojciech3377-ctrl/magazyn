@@ -99,3 +99,27 @@ export async function createUser(formData: FormData) {
   await admin.from("profiles").update({ active: true }).eq("id", data.user.id);
   done(`Konto ${email} utworzone. Przekaż hasło osobiście i poproś o zmianę po pierwszym logowaniu.`);
 }
+
+export async function addExclusion(formData: FormData) {
+  const { supabase } = await requireAdmin();
+  const kind = String(formData.get("kind")) === "title_contains" ? "title_contains" : "sku_prefix";
+  const value = String(formData.get("value") ?? "").trim();
+  if (value.length < 2) done("Wpisz co najmniej 2 znaki.", "blad");
+  const { error } = await supabase.from("catalog_exclusions").insert({ kind, value });
+  if (error) done(error.message, "blad");
+  done(`Dodano wykluczenie „${value}”. Kliknij „Usuń wykluczone z magazynu”, żeby usunąć już wgrane produkty.`);
+}
+
+export async function deleteExclusion(formData: FormData) {
+  const { supabase } = await requireAdmin();
+  const { error } = await supabase.from("catalog_exclusions").delete().eq("id", String(formData.get("id")));
+  if (error) done(error.message, "blad");
+  done("Wykluczenie usunięte. Produkty wrócą przy następnym imporcie z Shopify.");
+}
+
+export async function purgeExcluded() {
+  const { supabase } = await requireAdmin();
+  const { data, error } = await supabase.rpc("purge_excluded");
+  if (error) done(error.message, "blad");
+  done(`Usunięto z magazynu ${data.products} produktów i ${data.units} sztuk. Stany w Base bez zmian.`);
+}

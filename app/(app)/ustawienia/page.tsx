@@ -4,7 +4,7 @@ import { Notice, PageHeader, Pill } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
 import { getInventories, getInventoryWarehouses, getOrderSources } from "@/lib/integrations/base";
 import { shopifyCredentials } from "@/lib/integrations/shopify";
-import { createUser, importInitialStock, registerWebhooks, saveLocation, saveStore, saveUser } from "./actions";
+import { addExclusion, createUser, deleteExclusion, importInitialStock, purgeExcluded, registerWebhooks, saveLocation, saveStore, saveUser } from "./actions";
 
 async function safe<T>(fn: () => Promise<T>): Promise<{ data: T | null; error: string | null }> {
   try {
@@ -19,12 +19,13 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
   const { supabase, profile } = await requireProfile();
   const isAdmin = profile.role === "admin";
 
-  const [{ data: stores }, { data: locations }, { data: users }, { data: logs }, { data: imported }] = await Promise.all([
+  const [{ data: stores }, { data: locations }, { data: users }, { data: logs }, { data: imported }, { data: exclusions }] = await Promise.all([
     supabase.from("stores").select("*").order("name"),
     supabase.from("locations").select("*").order("name"),
     supabase.from("profiles").select("*").order("created_at"),
     supabase.from("sync_log").select("*").order("created_at", { ascending: false }).limit(15),
     supabase.from("sync_state").select("value").eq("key", "initial_stock_imported").maybeSingle(),
+    supabase.from("catalog_exclusions").select("id, kind, value").order("created_at"),
   ]);
   const hasBase = !!process.env.BASE_API_TOKEN;
   const [inventories, warehouses, sources] = isAdmin && hasBase
@@ -121,6 +122,36 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
                 <input className="input" name="name" placeholder="Nowa lokalizacja, np. Poznań – Długa 13" aria-label="Nazwa" />
                 <WarehouseSelect warehouses={warehouses.data} value={null} />
                 <SubmitButton>Dodaj</SubmitButton>
+              </form>
+            </div>
+          </section>
+
+          <section className="card p-4">
+            <h2 className="h2 mb-1">Wykluczenia z magazynu</h2>
+            <p className="mb-3 text-sm text-muted">Usługi i produkty, które nie są towarem na sztuki (naprawy, mystery boxy). Nie trafiają do katalogu ani do sprzedaży; ich stan zostaje tylko w Base.</p>
+            <ul className="mb-3 flex flex-wrap gap-2">
+              {exclusions?.map((e) => (
+                <li key={e.id}>
+                  <form action={deleteExclusion} className="flex items-center gap-1 rounded-md border border-line py-1 pl-2.5 pr-1 text-sm">
+                    <input type="hidden" name="id" value={e.id} />
+                    <span className="text-muted">{e.kind === "sku_prefix" ? "SKU od:" : "nazwa zawiera:"}</span>
+                    <b>{e.value}</b>
+                    <button className="ml-1 rounded px-1.5 text-muted hover:bg-panel hover:text-bad" aria-label={`Usuń wykluczenie ${e.value}`}>×</button>
+                  </form>
+                </li>
+              ))}
+            </ul>
+            <div className="flex flex-wrap items-end gap-2">
+              <form action={addExclusion} className="flex flex-wrap items-end gap-2">
+                <select className="input w-44" name="kind" aria-label="Rodzaj">
+                  <option value="sku_prefix">SKU zaczyna się od</option>
+                  <option value="title_contains">nazwa zawiera</option>
+                </select>
+                <input className="input w-64" name="value" placeholder="np. TF-SRV albo mystery box" aria-label="Wartość" />
+                <SubmitButton className="btn-secondary">Dodaj</SubmitButton>
+              </form>
+              <form action={purgeExcluded}>
+                <SubmitButton className="btn-danger" pendingText="Usuwam…">Usuń wykluczone z magazynu</SubmitButton>
               </form>
             </div>
           </section>

@@ -1,7 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getProduct, shopifyGraphql, type ShopifyProduct } from "@/lib/integrations/shopify";
-import { isServiceSku } from "@/lib/services";
+import { isExcluded, loadExclusions } from "@/lib/services";
 
 export type Store = {
   id: string;
@@ -48,12 +48,9 @@ function styleSku(p: ShopifyProduct) {
  * Zapis paczki produktów Shopify jednego sklepu. Ten sam model w obu sklepach łączy się
  * w jeden produkt po SKU modelu, a warianty po rozmiarze.
  */
-function isService(p: ShopifyProduct) {
-  return p.variants.nodes.some((v) => isServiceSku(v.sku));
-}
-
 export async function upsertShopifyProducts(db: SupabaseClient, store: Store, allProducts: ShopifyProduct[]) {
-  const products = allProducts.filter((p) => !isService(p));
+  const exclusions = await loadExclusions(db);
+  const products = allProducts.filter((p) => !isExcluded(exclusions, p.variants.nodes.map((v) => v.sku), p.title));
   if (!products.length) return { products: 0, variants: 0, created: 0 };
   const gids = products.map((p) => p.id);
 
