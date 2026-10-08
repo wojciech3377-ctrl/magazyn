@@ -47,13 +47,25 @@ export async function baseSyncChunk(inventoryId: number): Promise<Result<{ done:
   }
 }
 
-export async function applyLinks(storeId: string): Promise<Result<{ linked: number; suggested: number; missing: number; base_storage_id: string | null }>> {
+export async function applyLinks(storeId: string): Promise<Result<{ linked: number; unlinked: number; base_storage_id: string | null }>> {
   await requireAdmin();
   try {
     const db = createAdminClient();
     const { data, error } = await db.rpc("apply_base_links", { p_store_id: storeId });
     if (error) throw error;
     revalidatePath("/katalog");
+    return { ok: true, data };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** Podpowiedzi dla niepowiązanych rozmiarów – paczka po paczce, aż „left” = 0. */
+export async function suggestLinks(storeId: string): Promise<Result<{ checked: number; suggested: number; left: number }>> {
+  await requireAdmin();
+  try {
+    const { data, error } = await createAdminClient().rpc("suggest_base_links", { p_store_id: storeId, p_limit: 500 });
+    if (error) throw error;
     return { ok: true, data };
   } catch (e) {
     return fail(e);
@@ -92,10 +104,7 @@ export async function setLink(formData: FormData) {
 export async function acceptAllSuggestions(formData: FormData) {
   const { supabase } = await requireAdmin();
   const storeId = String(formData.get("store_id"));
-  const { data } = await supabase.from("variant_store_links").select("id, suggested_base_product_id")
-    .eq("store_id", storeId).is("base_product_id", null).not("suggested_base_product_id", "is", null).limit(1000);
-  for (const l of data ?? []) {
-    await supabase.rpc("set_base_link", { p_link_id: l.id, p_base_product_id: l.suggested_base_product_id });
-  }
+  const { error } = await supabase.rpc("accept_base_suggestions", { p_store_id: storeId });
+  if (error) await supabase.from("sync_log").insert({ job: "manual-link", ok: false, message: error.message });
   revalidatePath("/katalog");
 }

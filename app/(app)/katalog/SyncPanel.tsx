@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { applyLinks, baseSyncChunk, baseSyncStart, importShopifyPage } from "./actions";
+import { applyLinks, baseSyncChunk, baseSyncStart, importShopifyPage, suggestLinks } from "./actions";
 
 type Store = { id: string; name: string; shopify_domain: string | null; base_inventory_id: number | null; base_storage_id: string | null };
 
@@ -51,11 +51,29 @@ export function SyncPanel({ stores }: { stores: Store[] }) {
       say(`Base: ${r.data.processed} / ${r.data.total}`);
       if (r.data.done) break;
     }
-    for (const st of stores.filter((x) => x.base_inventory_id === s.base_inventory_id)) {
+    await linkStores(s.base_inventory_id);
+  });
+
+  async function linkStores(inventoryId: number) {
+    for (const st of stores.filter((x) => x.base_inventory_id === inventoryId)) {
       const l = await applyLinks(st.id);
       if (!l.ok) throw new Error(l.error);
-      say(`${st.name}: powiązane z Base ${l.data.linked}, podpowiedzi ${l.data.suggested}, bez powiązania ${l.data.missing}${l.data.base_storage_id ? ` (sklep w Base: ${l.data.base_storage_id})` : " – nie wykryto sklepu w Base"}.`);
+      say(`${st.name}: powiązane przez Base ${l.data.linked}, bez powiązania ${l.data.unlinked}${l.data.base_storage_id ? ` (sklep w Base: ${l.data.base_storage_id})` : " – nie wykryto sklepu w Base"}.`);
+      let suggested = 0;
+      for (;;) {
+        const r = await suggestLinks(st.id);
+        if (!r.ok) throw new Error(r.error);
+        suggested += r.data.suggested;
+        if (r.data.left === 0 || r.data.checked === 0) break;
+        say(`${st.name}: szukam podpowiedzi, zostało ${r.data.left}…`);
+      }
+      say(`${st.name}: podpowiedzi do zatwierdzenia: ${suggested}.`);
     }
+  }
+
+  const relink = (s: Store) => run(async () => {
+    if (!s.base_inventory_id) throw new Error(`Ustaw katalog Base dla ${s.name} w Ustawieniach`);
+    await linkStores(s.base_inventory_id);
   });
 
   return (
@@ -67,7 +85,10 @@ export function SyncPanel({ stores }: { stores: Store[] }) {
           <button key={`s${s.id}`} className="btn-secondary" disabled={busy} onClick={() => importShopify(s)}>Import z Shopify: {s.name}</button>
         ))}
         {[...new Map(stores.filter((s) => s.base_inventory_id).map((s) => [s.base_inventory_id, s])).values()].map((s) => (
-          <button key={`b${s.id}`} className="btn-secondary" disabled={busy} onClick={() => syncBase(s)}>Katalog Base {s.base_inventory_id} + powiązania</button>
+          <span key={`b${s.id}`} className="contents">
+            <button className="btn-secondary" disabled={busy} onClick={() => syncBase(s)}>Katalog Base {s.base_inventory_id} + powiązania</button>
+            <button className="btn-secondary" disabled={busy} onClick={() => relink(s)}>Tylko powiązania {s.base_inventory_id}</button>
+          </span>
         ))}
       </div>
       {log.length > 0 && <pre className="mt-3 max-h-48 overflow-auto rounded bg-panel p-3 text-xs leading-relaxed">{log.join("\n")}</pre>}

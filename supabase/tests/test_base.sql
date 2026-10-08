@@ -36,14 +36,15 @@ insert into public.base_products (inventory_id, id, parent_id, name, variant_nam
 set local role authenticated;
 
 select public.apply_base_links((select id from public.stores where code = 'sneakers-depot'));
+select public.suggest_base_links((select id from public.stores where code = 'sneakers-depot'), 1);
+select public.suggest_base_links((select id from public.stores where code = 'sneakers-depot'), 200);
 select (select code from public.stores where id = vsl.store_id) as sklep, v.option, vsl.base_product_id, vsl.base_sku,
        vsl.base_link_source, vsl.suggested_base_product_id, vsl.suggested_reason
 from public.variant_store_links vsl join public.variants v on v.id = vsl.variant_id order by v.option;
 select code, base_storage_id from public.stores order by code;
 
 -- zatwierdzenie podpowiedzi
-select public.set_base_link(vsl.id, vsl.suggested_base_product_id)
-from public.variant_store_links vsl where vsl.suggested_base_product_id is not null;
+select public.accept_base_suggestions((select id from public.stores where code = 'sneakers-depot')) as zatwierdzone;
 select v.option, vsl.base_product_id, vsl.base_link_source from public.variant_store_links vsl
 join public.variants v on v.id = vsl.variant_id order by v.option;
 
