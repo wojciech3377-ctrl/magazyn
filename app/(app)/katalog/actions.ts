@@ -29,6 +29,25 @@ export async function importShopifyPage(storeId: string, cursor: string | null):
   }
 }
 
+/** Czas startu importu wg zegara serwera (potrzebny do usunięcia produktów skasowanych w Shopify). */
+export async function shopifyImportStart(): Promise<string> {
+  await requireAdmin();
+  return new Date().toISOString();
+}
+
+/** Po pełnym imporcie: produkty, których już nie ma w sklepie (albo są wykluczone), znikają z katalogu. */
+export async function shopifyImportFinish(storeId: string, startedAt: string): Promise<Result<{ removed_links: number; removed_products: number }>> {
+  await requireAdmin();
+  try {
+    const { data, error } = await createAdminClient().rpc("prune_store_catalog", { p_store_id: storeId, p_started_at: startedAt });
+    if (error) throw error;
+    revalidatePath("/katalog");
+    return { ok: true, data };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
 export async function baseSyncStart(inventoryId: number): Promise<Result<{ total: number }>> {
   await requireAdmin();
   try {

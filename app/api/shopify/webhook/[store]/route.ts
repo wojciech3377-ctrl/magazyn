@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { verifyWebhook } from "@/lib/integrations/shopify";
-import { syncSingleProduct, type Store } from "@/lib/sync/catalog";
+import { removeShopifyProduct, syncSingleProduct, type Store } from "@/lib/sync/catalog";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +20,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ sto
   const gid = body.admin_graphql_api_id ?? (body.id ? `gid://shopify/Product/${body.id}` : null);
   if (!gid) return NextResponse.json({ ok: true });
   try {
-    await syncSingleProduct(db, store as Store, gid);
+    if (req.headers.get("x-shopify-topic") === "products/delete") await removeShopifyProduct(db, store as Store, gid);
+    else await syncSingleProduct(db, store as Store, gid);
     return NextResponse.json({ ok: true });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);

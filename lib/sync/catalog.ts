@@ -50,7 +50,12 @@ function styleSku(p: ShopifyProduct) {
  */
 export async function upsertShopifyProducts(db: SupabaseClient, store: Store, allProducts: ShopifyProduct[]) {
   const exclusions = await loadExclusions(db);
-  const products = allProducts.filter((p) => !isExcluded(exclusions, p.variants.nodes.map((v) => v.sku), p.title));
+  // Pomijamy wykluczenia z Ustawień oraz produkty, w których żaden rozmiar nie ma śledzenia stanu (usługi).
+  const products = allProducts.filter(
+    (p) =>
+      !isExcluded(exclusions, p.variants.nodes.map((v) => v.sku), p.title) &&
+      p.variants.nodes.some((v) => v.inventoryItem?.tracked !== false),
+  );
   if (!products.length) return { products: 0, variants: 0, created: 0 };
   const gids = products.map((p) => p.id);
 
@@ -140,6 +145,7 @@ export async function upsertShopifyProducts(db: SupabaseClient, store: Store, al
       store_id: store.id,
       shopify_variant_id: v.id,
       shopify_inventory_item_id: v.inventoryItem?.id ?? null,
+      inventory_tracked: v.inventoryItem?.tracked !== false,
       sku: v.sku || null,
       updated_at: new Date().toISOString(),
   }));
@@ -156,7 +162,7 @@ const PAGE_QUERY = `query($after: String) {
     nodes {
       id title handle vendor productType status
       featuredMedia { preview { image { url } } }
-      variants(first: 100) { nodes { id title sku barcode position inventoryItem { id } } }
+      variants(first: 100) { nodes { id title sku barcode position inventoryItem { id tracked } } }
     }
     pageInfo { hasNextPage endCursor }
   }
@@ -176,6 +182,18 @@ export async function importCatalogPage(db: SupabaseClient, store: Store, after:
   );
   const result = await upsertShopifyProducts(db, store, nodes);
   return { ...result, next: data.products.pageInfo.hasNextPage ? data.products.pageInfo.endCursor : null };
+}
+
+/** Produkt usunięty w Shopify (webhook products/delete). */
+export async function removeShopifyProduct(db: SupabaseClient, store: Store, productGid: string) {
+  const { data: link } = await db.from("product_store_links").select("product_id").eq("store_id", store.id).eq("shopify_product_id", productGid).maybeSingle();
+  if (!link) return;
+  const { data: variants } = await db.from("variants").select("id").eq("product_id", link.product_id);
+  const ids = (variants ?? []).map((v) => v.id as string);
+  if (ids.length) await db.from("variant_store_links").delete().eq("store_id", store.id).in("variant_id", ids);
+  await db.from("product_store_links").delete().eq("store_id", store.id).eq("shopify_product_id", productGid);
+  // Produkt bez sklepów i bez sztuk znika całkowicie (prune robi to dla wszystkich takich produktów).
+  await db.rpc("prune_store_catalog", { p_store_id: store.id, p_started_at: "1970-01-01T00:00:00Z" });
 }
 
 /** Produkt z webhooka products/create lub products/update. */

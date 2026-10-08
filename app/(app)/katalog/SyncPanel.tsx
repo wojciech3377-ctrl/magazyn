@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { applyLinks, baseSyncChunk, baseSyncStart, importShopifyPage, suggestLinks } from "./actions";
+import { applyLinks, baseSyncChunk, baseSyncStart, importShopifyPage, shopifyImportFinish, shopifyImportStart, suggestLinks } from "./actions";
 
 type Store = { id: string; name: string; shopify_domain: string | null; base_inventory_id: number | null; base_storage_id: string | null };
 
@@ -29,6 +29,7 @@ export function SyncPanel({ stores }: { stores: Store[] }) {
     let cursor: string | null = null;
     let total = 0, created = 0, variants = 0;
     say(`${s.name}: import z Shopify…`);
+    const startedAt = await shopifyImportStart();
     do {
       const r = await importShopifyPage(s.id, cursor);
       if (!r.ok) throw new Error(r.error);
@@ -36,7 +37,9 @@ export function SyncPanel({ stores }: { stores: Store[] }) {
       cursor = r.data.next;
       say(`${s.name}: ${total} produktów (${variants} rozmiarów, nowych ${created})`);
     } while (cursor);
-    say(`${s.name}: import zakończony.`);
+    const f = await shopifyImportFinish(s.id, startedAt);
+    if (!f.ok) throw new Error(f.error);
+    say(`${s.name}: import zakończony. Usunięte z katalogu (nie ma ich już w sklepie albo są usługą): ${f.data.removed_products} produktów.`);
   });
 
   const syncBase = (s: Store) => run(async () => {
