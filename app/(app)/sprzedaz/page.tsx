@@ -17,7 +17,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
 
   let query = supabase
     .from("sales")
-    .select("id, order_ref, product_name, status, sold_at, store:stores(name), unit:units(id, code, identifier, owner_type, status, consignor:consignors(name), contract:contracts(id, counterparty, status)), variant:variants(option, product:products(title))", { count: "exact" })
+    .select("id, order_ref, product_name, status, sold_at, store:stores(name), unit:units(id, code, identifier, owner_type, status, consignor:consignors(name), contract:contracts(id, counterparty, status, template)), variant:variants(option, product:products(title))", { count: "exact" })
     .order("sold_at", { ascending: false })
     .range((page - 1) * PER_PAGE, page * PER_PAGE - 1);
   if (status) query = query.eq("status", status);
@@ -63,7 +63,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
           <tbody>
             {!sales?.length && <tr><td colSpan={7} className="py-10 text-center text-muted">Brak sprzedaży.</td></tr>}
             {sales?.map((s) => {
-              const unit = s.unit as unknown as { id: string; code: string; identifier: string | null; owner_type: string; status: string; consignor: { name: string } | null; contract: { id: string; counterparty: string; status: string } | null } | null;
+              const unit = s.unit as unknown as { id: string; code: string; identifier: string | null; owner_type: string; status: string; consignor: { name: string } | null; contract: { id: string; counterparty: string; status: string; template: string | null } | null } | null;
               const pending = pendingBySale.get(s.id);
               const variant = s.variant as unknown as { option: string; product: { title: string } } | null;
               return (
@@ -79,7 +79,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
                   <td><Pill tone={s.status === "assigned" ? "green" : s.status === "cancelled" ? "slate" : "red"}>{SALE_STATUS[s.status]}</Pill></td>
                   <td className="whitespace-nowrap">
                     {unit?.contract ? (
-                      <Link className="text-accent hover:underline" href={`/umowy/${unit.contract.id}`}>{unit.contract.status === "sent" ? "czeka na podpis" : unit.contract.status === "signed" ? "do zatwierdzenia" : unit.contract.counterparty}</Link>
+                      <Link className="text-accent hover:underline" href={`/umowy/${unit.contract.id}`}>{unit.contract.status === "sent" ? "czeka na podpis" : unit.contract.status === "signed" && unit.contract.template ? "do zatwierdzenia" : unit.contract.counterparty}</Link>
                     ) : pending ? (
                       <Link className="text-accent hover:underline" href={`/umowy/${pending.id}`}>{pending.status === "sent" ? "czeka na podpis" : pending.status === "signed" ? "do zatwierdzenia" : pending.status === "rejected" ? "odrzucona" : "zatwierdzona"}</Link>
                     ) : s.status === "no_unit" && s.variant ? (
