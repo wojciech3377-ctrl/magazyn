@@ -52,8 +52,8 @@ export default async function ContractPage({ params, searchParams }: { params: P
           <form action={updateContractMeta} className="card flex flex-wrap items-end gap-3 p-4">
             <input type="hidden" name="id" value={c.id} />
             <div>
-              <label className="label" htmlFor="doc_number">Numer umowy do JPK</label>
-              <input id="doc_number" className="input w-56" name="doc_number" defaultValue={c.doc_number ?? ""} placeholder={c.template && c.number ? String(c.number) : "np. NR00512"} />
+              <label className="label" htmlFor="doc_number">Numer umowy {c.template ? "" : "(odczytany z pliku)"}</label>
+              <input id="doc_number" className="input w-56" name="doc_number" defaultValue={c.doc_number ?? (c.template && c.number ? String(c.number) : "")} placeholder={c.file_path ? "nie udało się odczytać – wpisz" : "brak pliku"} />
             </div>
             {!c.template && (
               <div>

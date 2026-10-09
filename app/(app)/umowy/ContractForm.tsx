@@ -24,10 +24,6 @@ export function ContractForm({ consignors, defaultUnits, canSeePrices, returnTo 
         <input className="input" type="date" id="contract_date" name="contract_date" defaultValue={new Date().toISOString().slice(0, 10)} />
       </div>
       <div>
-        <label className="label" htmlFor="doc_number">Numer umowy (z dokumentu)</label>
-        <input className="input" id="doc_number" name="doc_number" placeholder="np. NR00512 albo 190/2026" />
-      </div>
-      <div>
         <label className="label" htmlFor="currency">Waluta</label>
         <select className="input" id="currency" name="currency" defaultValue="PLN">
           <option value="PLN">PLN</option>

@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { syncBaseOrders } from "@/lib/sync/orders";
 import { syncFurgonetkaShipments, syncShopifyOrders } from "@/lib/sync/shop-orders";
 import { syncBaseReceipts } from "@/lib/sync/receipts";
+import { backfillContractNumbers } from "@/lib/contracts/docnumber";
 import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/furgonetka";
 import { errorMessage } from "@/lib/errors";
 
@@ -36,6 +37,13 @@ export async function GET(req: NextRequest) {
   const base = await run(db, "base-orders", () => syncBaseOrders(db));
   const shop = await run(db, "shopify-orders", () => syncShopifyOrders(db));
   const receipts = await run(db, "base-receipts", () => syncBaseReceipts(db));
+  // Numery umów ze skanów: w dzienniku tylko, gdy coś sprawdzono albo był błąd.
+  try {
+    const r = await backfillContractNumbers(db);
+    if (r.checked) await db.from("sync_log").insert({ job: "contract-numbers", ok: true, message: JSON.stringify(r) });
+  } catch (e) {
+    await db.from("sync_log").insert({ job: "contract-numbers", ok: false, message: errorMessage(e) });
+  }
   const ship = furgonetkaConfigured() && (await furgonetkaConnection(db))
     ? await run(db, "furgonetka", () => syncFurgonetkaShipments(db))
     : { ok: true, result: "niepołączona" };

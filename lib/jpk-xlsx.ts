@@ -33,12 +33,12 @@ export async function jpkWorkbook(lines: JpkLine[]) {
 
   addSheet(wb, "Paragony", ["LP", "Nazwa przedmiotu", "Kwota", "Grupa VAT", "PARAGON", "DATA", "Uwagi", "Data zakupu", "Kwota zakupu", "Numer umowy", "Uwagi"],
     [6, 44, 10, 10, 11, 12, 16, 13, 12, 16, 26],
-    receipts.map((l, i) => [i + 1, l.name, l.price, l.vat, numOrText(l.docNumber), plDate(l.docDate), l.saleNote && l.saleNote !== "NIE ODEBRANE POBRANIE" ? l.saleNote : "",
-      plDate(l.contractDate), l.purchasePrice, l.contractNumber ?? "", l.saleNote === "NIE ODEBRANE POBRANIE" ? l.saleNote : currencyNote(l.currency)]),
+    receipts.map((l, i) => [i + 1, l.name, l.price, l.vat, numOrText(l.docNumber), plDate(l.docDate), "",
+      plDate(l.contractDate), l.purchasePrice, l.contractNumber ?? "", [l.saleNote, currencyNote(l.currency)].filter(Boolean).join(" · ")]),
     receipts);
   addSheet(wb, "Faktury", ["LP", "Nazwa przedmiotu", "Kwota", "NR FV", "data", "Uwagi", "Data zakupu", "Kwota zakupu", "Numer umowy", "Uwagi"],
     [6, 44, 10, 16, 12, 16, 13, 12, 16, 26],
-    invoices.map((l, i) => [i + 1, l.name, l.price, l.docNumber ?? "", plDate(l.docDate), l.saleNote ?? "", plDate(l.contractDate), l.purchasePrice, l.contractNumber ?? "", currencyNote(l.currency)]),
+    invoices.map((l, i) => [i + 1, l.name, l.price, l.docNumber ?? "", plDate(l.docDate), "", plDate(l.contractDate), l.purchasePrice, l.contractNumber ?? "", [l.saleNote, currencyNote(l.currency)].filter(Boolean).join(" · ")]),
     invoices);
 
   return Buffer.from(await wb.xlsx.writeBuffer());
@@ -61,7 +61,7 @@ function addSheet(wb: ExcelJS.Workbook, name: string, header: string[], widths: 
   rows.forEach((r, i) => {
     const row = ws.addRow(r.map((v) => (v === null ? "" : v)));
     const l = lines[i];
-    const fill = l.saleNote === "NIE ODEBRANE POBRANIE" || l.saleNote === "ZWROT" ? RED : l.currency && l.currency !== "PLN" ? YELLOW : null;
+    const fill = l.saleNote ? RED : l.currency && l.currency !== "PLN" ? YELLOW : null;
     row.eachCell({ includeEmpty: true }, (c, col) => {
       if (col > header.length) return;
       if (fill) c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: fill } };

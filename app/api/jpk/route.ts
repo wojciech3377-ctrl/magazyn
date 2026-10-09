@@ -9,7 +9,7 @@ import { errorMessage } from "@/lib/errors";
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
-const KEY = /^[sp]:[0-9a-f-]{36}$/i;
+const KEY = /^(o:[0-9a-f-]{36}:\d{1,3}:\d{1,3}|p:[0-9a-f-]{36})$/i;
 
 /**
  * Eksport zaznaczonych linii JPK (POST z formularza): „xlsx” = plik JPK w Excelu (tylko z dostępem do cen),

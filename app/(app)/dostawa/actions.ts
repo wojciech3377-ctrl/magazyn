@@ -2,6 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { requireProfile } from "@/lib/auth";
+import { fillContractNumber } from "@/lib/contracts/docnumber";
 import { findVariantIds } from "@/lib/queries/units";
 import { adjustBaseStock } from "@/lib/stock";
 import { parseAmount, uploadedFile } from "@/lib/contracts/upload";
@@ -82,6 +83,7 @@ export async function createDelivery(_: unknown, formData: FormData): Promise<{ 
       }).select("id").single();
       if (error) throw error;
       contractId = c.id;
+      await fillContractNumber(supabase, c.id);
     }
 
     for (const line of lines) {

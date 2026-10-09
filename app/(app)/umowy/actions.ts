@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireAdmin, requireProfile } from "@/lib/auth";
 import { parseAmount, uploadedFile } from "@/lib/contracts/upload";
+import { fillContractNumber } from "@/lib/contracts/docnumber";
 import { errorMessage } from "@/lib/errors";
 
 function codes(text: string) {
@@ -40,7 +41,6 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
       consignor_id: type === "consignment" ? String(formData.get("consignor_id") ?? "") || null : null,
       contract_date: String(formData.get("contract_date") ?? "") || null,
       amount: parseAmount(formData.get("amount")),
-      doc_number: String(formData.get("doc_number") ?? "").trim().slice(0, 60) || null,
       currency: ["PLN", "EUR"].includes(String(formData.get("currency"))) ? String(formData.get("currency")) : null,
       notes: String(formData.get("notes") ?? "").trim() || null,
       file_path: file?.path ?? null,
@@ -48,6 +48,7 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
     }).select("id").single();
     if (error) throw error;
     id = data.id;
+    await fillContractNumber(supabase, id);
     const r = await attachByCodes(supabase, id, String(formData.get("units") ?? ""));
     if (r.missing.length) note = `?blad=${encodeURIComponent(`Nie znaleziono sztuk: ${r.missing.join(", ")}`)}`;
   } catch (e) {
@@ -88,7 +89,10 @@ export async function replaceFile(formData: FormData) {
   try {
     const file = uploadedFile(formData);
     if (!file) msg = "blad=" + encodeURIComponent("Wybierz plik.");
-    else await supabase.from("contracts").update({ file_path: file.path, file_name: file.name }).eq("id", id);
+    else {
+      await supabase.from("contracts").update({ file_path: file.path, file_name: file.name, doc_number: null }).eq("id", id);
+      await fillContractNumber(supabase, id);
+    }
   } catch (e) {
     msg = "blad=" + encodeURIComponent(errorMessage(e));
   }

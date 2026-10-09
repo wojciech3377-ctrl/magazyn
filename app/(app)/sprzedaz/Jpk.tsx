@@ -62,7 +62,7 @@ export async function Jpk({ sp }: { sp: Record<string, string | undefined> }) {
 
       {error && <div className="mb-4"><Notice tone="error">{error}</Notice></div>}
       {kind === "invoice" && <div className="mb-4"><Notice>Faktury pojawią się tu po uruchomieniu modułu faktur (zakładka Faktury).</Notice></div>}
-      {kind === "none" && <div className="mb-4"><Notice>Sprzedaże z {monthLabel(range.key)} bez paragonu ani faktury – nie trafią do JPK, dopóki nie dostaną dokumentu.</Notice></div>}
+      {kind === "none" && <div className="mb-4"><Notice>Sprzedaże z {monthLabel(range.key)}, do których nie ma jeszcze paragonu ani faktury.</Notice></div>}
 
       <form id="jpk" action="/api/jpk" method="post">
         <input type="hidden" name="okres" value={range.key} />
@@ -86,12 +86,12 @@ export async function Jpk({ sp }: { sp: Record<string, string | undefined> }) {
               {!lines.length && <tr><td colSpan={11} className="py-10 text-center text-muted">Brak sprzedaży w tym miesiącu.</td></tr>}
               {lines.map((l) => {
                 const foreign = l.currency && l.currency !== "PLN";
-                const red = l.saleNote === "ZWROT" || l.saleNote === "NIE ODEBRANE POBRANIE";
+                const red = !!l.saleNote;
                 return (
                   <tr key={l.key} className={red ? "bg-rose-50" : foreign ? "bg-yellow-50" : ""}>
                     <td><input type="checkbox" name="l" value={l.key} defaultChecked={preselect} className="h-4 w-4" aria-label={`Zaznacz ${l.name}`} /></td>
                     <td className="whitespace-nowrap">
-                      {l.kind ? <><Pill tone={l.kind === "invoice" ? "blue" : "slate"}>{l.kind === "invoice" ? "FV" : "paragon"}</Pill> <span className="font-mono text-xs">{l.docNumber}</span></> : <span className="text-xs text-warn">brak dokumentu</span>}
+                      {l.kind ? <><Pill tone={l.kind === "invoice" ? "blue" : "slate"}>{l.kind === "invoice" ? "FV" : "paragon"}</Pill> <span className="font-mono text-xs">{l.docNumber}</span></> : <span className="text-xs text-warn">bez dokumentu</span>}
                     </td>
                     <td className="whitespace-nowrap text-muted">{dateOnly(l.docDate ?? l.saleDate)}</td>
                     <td>{l.name}{l.unitCode && <span className="ml-1 font-mono text-xs text-muted">{l.unitCode}</span>}</td>
