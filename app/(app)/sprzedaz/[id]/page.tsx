@@ -13,6 +13,7 @@ import { SwapForm } from "../SwapForm";
 import { LabelForm } from "./LabelForm";
 import { OrderOps } from "./OrderOps";
 import { WtbButton } from "@/components/WtbButton";
+import { ReceiptButton } from "@/components/ReceiptButton";
 import { refreshOrder } from "./actions";
 
 type Address = { name: string | null; company: string | null; address1: string | null; address2: string | null; city: string | null; zip: string | null; countryCodeV2: string | null; phone: string | null } | null;
@@ -55,6 +56,8 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
         sub={<>{store?.name} · {dateTime(order.ordered_at)}</>}
         actions={
           <>
+            {status !== "cancelled" && status !== "returned" && <ReceiptButton orderId={order.id} receiptId={order.receipt_id} />}
+            <a className="btn-secondary" href="#etykieta">Utwórz etykietę</a>
             <form action={refreshOrder}><input type="hidden" name="id" value={order.id} /><SubmitButton className="btn-secondary" pendingText="Odświeżam…">Odśwież</SubmitButton></form>
             {shopUrl && <a className="btn-secondary" href={shopUrl} target="_blank" rel="noreferrer">Otwórz w Shopify</a>}
             <Link className="btn-secondary" href="/sprzedaz">Wróć do listy</Link>

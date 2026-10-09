@@ -6,6 +6,7 @@ import { SubmitButton } from "@/components/SubmitButton";
 import { pullOrdersNow } from "./actions";
 import { SwapForm } from "./SwapForm";
 import { WtbButton } from "@/components/WtbButton";
+import { ReceiptButton } from "@/components/ReceiptButton";
 import { SelectAllNamed } from "@/components/SelectAll";
 import { OrderStatusPill, SALE_SELECT, SaleContract, UnitCell, type SaleUnit } from "./SaleBits";
 import { classifyShipment, ORDER_STATUS, paymentLabel, type Fulfillment, type OrderStatus } from "@/lib/orders/status";
@@ -33,7 +34,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
 
   let query = supabase
     .from("orders")
-    .select("id, name, ordered_at, customer_name, shipping_method, pickup_point, financial_status, cod, total, outstanding, currency, status, status_detail, line_items, fulfillments, store:stores(name)", { count: "exact" })
+    .select("id, name, ordered_at, receipt_id, customer_name, shipping_method, pickup_point, financial_status, cod, total, outstanding, currency, status, status_detail, line_items, fulfillments, store:stores(name)", { count: "exact" })
     .order("ordered_at", { ascending: false })
     .range((page - 1) * PER_PAGE, page * PER_PAGE - 1);
   if (tab) query = query.eq("status", tab);
@@ -170,6 +171,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
                     <div className="flex flex-col items-start gap-1.5">
                       <ContractAction sales={oSales} saleHasContract={saleHasContract} />
                       {status === "new" && <Link className="btn-secondary relative z-10 whitespace-nowrap px-2.5 py-1 text-xs" href={`/sprzedaz/${o.id}#etykieta`}>Utwórz etykietę</Link>}
+                      {status !== "cancelled" && status !== "returned" && <ReceiptButton orderId={o.id} receiptId={o.receipt_id as number | null} compact />}
                     </div>
                   </td>
                 </tr>

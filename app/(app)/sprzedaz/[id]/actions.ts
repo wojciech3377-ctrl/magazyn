@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireAdmin, requireProfile } from "@/lib/auth";
+import { addReceipt } from "@/lib/integrations/base";
 import { errorMessage } from "@/lib/errors";
 import { adjustBaseStock, type StockChange } from "@/lib/stock";
 import type { LineItem } from "@/lib/sync/shop-orders";
@@ -322,4 +323,33 @@ export async function returnOrderAction(_: OrderOpState, fd: FormData): Promise<
   revalidatePath(`/sprzedaz/${order.id}`);
   revalidatePath("/sprzedaz");
   return { ok: `Zwrot zapisany.${summary}`, notes };
+}
+
+export type ReceiptState = { ok?: string; error?: string } | null;
+
+/** „Drukuj paragon”: paragon w Base do zamówienia (raz), wydruk na drukarce fiskalnej podpiętej do Base. */
+export async function issueReceipt(_: ReceiptState, fd: FormData): Promise<ReceiptState> {
+  const { profile } = await requireProfile();
+  const db = createAdminClient();
+  const orderId = str(fd, "order_id");
+  const { data: order } = await db.from("orders").select("id, name, cancelled_at, receipt_id").eq("id", orderId).maybeSingle();
+  if (!order) return { error: "Nie ma takiego zamówienia." };
+  if (order.receipt_id) return { ok: `Paragon już wystawiony (nr ${order.receipt_id}).` };
+  if (order.cancelled_at) return { error: "Zamówienie jest anulowane." };
+  const { data: sale } = await db.from("sales").select("base_order_id").eq("order_id", order.id).limit(1).maybeSingle();
+  if (!sale?.base_order_id) return { error: "Nie znalazłem tego zamówienia w Base – poczekaj na odczyt zamówień (co 5 minut) i spróbuj ponownie." };
+  // Blokada przed podwójnym kliknięciem: rezerwujemy wystawienie przed wywołaniem Base.
+  const { data: locked } = await db.from("orders").update({ receipt_at: new Date().toISOString(), receipt_by: profile.id })
+    .eq("id", order.id).is("receipt_id", null).or(`receipt_at.is.null,receipt_at.lt.${new Date(Date.now() - 60_000).toISOString()}`).select("id");
+  if (!locked?.length) return { error: "Paragon jest właśnie wystawiany – odśwież stronę za chwilę." };
+  try {
+    const receiptId = await addReceipt(Number(sale.base_order_id));
+    await db.from("orders").update({ receipt_id: receiptId }).eq("id", order.id);
+    revalidatePath(`/sprzedaz/${order.id}`);
+    revalidatePath("/sprzedaz");
+    return { ok: `Paragon wysłany do drukarki (nr ${receiptId}).` };
+  } catch (e) {
+    await db.from("orders").update({ receipt_at: null, receipt_by: null }).eq("id", order.id).is("receipt_id", null);
+    return { error: errorMessage(e) };
+  }
 }

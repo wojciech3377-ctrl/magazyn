@@ -133,3 +133,9 @@ export async function getOrdersConfirmedFrom(fromUnix: number) {
   const r = await baseCall<{ orders: BaseOrder[] }>("getOrders", { date_confirmed_from: fromUnix });
   return r.orders ?? [];
 }
+
+/** Wystawia paragon do zamówienia w Base; drukuje go drukarka fiskalna podpięta do Base. */
+export async function addReceipt(orderId: number, seriesId?: number) {
+  const r = await baseCall<{ receipt_id: number }>("addReceipt", { order_id: orderId, ...(seriesId ? { series_id: seriesId } : {}) });
+  return r.receipt_id;
+}
