@@ -4,12 +4,13 @@ import { useActionState, useState, useTransition } from "react";
 import { assignGeneralItems } from "../actions";
 import { searchVariants, type VariantHit } from "@/app/(app)/dostawa/actions";
 
-type Item = { title: string; option: string; qty: number; price: number };
+type Item = { title: string; option: string; qty: number; price: number; variant_id?: string };
 
 /** Pozycje z ogólnego linku → produkty z katalogu → sztuki „w drodze”. */
 export function AssignItems({ id, items, locations }: { id: string; items: Item[]; locations: { id: string; label: string; store_id: string }[] }) {
   const [state, action, pending] = useActionState(assignGeneralItems, null);
-  const [picked, setPicked] = useState<({ id: string; label: string } | null)[]>(items.map(() => null));
+  // Pozycje wybrane przez klienta z katalogu są już przypisane.
+  const [picked, setPicked] = useState<({ id: string; label: string } | null)[]>(items.map((i) => (i.variant_id ? { id: i.variant_id, label: `${i.title} · ${i.option}` } : null)));
   const [queries, setQueries] = useState(items.map((i) => i.title));
   const [hits, setHits] = useState<VariantHit[][]>(items.map(() => []));
   const [, start] = useTransition();

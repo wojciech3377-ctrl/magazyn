@@ -123,12 +123,22 @@ export async function submitGeneralContract(key: string, _: Result | null, formD
   }
   if (!Array.isArray(raw)) return { error: "Błąd listy przedmiotów." };
   const rows = raw.filter((i): i is Record<string, string> => !!i && typeof i === "object");
-  const items = rows.slice(0, 20).map((i) => ({
-    title: clean(i.title, 150),
-    option: clean(i.option, 40) || "–",
-    qty: Math.min(50, Math.max(1, Math.floor(Number(i.qty) || 1))),
-    price: Math.round(Number(String(i.price).replace(",", ".").replace(/\s/g, "")) * 100) / 100,
-  })).filter((i) => i.title);
+  // Pozycje wybrane z katalogu: nazwę i rozmiar bierzemy z bazy (nie z formularza).
+  const variantIds = rows.map((i) => String(i.variant_id ?? "")).filter((v) => /^[0-9a-f-]{36}$/.test(v));
+  const { data: catalog } = variantIds.length
+    ? await db.from("variants").select("id, option, product:products(title)").in("id", variantIds.slice(0, 20))
+    : { data: [] };
+  const known = new Map((catalog ?? []).map((v) => [v.id as string, { option: v.option as string, title: (v.product as unknown as { title: string }).title }]));
+  const items = rows.slice(0, 20).map((i) => {
+    const v = known.get(String(i.variant_id ?? ""));
+    return {
+      ...(v ? { variant_id: String(i.variant_id) } : {}),
+      title: v?.title ?? clean(i.title, 150),
+      option: v?.option ?? (clean(i.option, 40) || "–"),
+      qty: Math.min(50, Math.max(1, Math.floor(Number(i.qty) || 1))),
+      price: Math.round(Number(String(i.price).replace(",", ".").replace(/\s/g, "")) * 100) / 100,
+    };
+  }).filter((i) => i.title);
   if (!items.length) return { error: "Wpisz, co sprzedajesz." };
   if (items.some((i) => !Number.isFinite(i.price) || i.price <= 0 || i.price > 1_000_000)) return { error: "Podaj cenę każdej rzeczy." };
   if (contractTotal(items) > 5_000_000) return { error: "Kwota umowy jest za wysoka – skontaktuj się z nami." };

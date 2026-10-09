@@ -180,8 +180,9 @@ export async function retryFinalize(formData: FormData) {
 export async function acceptContract(formData: FormData) {
   const { supabase, profile } = await requireProfile();
   const id = String(formData.get("id"));
+  const locationId = String(formData.get("location_id") ?? "") || null;
   const { data: accepted } = await supabase.from("contracts")
-    .update({ status: "accepted", accepted_at: new Date().toISOString(), accepted_by: profile.id })
+    .update({ status: "accepted", accepted_at: new Date().toISOString(), accepted_by: profile.id, ...(locationId ? { location_id: locationId } : {}) })
     .eq("id", id).eq("status", "signed").select("id, source, items");
   if (!accepted?.length) redirect(`/umowy/${id}?blad=${encodeURIComponent("Zatwierdzić można tylko umowę podpisaną przez sprzedającego.")}`);
 

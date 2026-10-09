@@ -1,10 +1,11 @@
 "use client";
 
-import { useActionState, useMemo, useState } from "react";
+import { useActionState, useEffect, useMemo, useState } from "react";
 import { ContractPreview } from "@/components/ContractPreview";
 import { SignaturePad } from "@/components/SignaturePad";
 import { purchaseBlocks, type Company, type ContractItem } from "@/lib/contracts/purchase";
 import { COUNTRIES, CURRENCIES, type Lang } from "@/lib/contracts/options";
+import type { CatalogHit } from "@/app/umowa/actions";
 
 type Action = (state: { error?: string } | null, formData: FormData) => Promise<{ error?: string }>;
 
@@ -19,6 +20,11 @@ const L = {
     qty: "Szt.",
     price: "Cena",
     addItem: "+ dodaj kolejną rzecz",
+    search: "Wyszukaj model, np. Jordan 4 White Cement",
+    manual: "Nie ma na liście? Wpisz ręcznie",
+    fromList: "wybierz z listy",
+    change: "zmień",
+    chooseSize: "Wybierz rozmiar",
     removeItem: "usuń ostatnią",
     you: "Twoje dane",
     name: "Imię i nazwisko",
@@ -51,6 +57,11 @@ const L = {
     qty: "Qty",
     price: "Price",
     addItem: "+ add another item",
+    search: "Search for a model, e.g. Jordan 4 White Cement",
+    manual: "Not on the list? Type it in",
+    fromList: "choose from the list",
+    change: "change",
+    chooseSize: "Choose size",
     removeItem: "remove last",
     you: "Your details",
     name: "First and last name",
@@ -76,7 +87,7 @@ const L = {
 } as const;
 
 export function SellerContractForm({
-  action, mode, company, number, date, paymentDays, items: fixedItems, buyerSignature,
+  action, mode, company, number, date, paymentDays, items: fixedItems, buyerSignature, searchCatalog,
 }: {
   action: Action;
   mode: "fixed" | "free";
@@ -86,6 +97,7 @@ export function SellerContractForm({
   paymentDays: number;
   items: ContractItem[];
   buyerSignature?: string | null;
+  searchCatalog?: (q: string) => Promise<CatalogHit[]>;
 }) {
   const [state, formAction, pending] = useActionState(action, null);
   const [lang, setLang] = useState<Lang>("pl");
@@ -95,9 +107,7 @@ export function SellerContractForm({
   const [contractDate, setContractDate] = useState(date);
   const [payment, setPayment] = useState<"" | "transfer" | "cash">("");
   const [currency, setCurrency] = useState("");
-  const [items, setItems] = useState<{ title: string; option: string; qty: string; price: string }[]>(
-    mode === "free" ? [{ title: "", option: "", qty: "1", price: "" }] : [],
-  );
+  const [items, setItems] = useState<FreeItem[]>(mode === "free" ? [newItem(!!searchCatalog)] : []);
   const [signature, setSignature] = useState("");
   const [consent, setConsent] = useState(false);
 
@@ -171,19 +181,11 @@ export function SellerContractForm({
               <h2 className="h2">{T.what}</h2>
               <input type="hidden" name="items" value={JSON.stringify(items)} />
               {items.map((it, idx) => (
-                <div key={idx} className="grid grid-cols-6 gap-2">
-                  <input className="input col-span-6 sm:col-span-3" placeholder={T.model} value={it.title} aria-label={T.model}
-                    onChange={(e) => setItems(items.map((x, i) => (i === idx ? { ...x, title: e.target.value } : x)))} required />
-                  <input className="input col-span-2 sm:col-span-1" placeholder={T.size} value={it.option} aria-label={T.size}
-                    onChange={(e) => setItems(items.map((x, i) => (i === idx ? { ...x, option: e.target.value } : x)))} required />
-                  <input className="input col-span-1" inputMode="numeric" placeholder={T.qty} value={it.qty} aria-label={T.qty}
-                    onChange={(e) => setItems(items.map((x, i) => (i === idx ? { ...x, qty: e.target.value } : x)))} />
-                  <input className="input col-span-3 sm:col-span-1" inputMode="decimal" placeholder={T.price} value={it.price} aria-label={T.price}
-                    onChange={(e) => setItems(items.map((x, i) => (i === idx ? { ...x, price: e.target.value } : x)))} required />
-                </div>
+                <ItemRow key={it.key} item={it} T={T} searchCatalog={searchCatalog}
+                  onChange={(patch) => setItems((all) => all.map((x, i) => (i === idx ? { ...x, ...patch } : x)))} />
               ))}
               <div className="flex gap-3 text-sm">
-                <button type="button" className="text-accent underline" onClick={() => setItems([...items, { title: "", option: "", qty: "1", price: "" }])}>{T.addItem}</button>
+                <button type="button" className="text-accent underline" onClick={() => setItems([...items, newItem(!!searchCatalog)])}>{T.addItem}</button>
                 {items.length > 1 && <button type="button" className="text-muted underline" onClick={() => setItems(items.slice(0, -1))}>{T.removeItem}</button>}
               </div>
             </section>
@@ -238,5 +240,117 @@ export function SellerContractForm({
         <section className="card hidden max-h-[85vh] overflow-y-auto p-5 lg:block">{preview}</section>
       </div>
     </form>
+  );
+}
+
+type FreeItem = {
+  key: string;
+  title: string;
+  option: string;
+  qty: string;
+  price: string;
+  variant_id?: string;
+  image?: string | null;
+  options?: { id: string; option: string }[];
+  mode: "search" | "manual";
+};
+
+function newItem(withSearch: boolean): FreeItem {
+  return { key: Math.random().toString(36).slice(2), title: "", option: "", qty: "1", price: "", mode: withSearch ? "search" : "manual" };
+}
+
+/** Jedna pozycja: model z katalogu (wyszukiwarka + rozmiar) albo wpisany ręcznie. */
+function ItemRow({ item, T, onChange, searchCatalog }: {
+  item: FreeItem;
+  T: (typeof L)[Lang];
+  onChange: (patch: Partial<FreeItem>) => void;
+  searchCatalog?: (q: string) => Promise<CatalogHit[]>;
+}) {
+  const [q, setQ] = useState("");
+  const [hits, setHits] = useState<CatalogHit[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!searchCatalog || item.mode !== "search" || item.options || q.trim().length < 2) {
+      setHits([]);
+      return;
+    }
+    const t = setTimeout(async () => {
+      setBusy(true);
+      setHits(await searchCatalog(q));
+      setBusy(false);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [q, item.mode, item.options, searchCatalog]);
+
+  const numbers = (
+    <>
+      <input className="input col-span-1" inputMode="numeric" placeholder={T.qty} value={item.qty} aria-label={T.qty}
+        onChange={(e) => onChange({ qty: e.target.value })} />
+      <input className="input col-span-3 sm:col-span-1" inputMode="decimal" placeholder={T.price} value={item.price} aria-label={T.price}
+        onChange={(e) => onChange({ price: e.target.value })} required />
+    </>
+  );
+
+  if (item.mode === "search" && !item.options) {
+    return (
+      <div className="relative space-y-1 rounded-md border border-line p-2">
+        <input className="input" placeholder={T.search} value={q} onChange={(e) => setQ(e.target.value)} aria-label={T.search} />
+        {busy && <p className="text-xs text-muted">…</p>}
+        {hits.length > 0 && (
+          <ul className="max-h-64 divide-y divide-line overflow-y-auto rounded-md border border-line bg-white">
+            {hits.map((h) => (
+              <li key={h.productId}>
+                <button type="button" className="flex w-full items-center gap-3 px-2 py-1.5 text-left text-sm hover:bg-panel"
+                  onClick={() => onChange({ title: h.title, image: h.image, options: h.variants, option: "", variant_id: undefined })}>
+                  {h.image
+                    // eslint-disable-next-line @next/next/no-img-element
+                    ? <img src={`${h.image}${h.image.includes("?") ? "&" : "?"}width=80`} alt="" className="h-9 w-9 rounded border border-line object-contain" />
+                    : <span className="h-9 w-9 rounded border border-line bg-panel" />}
+                  <span>{h.title}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <button type="button" className="text-xs text-muted underline" onClick={() => onChange({ mode: "manual" })}>{T.manual}</button>
+      </div>
+    );
+  }
+
+  if (item.mode === "search" && item.options) {
+    return (
+      <div className="space-y-2 rounded-md border border-line p-2">
+        <div className="flex items-center gap-3 text-sm">
+          {item.image
+            // eslint-disable-next-line @next/next/no-img-element
+            ? <img src={`${item.image}${item.image.includes("?") ? "&" : "?"}width=80`} alt="" className="h-10 w-10 rounded border border-line object-contain" />
+            : null}
+          <span className="flex-1 font-medium">{item.title}</span>
+          <button type="button" className="text-xs text-muted underline" onClick={() => onChange({ options: undefined, variant_id: undefined, title: "", option: "" })}>{T.change}</button>
+        </div>
+        <div className="grid grid-cols-6 gap-2">
+          <select className="input col-span-2" value={item.variant_id ?? ""} aria-label={T.size} required
+            onChange={(e) => onChange({ variant_id: e.target.value, option: item.options!.find((o) => o.id === e.target.value)?.option ?? "" })}>
+            <option value="">{T.chooseSize}</option>
+            {item.options.map((o) => <option key={o.id} value={o.id}>{o.option}</option>)}
+          </select>
+          {numbers}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-1">
+      <div className="grid grid-cols-6 gap-2">
+        <input className="input col-span-6 sm:col-span-3" placeholder={T.model} value={item.title} aria-label={T.model}
+          onChange={(e) => onChange({ title: e.target.value })} required />
+        <input className="input col-span-2 sm:col-span-1" placeholder={T.size} value={item.option} aria-label={T.size}
+          onChange={(e) => onChange({ option: e.target.value })} required />
+        {numbers}
+      </div>
+      {searchCatalog && <button type="button" className="text-xs text-muted underline" onClick={() => onChange({ mode: "search", title: "", option: "" })}>{T.fromList}</button>}
+    </div>
   );
 }

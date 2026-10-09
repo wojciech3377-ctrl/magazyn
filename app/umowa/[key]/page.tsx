@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getBuyerSignature, getCompany } from "@/lib/contracts/settings";
 import { SellerContractForm } from "@/components/contracts/SellerContractForm";
 import { submitGeneralContract } from "@/app/podpis/actions";
+import { searchCatalogPublic } from "../actions";
 import { PublicShell } from "@/app/podpis/PublicShell";
 
 export const dynamic = "force-dynamic";
@@ -24,10 +25,11 @@ export default async function GeneralContractPage({ params }: { params: Promise<
         action={submitGeneralContract.bind(null, key)}
         mode="free"
         company={company}
-        number="(nadamy po podpisaniu)"
+        number="…"
         date={new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Warsaw" }).format(new Date())}
         paymentDays={company.payment_days ?? 7}
         buyerSignature={buyerSignature}
+        searchCatalog={searchCatalogPublic.bind(null, key)}
         items={[]}
       />
     </PublicShell>

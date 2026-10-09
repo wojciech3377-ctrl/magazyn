@@ -134,6 +134,7 @@ type TemplateContract = {
   seller_email: string | null; seller_phone: string | null; signed_at: string | null; signer_ip: string | null;
   payment_days: number | null; units_created_at: string | null; sale_id: string | null;
   payment_method: string | null; currency: string | null; seller_country: string | null; paid_at: string | null;
+  location_id: string | null;
   items: { title: string; option: string; qty: number; price: number; unit_id?: string; variant_id?: string; identifier?: string | null }[] | null;
 };
 
@@ -144,6 +145,11 @@ async function TemplateSection({ c, canSeePrices }: { c: TemplateContract; canSe
   const needsAssign = c.status === "accepted" && c.source === "general" && !c.units_created_at
     && items.some((i) => !i.unit_id && !i.variant_id);
   const { data: locations } = needsAssign ? await supabase.from("locations").select("id, name, store_id, store:stores(name)").eq("active", true) : { data: [] };
+  // Umowa z ogólnego linku z modelami z katalogu: przy zatwierdzeniu wybierasz, dokąd przyjdzie towar.
+  const needsLocation = c.status === "signed" && !c.location_id && items.some((i) => !i.unit_id && i.variant_id);
+  const { data: acceptLocations } = needsLocation
+    ? await supabase.from("locations").select("id, name, store:stores(name)").eq("active", true).order("name")
+    : { data: [] };
   const { data: sale } = c.sale_id ? await supabase.from("sales").select("order_ref").eq("id", c.sale_id).maybeSingle() : { data: null };
   const smsBody = encodeURIComponent(`Umowa kupna do podpisu: ${link}`);
 
@@ -178,8 +184,13 @@ async function TemplateSection({ c, canSeePrices }: { c: TemplateContract; canSe
           <div className="space-y-2 border-t border-line pt-3">
             <p className="text-sm">Sprzedający podpisał umowę. Sprawdź dane i pozycje – po zatwierdzeniu dostanie umowę z Waszym podpisem{c.source !== "general" ? ", a towar pojawi się w Magazynie jako „w drodze”" : ""}.</p>
             <div className="flex flex-wrap gap-2">
-              <form action={acceptContract}>
+              <form action={acceptContract} className="flex flex-wrap items-center gap-2">
                 <input type="hidden" name="id" value={c.id} />
+                {needsLocation && (
+                  <select className="input w-64" name="location_id" aria-label="Dokąd przyjdzie towar">
+                    {(acceptLocations ?? []).map((l) => <option key={l.id} value={l.id}>{(l.store as unknown as { name: string }).name} · {l.name}</option>)}
+                  </select>
+                )}
                 <SubmitButton pendingText="Zatwierdzam…">Zatwierdź i podpisz umowę</SubmitButton>
               </form>
               <form action={rejectContract}>
@@ -219,7 +230,7 @@ async function TemplateSection({ c, canSeePrices }: { c: TemplateContract; canSe
             <p className="text-sm text-muted">Klient sam opisał, co sprzedaje. Wybierz właściwy produkt i rozmiar – powstaną sztuki „w drodze” z tą umową.</p>
             <AssignItems
               id={c.id}
-              items={items.map((i) => ({ title: i.title, option: i.option, qty: Number(i.qty ?? 1), price: Number(i.price) }))}
+              items={items.map((i) => ({ title: i.title, option: i.option, qty: Number(i.qty ?? 1), price: Number(i.price), variant_id: i.variant_id }))}
               locations={(locations ?? []).map((l) => ({ id: l.id, store_id: l.store_id, label: `${(l.store as unknown as { name: string }).name} · ${l.name}` }))}
             />
           </div>
