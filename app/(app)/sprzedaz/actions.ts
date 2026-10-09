@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache";
 import { requireAdmin, requireProfile } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { syncBaseOrders } from "@/lib/sync/orders";
+import { syncFurgonetkaShipments, syncShopifyOrders } from "@/lib/sync/shop-orders";
+import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/furgonetka";
 
 /** Zamiana sztuki przy pakowaniu: skan kodu sztuki, IMEI albo numeru seryjnego. */
 export async function swapUnit(_: unknown, formData: FormData): Promise<{ ok?: string; error?: string }> {
@@ -17,11 +19,22 @@ export async function swapUnit(_: unknown, formData: FormData): Promise<{ ok?: s
   return { ok: "Sztuka zmieniona." };
 }
 
-/** Ręczne pobranie nowych zamówień z Base (to samo robi zadanie co kilka minut). */
+/** Ręczne pobranie: linie z Base, zamówienia ze Shopify i przesyłki z Furgonetki (to samo robi zadanie co 5 minut). */
 export async function pullOrdersNow() {
   await requireAdmin();
   const db = createAdminClient();
-  const result = await syncBaseOrders(db);
-  await db.from("sync_log").insert({ job: "base-orders", ok: true, message: JSON.stringify(result) });
+  const jobs: [string, () => Promise<unknown>][] = [
+    ["base-orders", () => syncBaseOrders(db)],
+    ["shopify-orders", () => syncShopifyOrders(db)],
+  ];
+  if (furgonetkaConfigured() && (await furgonetkaConnection(db))) jobs.push(["furgonetka", () => syncFurgonetkaShipments(db)]);
+  for (const [job, fn] of jobs) {
+    try {
+      const result = await fn();
+      await db.from("sync_log").insert({ job, ok: true, message: JSON.stringify(result) });
+    } catch (e) {
+      await db.from("sync_log").insert({ job, ok: false, message: e instanceof Error ? e.message : String(e) });
+    }
+  }
   revalidatePath("/sprzedaz");
 }

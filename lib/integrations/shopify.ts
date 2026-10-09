@@ -145,3 +145,105 @@ export function verifyWebhook(rawBody: string, hmacHeader: string | null, storeC
 export function gidNumber(gid: string) {
   return gid.split("/").pop() ?? gid;
 }
+
+export type ShopifyOrder = {
+  id: string;
+  legacyResourceId: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  cancelledAt: string | null;
+  displayFinancialStatus: string | null;
+  displayFulfillmentStatus: string | null;
+  paymentGatewayNames: string[];
+  email: string | null;
+  phone: string | null;
+  note: string | null;
+  customAttributes: { key: string; value: string | null }[];
+  totalPriceSet: { shopMoney: { amount: string; currencyCode: string } };
+  totalOutstandingSet: { shopMoney: { amount: string } } | null;
+  billingAddress: { name: string | null } | null;
+  shippingAddress: {
+    name: string | null; firstName: string | null; lastName: string | null; company: string | null;
+    address1: string | null; address2: string | null; city: string | null; zip: string | null; countryCodeV2: string | null; phone: string | null;
+  } | null;
+  shippingLine: { title: string; code: string | null; source: string | null; originalPriceSet: { shopMoney: { amount: string } } } | null;
+  lineItems: {
+    nodes: {
+      id: string; title: string; variantTitle: string | null; sku: string | null; quantity: number;
+      image: { url: string } | null; variant: { id: string } | null; originalUnitPriceSet: { shopMoney: { amount: string } };
+    }[];
+  };
+  fulfillments: {
+    id: string; status: string; displayStatus: string | null; createdAt: string; updatedAt: string;
+    trackingInfo: { number: string | null; company: string | null; url: string | null }[];
+  }[];
+};
+
+const ORDER_FIELDS = `
+  id legacyResourceId name createdAt updatedAt cancelledAt
+  displayFinancialStatus displayFulfillmentStatus paymentGatewayNames
+  email phone note
+  customAttributes { key value }
+  totalPriceSet { shopMoney { amount currencyCode } }
+  totalOutstandingSet { shopMoney { amount } }
+  billingAddress { name }
+  shippingAddress { name firstName lastName company address1 address2 city zip countryCodeV2 phone }
+  shippingLine { title code source originalPriceSet { shopMoney { amount } } }
+  lineItems(first: 50) { nodes { id title variantTitle sku quantity image { url } variant { id } originalUnitPriceSet { shopMoney { amount } } } }
+  fulfillments(first: 10) { id status displayStatus createdAt updatedAt trackingInfo(first: 5) { number company url } }
+`;
+
+/** Zamówienia zmienione od podanej chwili (rosnąco po dacie zmiany), po 50 na stronę. */
+export async function ordersUpdatedSince(domain: string, storeCode: string, sinceIso: string, after: string | null) {
+  const data = await shopifyGraphql<{
+    orders: { nodes: ShopifyOrder[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } };
+  }>(
+    domain,
+    storeCode,
+    `query($q: String!, $after: String) { orders(first: 50, after: $after, query: $q, sortKey: UPDATED_AT) { nodes { ${ORDER_FIELDS} } pageInfo { hasNextPage endCursor } } }`,
+    { q: `updated_at:>='${sinceIso}'`, after },
+  );
+  return data.orders;
+}
+
+export async function getOrder(domain: string, storeCode: string, id: string) {
+  const data = await shopifyGraphql<{ order: ShopifyOrder | null }>(domain, storeCode, `query($id: ID!) { order(id: $id) { ${ORDER_FIELDS} } }`, { id });
+  return data.order;
+}
+
+/**
+ * Oznacza zamówienie jako wysłane w Shopify z numerem przesyłki (klient dostaje e-mail ze śledzeniem).
+ * Wymaga uprawnienia write_merchant_managed_fulfillment_orders w aplikacji sklepu.
+ */
+export async function fulfillWithTracking(
+  domain: string,
+  storeCode: string,
+  orderId: string,
+  tracking: { number: string; url: string | null; company: string },
+  notifyCustomer: boolean,
+) {
+  const fo = await shopifyGraphql<{ order: { fulfillmentOrders: { nodes: { id: string; status: string }[] } } | null }>(
+    domain,
+    storeCode,
+    `query($id: ID!) { order(id: $id) { fulfillmentOrders(first: 10) { nodes { id status } } } }`,
+    { id: orderId },
+  );
+  const open = (fo.order?.fulfillmentOrders.nodes ?? []).filter((n) => n.status === "OPEN" || n.status === "IN_PROGRESS");
+  if (!open.length) return "brak otwartych pozycji do wysłania w Shopify";
+  const data = await shopifyGraphql<{ fulfillmentCreate: { fulfillment: { id: string } | null; userErrors: { message: string }[] } }>(
+    domain,
+    storeCode,
+    `mutation($f: FulfillmentInput!) { fulfillmentCreate(fulfillment: $f) { fulfillment { id status } userErrors { field message } } }`,
+    {
+      f: {
+        lineItemsByFulfillmentOrder: open.map((n) => ({ fulfillmentOrderId: n.id })),
+        trackingInfo: { number: tracking.number, company: tracking.company, ...(tracking.url ? { url: tracking.url } : {}) },
+        notifyCustomer,
+      },
+    },
+  );
+  const err = data.fulfillmentCreate.userErrors.map((e) => e.message).join("; ");
+  if (err) throw new Error(`Shopify: ${err}`);
+  return null;
+}

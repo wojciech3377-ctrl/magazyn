@@ -6,6 +6,7 @@ import { redirect, unstable_rethrow } from "next/navigation";
 import { requireAdmin } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { registerProductWebhooks } from "@/lib/integrations/shopify";
+import { disconnect } from "@/lib/integrations/furgonetka";
 
 function done(msg: string, tone: "ok" | "blad" = "ok"): never {
   revalidatePath("/ustawienia");
@@ -163,4 +164,32 @@ export async function updateGeneralLink(formData: FormData) {
   const { error } = await supabase.from("app_settings").upsert({ key: "general_contract_link", value, updated_at: new Date().toISOString() });
   if (error) done(error.message, "blad");
   done(op === "regenerate" ? "Nowy link utworzony – stary przestał działać." : "Zapisano.");
+}
+
+export async function saveSender(formData: FormData) {
+  const { supabase } = await requireAdmin();
+  const f = (k: string) => String(formData.get(k) ?? "").trim();
+  const point = f("inpost_send_point").toUpperCase();
+  const value = {
+    company: f("company"),
+    name: f("name"),
+    street: f("street"),
+    postcode: f("postcode"),
+    city: f("city"),
+    email: f("email"),
+    phone: f("phone"),
+    inpost_send_point: !point || point === "ANY_APM" ? "any_apm" : point,
+    cod_iban: f("cod_iban").replace(/\s/g, ""),
+  };
+  if (!value.street || !value.postcode || !value.city) done("Podaj adres nadawcy.", "blad");
+  if (!value.company && !value.name) done("Podaj firmę albo imię i nazwisko nadawcy.", "blad");
+  const { error } = await supabase.from("app_settings").upsert({ key: "shipping_sender", value, updated_at: new Date().toISOString() });
+  if (error) done(error.message, "blad");
+  done("Dane nadawcy zapisane.");
+}
+
+export async function disconnectFurgonetka() {
+  await requireAdmin();
+  await disconnect(createAdminClient());
+  done("Furgonetka odłączona.");
 }

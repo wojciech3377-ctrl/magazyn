@@ -7,7 +7,11 @@ import { shopifyCredentials } from "@/lib/integrations/shopify";
 import { getBuyerSignature, getCompany } from "@/lib/contracts/settings";
 import { mailConfigured } from "@/lib/mail";
 import { ContractSettings } from "./ContractSettings";
-import { addExclusion, createUser, deleteExclusion, importInitialStock, purgeExcluded, registerWebhooks, saveLocation, saveStore, saveUser } from "./actions";
+import { addExclusion, createUser, deleteExclusion, disconnectFurgonetka, importInitialStock, purgeExcluded, registerWebhooks, saveLocation, saveSender, saveStore, saveUser } from "./actions";
+import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/furgonetka";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { getSender } from "@/lib/orders/sender";
+import { appUrl } from "@/lib/app-url";
 
 async function safe<T>(fn: () => Promise<T>): Promise<{ data: T | null; error: string | null }> {
   try {
@@ -33,6 +37,9 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
   const [company, buyerSignature, { data: generalLink }] = isAdmin
     ? await Promise.all([getCompany(supabase), getBuyerSignature(supabase), supabase.from("app_settings").select("value").eq("key", "general_contract_link").maybeSingle()])
     : [null, null, { data: null }];
+  const [sender, furgonetka, baseUrl] = isAdmin
+    ? await Promise.all([getSender(supabase), furgonetkaConfigured() ? furgonetkaConnection(createAdminClient()) : Promise.resolve(null), appUrl()])
+    : [null, null, ""];
   const hasBase = !!process.env.BASE_API_TOKEN;
   const [inventories, warehouses, sources] = isAdmin && hasBase
     ? await Promise.all([safe(getInventories), safe(getInventoryWarehouses), safe(getOrderSources)])
@@ -50,6 +57,7 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
     }),
     ["Zadanie cykliczne (CRON_SECRET)", !!process.env.CRON_SECRET],
     ["E-mail (SMTP)", mailConfigured()],
+    ["Furgonetka (klucze aplikacji)", furgonetkaConfigured()],
   ] as [string, boolean][];
 
   return (
@@ -132,6 +140,46 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
               </form>
             </div>
           </section>
+
+          {sender && (
+            <section id="furgonetka" className="card scroll-mt-4 p-4">
+              <h2 className="h2 mb-1">Wysyłka i Furgonetka</h2>
+              <p className="mb-3 text-sm text-muted">Etykiety InPost i DPD z poziomu zamówienia oraz statusy przesyłek (Wysłane / Dostarczone / Problem).</p>
+              <div className="mb-4 flex flex-wrap items-center gap-2">
+                {!furgonetkaConfigured() ? (
+                  <Notice>
+                    Najpierw utwórz aplikację OAuth na <a className="underline" href="https://furgonetka.pl/api/aplikacje-oauth" target="_blank" rel="noreferrer">furgonetka.pl → API → Aplikacje OAuth</a> z adresem przekierowania <code className="rounded bg-panel px-1">{baseUrl}/api/furgonetka/callback</code>,
+                    a jej Client ID i Client Secret wpisz w Vercel jako FURGONETKA_CLIENT_ID i FURGONETKA_CLIENT_SECRET.
+                  </Notice>
+                ) : furgonetka ? (
+                  <>
+                    <Pill tone="green">połączona</Pill>
+                    <span className="text-sm text-muted">sesja ważna do {dateTime(furgonetka.expiresAt)} (odnawia się sama)</span>
+                    <a className="btn-secondary" href="/api/furgonetka/polacz">Połącz ponownie</a>
+                    <form action={disconnectFurgonetka}><SubmitButton className="btn-secondary">Odłącz</SubmitButton></form>
+                  </>
+                ) : (
+                  <>
+                    <Pill tone="red">niepołączona</Pill>
+                    <a className="btn" href="/api/furgonetka/polacz">Połącz z Furgonetką</a>
+                    <span className="text-xs text-muted">Zalogujesz się na stronie Furgonetki – hasło nie trafia do aplikacji.</span>
+                  </>
+                )}
+              </div>
+              <form action={saveSender} className="grid gap-3 md:grid-cols-3">
+                <div className="md:col-span-2"><label className="label" htmlFor="s-company">Firma nadawcy</label><input id="s-company" className="input" name="company" defaultValue={sender.company} /></div>
+                <div><label className="label" htmlFor="s-name">Osoba kontaktowa</label><input id="s-name" className="input" name="name" defaultValue={sender.name} /></div>
+                <div><label className="label" htmlFor="s-street">Ulica i numer</label><input id="s-street" className="input" name="street" defaultValue={sender.street} /></div>
+                <div><label className="label" htmlFor="s-postcode">Kod pocztowy</label><input id="s-postcode" className="input" name="postcode" defaultValue={sender.postcode} /></div>
+                <div><label className="label" htmlFor="s-city">Miasto</label><input id="s-city" className="input" name="city" defaultValue={sender.city} /></div>
+                <div><label className="label" htmlFor="s-email">E-mail</label><input id="s-email" className="input" type="email" name="email" defaultValue={sender.email} /></div>
+                <div><label className="label" htmlFor="s-phone">Telefon</label><input id="s-phone" className="input" name="phone" defaultValue={sender.phone} /></div>
+                <div><label className="label" htmlFor="s-point">Nadanie InPost</label><input id="s-point" className="input font-mono" name="inpost_send_point" defaultValue={sender.inpost_send_point} placeholder="any_apm = dowolny paczkomat" /></div>
+                <div className="md:col-span-2"><label className="label" htmlFor="s-iban">Konto do wypłat pobrań (opcjonalnie)</label><input id="s-iban" className="input font-mono" name="cod_iban" defaultValue={sender.cod_iban} placeholder="puste = konto ustawione w Furgonetce" /></div>
+                <div className="flex items-end"><SubmitButton>Zapisz nadawcę</SubmitButton></div>
+              </form>
+            </section>
+          )}
 
           {company && <ContractSettings company={company} signature={buyerSignature} general={(generalLink?.value as { key?: string; enabled?: boolean }) ?? null} />}
 

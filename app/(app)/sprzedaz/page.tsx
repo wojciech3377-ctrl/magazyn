@@ -5,28 +5,178 @@ import { Notice, PageHeader, Pagination, Pill } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
 import { pullOrdersNow } from "./actions";
 import { SwapForm } from "./SwapForm";
+import { OrderStatusPill, SALE_SELECT, SaleContract, UnitCell, type SaleUnit } from "./SaleBits";
+import { classifyShipment, ORDER_STATUS, paymentLabel, type Fulfillment, type OrderStatus } from "@/lib/orders/status";
+import type { LineItem } from "@/lib/sync/shop-orders";
 
 const PER_PAGE = 100;
 
+const ORDER_TABS: { key: string; label: string }[] = [
+  { key: "", label: "Wszystkie" },
+  { key: "new", label: ORDER_STATUS.new },
+  { key: "shipped", label: ORDER_STATUS.shipped },
+  { key: "delivered", label: ORDER_STATUS.delivered },
+  { key: "problem", label: ORDER_STATUS.problem },
+  { key: "cancelled", label: ORDER_STATUS.cancelled },
+];
+
 export default async function SprzedazPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const sp = await searchParams;
-  const { supabase, profile } = await requireProfile();
   const page = Math.max(1, Number(sp.strona ?? 1));
   if (sp.widok === "stacjonarna") return <PosList page={page} />;
-  const status = sp.status ?? "";
+  if (sp.widok === "linie") return <SaleLines sp={sp} page={page} />;
+  const { supabase, profile } = await requireProfile();
+  const tab = ORDER_TABS.some((t) => t.key === sp.status) ? sp.status ?? "" : "";
 
   let query = supabase
+    .from("orders")
+    .select("id, name, ordered_at, customer_name, shipping_method, pickup_point, financial_status, cod, total, outstanding, currency, status, status_detail, line_items, fulfillments, store:stores(name)", { count: "exact" })
+    .order("ordered_at", { ascending: false })
+    .range((page - 1) * PER_PAGE, page * PER_PAGE - 1);
+  if (tab) query = query.eq("status", tab);
+  const q = (sp.q ?? "").replace(/[%,()#*]/g, "").trim();
+  if (q) query = query.or(`number.ilike.%${q}%,customer_name.ilike.%${q}%,email.ilike.%${q}%`);
+
+  const [{ data: orders, count }, counts, { count: problems }, { data: logs }] = await Promise.all([
+    query,
+    Promise.all(ORDER_TABS.map((t) => {
+      let c = supabase.from("orders").select("id", { count: "exact", head: true });
+      if (t.key) c = c.eq("status", t.key);
+      return c;
+    })),
+    supabase.from("sales").select("id", { count: "exact", head: true }).eq("status", "no_unit"),
+    supabase.from("sync_log").select("job, ok, message, created_at").in("job", ["base-orders", "shopify-orders", "furgonetka"]).order("created_at", { ascending: false }).limit(12),
+  ]);
+  const lastOf = (job: string) => (logs ?? []).find((l) => l.job === job);
+  const lastShop = lastOf("shopify-orders");
+  const lastBase = lastOf("base-orders");
+  const lastShip = lastOf("furgonetka");
+
+  const ids = (orders ?? []).map((o) => o.id);
+  const [{ data: sales }, { data: shipments }] = ids.length
+    ? await Promise.all([
+        supabase.from("sales").select("order_id, status, unit:units(id, code)").in("order_id", ids),
+        supabase.from("shipments").select("order_id, service, tracking_number, tracking_url, state, state_description").in("order_id", ids).order("created_at", { ascending: false }),
+      ])
+    : [{ data: [] }, { data: [] }];
+  const salesBy = new Map<string, { status: string; unit: { id: string; code: string } | null }[]>();
+  for (const s of sales ?? []) salesBy.set(s.order_id as string, [...(salesBy.get(s.order_id as string) ?? []), s as unknown as { status: string; unit: { id: string; code: string } | null }]);
+  const shipBy = new Map<string, { service: string | null; tracking_number: string | null; tracking_url: string | null; state: string | null; state_description: string | null }>();
+  for (const s of shipments ?? []) if (!shipBy.has(s.order_id as string) && classifyShipment(s) !== null) shipBy.set(s.order_id as string, s);
+
+  return (
+    <>
+      <PageHeader
+        title="Sprzedaż"
+        sub={<>Zamówienia ze sklepów Shopify. Ostatni odczyt: {lastShop ? dateTime(lastShop.created_at) : "jeszcze nie było"}{lastShip ? <> · przesyłki: {dateTime(lastShip.created_at)}</> : null}.</>}
+        actions={profile.role === "admin" ? (
+          <form action={pullOrdersNow}><SubmitButton className="btn-secondary" pendingText="Pobieram…">Pobierz zamówienia teraz</SubmitButton></form>
+        ) : null}
+      />
+      <Tabs active="orders" />
+      {lastShop && !lastShop.ok && <div className="mb-4"><Notice tone="error">Odczyt zamówień z Shopify nie udał się: {lastShop.message}</Notice></div>}
+      {lastBase && !lastBase.ok && <div className="mb-4"><Notice tone="error">Przypisanie sztuk (Base) nie udało się: {lastBase.message}</Notice></div>}
+      {lastShip && !lastShip.ok && <div className="mb-4"><Notice tone="error">Odczyt przesyłek z Furgonetki nie udał się: {lastShip.message}</Notice></div>}
+      {!!problems && <div className="mb-4"><Notice tone="error">{problems} {problems === 1 ? "linia zamówienia nie ma" : "linii zamówień nie ma"} sztuki na stanie. <Link className="underline" href="/sprzedaz?widok=linie&status=no_unit">Pokaż</Link> i przypisz sztukę skanem albo wygeneruj umowę.</Notice></div>}
+
+      <nav className="mb-4 flex flex-wrap gap-1 border-b border-line text-sm" aria-label="Status zamówień">
+        {ORDER_TABS.map((t, i) => (
+          <Link
+            key={t.key}
+            href={`/sprzedaz${t.key ? `?status=${t.key}` : ""}`}
+            className={`-mb-px border-b-2 px-3 py-2 ${tab === t.key ? "border-accent font-medium text-ink" : "border-transparent text-muted hover:text-ink"} ${t.key === "problem" && (counts[i].count ?? 0) > 0 ? "text-bad" : ""}`}
+          >
+            {t.label} <span className={`ml-1 rounded px-1.5 py-0.5 text-xs tabular-nums ${t.key === "problem" && (counts[i].count ?? 0) > 0 ? "bg-bad text-white" : "bg-panel"}`}>{counts[i].count ?? 0}</span>
+          </Link>
+        ))}
+      </nav>
+
+      <form className="mb-4 flex flex-wrap gap-2" method="get">
+        {tab && <input type="hidden" name="status" value={tab} />}
+        <input className="input w-72" name="q" defaultValue={sp.q} placeholder="Numer zamówienia, klient albo e-mail" />
+        <button className="btn">Szukaj</button>
+      </form>
+
+      <div className="card overflow-x-auto">
+        <table className="table">
+          <thead><tr><th>Data</th><th>Zamówienie</th><th>Produkty</th><th>Wysyłka</th><th>Płatność</th><th>Status</th><th /></tr></thead>
+          <tbody>
+            {!orders?.length && (
+              <tr><td colSpan={7} className="py-10 text-center text-muted">{tab || q ? "Brak zamówień." : "Zamówienia pojawią się po pierwszym odczycie ze Shopify (co 5 minut albo przyciskiem „Pobierz zamówienia teraz”)."}</td></tr>
+            )}
+            {orders?.map((o) => {
+              const lines = ((o.line_items ?? []) as LineItem[]).map((l, i) => ({ ...l, i })).filter((l) => !l.service);
+              const pay = paymentLabel(o);
+              const oSales = salesBy.get(o.id) ?? [];
+              const ship = shipBy.get(o.id);
+              const shopTracking = ((o.fulfillments ?? []) as Fulfillment[]).flatMap((f) => f.trackingInfo).find((t) => t.number);
+              const tracking = ship?.tracking_number ? { number: ship.tracking_number, url: ship.tracking_url } : shopTracking ? { number: shopTracking.number!, url: shopTracking.url } : null;
+              const status = o.status as OrderStatus;
+              return (
+                <tr key={o.id} className={status === "problem" ? "bg-rose-50/60" : ""}>
+                  <td className="whitespace-nowrap text-muted">{dateTime(o.ordered_at)}</td>
+                  <td className="whitespace-nowrap">
+                    <Link className="font-medium text-accent hover:underline" href={`/sprzedaz/${o.id}`}>{o.name}</Link>
+                    <span className="block text-xs text-muted">{(o.store as unknown as { name: string } | null)?.name ?? ""}</span>
+                    {o.customer_name && <span className="block text-xs">{o.customer_name}</span>}
+                  </td>
+                  <td className="min-w-64 max-w-96">
+                    <ul className="space-y-0.5 text-sm">
+                      {lines.map((l) => (
+                        <li key={l.id} className="flex items-baseline gap-2">
+                          <span className="line-clamp-1">{l.title} · <b>{l.variant_title ?? "–"}</b>{l.quantity > 1 ? ` ×${l.quantity}` : ""}</span>
+                          <a className="shrink-0 text-xs text-accent hover:underline" href={`/api/wtb?zamowienie=${o.id}&linia=${l.i}`} target="_blank" rel="noreferrer" title="Grafika SNEAKERS DEPOT WTB">WTB</a>
+                        </li>
+                      ))}
+                    </ul>
+                    <div className="mt-0.5 flex flex-wrap gap-1 font-mono text-xs">
+                      {oSales.map((s, i) => s.unit
+                        ? <Link key={i} className="text-accent hover:underline" href={`/magazyn/${s.unit.id}`}>{s.unit.code}</Link>
+                        : s.status === "no_unit" ? <Pill key={i} tone="red">brak sztuki</Pill> : null)}
+                    </div>
+                  </td>
+                  <td className="text-sm">
+                    <span className="line-clamp-2">{o.shipping_method ?? "–"}</span>
+                    {o.pickup_point && <span className="block font-mono text-xs text-muted">{o.pickup_point}</span>}
+                    {tracking && (tracking.url
+                      ? <a className="block font-mono text-xs text-accent hover:underline" href={tracking.url} target="_blank" rel="noreferrer">{tracking.number}</a>
+                      : <span className="block font-mono text-xs">{tracking.number}</span>)}
+                  </td>
+                  <td className="whitespace-nowrap">
+                    <Pill tone={pay.tone}>{pay.text}</Pill>
+                    <span className="block text-sm tabular-nums">{o.currency && o.currency !== "PLN" ? `${Number(o.total).toFixed(2)} ${o.currency}` : money(o.total)}</span>
+                  </td>
+                  <td className="max-w-56">
+                    <OrderStatusPill status={status} />
+                    {o.status_detail && <span className={`mt-0.5 block text-xs ${status === "problem" ? "font-medium text-bad" : "text-muted"}`}>{o.status_detail}</span>}
+                  </td>
+                  <td>{status === "new" && <Link className="btn-secondary whitespace-nowrap px-2.5 py-1 text-xs" href={`/sprzedaz/${o.id}#etykieta`}>Utwórz etykietę</Link>}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={{ q: sp.q, status: tab || undefined }} />
+    </>
+  );
+}
+
+/** Linie sprzedaży z Base: przypisanie sztuk, umowy, zamiana sztuki przy pakowaniu. */
+async function SaleLines({ sp, page }: { sp: Record<string, string | undefined>; page: number }) {
+  const { supabase } = await requireProfile();
+  const status = sp.status ?? "";
+  let query = supabase
     .from("sales")
-    .select("id, order_ref, product_name, status, sold_at, store:stores(name), unit:units(id, code, identifier, owner_type, status, consignor:consignors(name), contract:contracts(id, counterparty, status, template)), variant:variants(option, product:products(title))", { count: "exact" })
+    .select(SALE_SELECT, { count: "exact" })
     .order("sold_at", { ascending: false })
     .range((page - 1) * PER_PAGE, page * PER_PAGE - 1);
   if (status) query = query.eq("status", status);
   else query = query.neq("status", "unmatched");
   if (sp.q) query = query.ilike("order_ref", `%${sp.q.replace(/[%,()]/g, "")}%`);
 
-  const [{ data: sales, count }, { count: problems }, { data: lastSync }] = await Promise.all([
+  const [{ data: sales, count }, { data: lastSync }] = await Promise.all([
     query,
-    supabase.from("sales").select("id", { count: "exact", head: true }).eq("status", "no_unit"),
     supabase.from("sync_log").select("ok, message, created_at").eq("job", "base-orders").order("created_at", { ascending: false }).limit(1).maybeSingle(),
   ]);
   const saleIds = (sales ?? []).map((x) => x.id);
@@ -37,18 +187,10 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
 
   return (
     <>
-      <PageHeader
-        title="Sprzedaż"
-        sub={<>Zamówienia z Base. Aplikacja bierze najpierw Twoje sztuki, potem komis, zawsze od najstarszej. Ostatni odczyt: {lastSync ? `${dateTime(lastSync.created_at)}${lastSync.ok ? "" : " (błąd)"}` : "jeszcze nie było"}.</>}
-        actions={profile.role === "admin" ? (
-          <form action={pullOrdersNow}><SubmitButton className="btn-secondary" pendingText="Pobieram…">Pobierz zamówienia teraz</SubmitButton></form>
-        ) : null}
-      />
-      <Tabs active="base" />
-      {lastSync && !lastSync.ok && <div className="mb-4"><Notice tone="error">Ostatni odczyt zamówień nie udał się: {lastSync.message}</Notice></div>}
-      {!!problems && <div className="mb-4"><Notice tone="error">{problems} {problems === 1 ? "linia zamówienia nie ma" : "linii zamówień nie ma"} sztuki na stanie. <Link className="underline" href="/sprzedaz?status=no_unit">Pokaż</Link> i przypisz sztukę skanem.</Notice></div>}
-
+      <PageHeader title="Sprzedaż" sub={<>Linie zamówień z Base: aplikacja bierze najpierw Twoje sztuki, potem komis, zawsze od najstarszej. Ostatni odczyt: {lastSync ? `${dateTime(lastSync.created_at)}${lastSync.ok ? "" : " (błąd)"}` : "jeszcze nie było"}.</>} />
+      <Tabs active="lines" />
       <form className="mb-4 flex flex-wrap gap-2" method="get">
+        <input type="hidden" name="widok" value="linie" />
         <input className="input w-56" name="q" defaultValue={sp.q} placeholder="Numer zamówienia" />
         <select className="input w-64" name="status" defaultValue={status}>
           <option value="">Wszystkie (bez niepowiązanych)</option>
@@ -59,53 +201,41 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
 
       <div className="card overflow-x-auto">
         <table className="table">
-          <thead><tr><th>Data</th><th>Zamówienie</th><th>Produkt</th><th>Sztuka</th><th>Status</th><th>Umowa</th><th>Zmień sztukę przy pakowaniu</th></tr></thead>
+          <thead><tr><th>Data</th><th>Zamówienie</th><th>Produkt</th><th>Sztuka</th><th>Status</th><th>Umowa</th><th>Zmień sztukę przy pakowaniu</th><th /></tr></thead>
           <tbody>
-            {!sales?.length && <tr><td colSpan={7} className="py-10 text-center text-muted">Brak sprzedaży.</td></tr>}
+            {!sales?.length && <tr><td colSpan={8} className="py-10 text-center text-muted">Brak sprzedaży.</td></tr>}
             {sales?.map((s) => {
-              const unit = s.unit as unknown as { id: string; code: string; identifier: string | null; owner_type: string; status: string; consignor: { name: string } | null; contract: { id: string; counterparty: string; status: string; template: string | null } | null } | null;
-              const pending = pendingBySale.get(s.id);
               const variant = s.variant as unknown as { option: string; product: { title: string } } | null;
               return (
                 <tr key={s.id}>
                   <td className="whitespace-nowrap text-muted">{dateTime(s.sold_at)}</td>
-                  <td className="whitespace-nowrap font-medium">{s.order_ref}<span className="block text-xs text-muted">{(s.store as unknown as { name: string } | null)?.name ?? ""}</span></td>
+                  <td className="whitespace-nowrap font-medium">
+                    {s.order_id ? <Link className="text-accent hover:underline" href={`/sprzedaz/${s.order_id}`}>{s.order_ref}</Link> : s.order_ref}
+                    <span className="block text-xs text-muted">{(s.store as unknown as { name: string } | null)?.name ?? ""}</span>
+                  </td>
                   <td>{variant ? <>{variant.product.title} · <b>{variant.option}</b></> : <span className="text-muted">{s.product_name}</span>}</td>
-                  <td className="whitespace-nowrap font-mono text-xs">
-                    {unit ? <Link className="text-accent hover:underline" href={`/magazyn/${unit.id}`}>{unit.code}</Link> : "–"}
-                    {unit?.identifier && <span className="block text-muted">{unit.identifier}</span>}
-                    {unit?.owner_type === "consignment" && <span className="block"><Pill tone="blue">komis · {unit.consignor?.name}</Pill></span>}
-                  </td>
+                  <td className="whitespace-nowrap"><UnitCell unit={s.unit as unknown as SaleUnit} /></td>
                   <td><Pill tone={s.status === "assigned" ? "green" : s.status === "cancelled" ? "slate" : "red"}>{SALE_STATUS[s.status]}</Pill></td>
-                  <td className="whitespace-nowrap">
-                    {unit?.contract ? (
-                      <Link className="text-accent hover:underline" href={`/umowy/${unit.contract.id}`}>{unit.contract.status === "sent" ? "czeka na podpis" : unit.contract.status === "signed" && unit.contract.template ? "do zatwierdzenia" : unit.contract.counterparty}</Link>
-                    ) : pending ? (
-                      <Link className="text-accent hover:underline" href={`/umowy/${pending.id}`}>{pending.status === "sent" ? "czeka na podpis" : pending.status === "signed" ? "do zatwierdzenia" : pending.status === "rejected" ? "odrzucona" : "zatwierdzona"}</Link>
-                    ) : s.status === "no_unit" && s.variant ? (
-                      <Link className="btn-secondary px-2.5 py-1 text-xs" href={`/umowy/z-szablonu?sprzedaz=${s.id}`}>Generuj umowę</Link>
-                    ) : unit ? (
-                      <Link className="btn-secondary px-2.5 py-1 text-xs" href={`/umowy/z-szablonu?ids=${unit.id}`}>Dodaj umowę</Link>
-                    ) : null}
-                    {unit?.status === "in_transit" && <span className="block text-xs text-warn">towar w drodze</span>}
-                  </td>
+                  <td className="whitespace-nowrap"><SaleContract saleId={s.id} status={s.status} hasVariant={!!s.variant_id} unit={s.unit as unknown as SaleUnit} pending={pendingBySale.get(s.id)} /></td>
                   <td>{s.status !== "cancelled" && s.status !== "unmatched" && <SwapForm saleId={s.id} />}</td>
+                  <td>{s.variant_id && <a className="text-xs text-accent hover:underline" href={`/api/wtb?sprzedaz=${s.id}`} target="_blank" rel="noreferrer">WTB</a>}</td>
                 </tr>
               );
             })}
           </tbody>
         </table>
       </div>
-      <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={{ q: sp.q, status: sp.status }} />
+      <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={{ widok: "linie", q: sp.q, status: sp.status }} />
     </>
   );
 }
 
-function Tabs({ active }: { active: "base" | "pos" }) {
+function Tabs({ active }: { active: "orders" | "lines" | "pos" }) {
   const cls = (on: boolean) => `rounded-md px-3 py-1.5 ${on ? "bg-ink text-white" : "text-muted hover:bg-panel"}`;
   return (
-    <div className="mb-4 flex gap-1 text-sm">
-      <Link href="/sprzedaz" className={cls(active === "base")}>Zamówienia z Base</Link>
+    <div className="mb-4 flex flex-wrap gap-1 text-sm">
+      <Link href="/sprzedaz" className={cls(active === "orders")}>Zamówienia</Link>
+      <Link href="/sprzedaz?widok=linie" className={cls(active === "lines")}>Linie i sztuki</Link>
       <Link href="/sprzedaz?widok=stacjonarna" className={cls(active === "pos")}>Sprzedaż stacjonarna</Link>
     </div>
   );
