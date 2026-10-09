@@ -50,11 +50,13 @@ export function isPersonalPickup(method: string | null | undefined) {
 
 /** Etap zamówienia z anulowania, przesyłek Furgonetki i realizacji w Shopify. */
 export function computeOrderStatus(
-  o: { cancelled_at: string | null; fulfillments: Fulfillment[]; shipping_method: string | null; financial_status?: string | null },
+  o: { cancelled_at: string | null; closed_at?: string | null; fulfillments: Fulfillment[]; shipping_method: string | null; financial_status?: string | null },
   shipments: ShipmentLike[],
 ): { status: OrderStatus; detail: string | null } {
   if (o.cancelled_at) return { status: "cancelled", detail: null };
   if ((o.financial_status ?? "").toUpperCase() === "REFUNDED") return { status: "returned", detail: "pieniądze zwrócone" };
+  // Zarchiwizowane w Shopify = zamówienie zakończone.
+  if (o.closed_at) return { status: "delivered", detail: "zarchiwizowane w Shopify" };
 
   const active = shipments
     .map((s) => ({ s, kind: classifyShipment(s) }))
@@ -67,7 +69,8 @@ export function computeOrderStatus(
     return { status: "shipped", detail: active.find((x) => x.kind === "shipped")?.s.state_description ?? null };
   }
 
-  const done = (o.fulfillments ?? []).filter((f) => !/cancel|error|failure/i.test(f.status));
+  // „Gotowe do odbioru” (odbiór osobisty) nie liczy się jako wysłane – zamówienie czeka, aż klient je odbierze.
+  const done = (o.fulfillments ?? []).filter((f) => !/cancel|error|failure/i.test(f.status) && (f.displayStatus ?? "").toUpperCase() !== "READY_FOR_PICKUP");
   if (!done.length) return { status: "new", detail: null };
   const shown = done.map((f) => (f.displayStatus ?? "").toUpperCase());
   if (shown.some((d) => ["FAILURE", "ATTEMPTED_DELIVERY", "NOT_DELIVERED"].includes(d))) return { status: "problem", detail: "Shopify: problem z doręczeniem" };

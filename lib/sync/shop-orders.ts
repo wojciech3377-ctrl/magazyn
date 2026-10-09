@@ -50,6 +50,7 @@ function toRow(storeId: string, o: ShopifyOrder, ex: Exclusions) {
       ordered_at: o.createdAt,
       shop_updated_at: o.updatedAt,
       cancelled_at: o.cancelledAt,
+      closed_at: o.closedAt,
       customer_name: addr?.name ?? o.billingAddress?.name ?? null,
       email: o.email,
       phone: addr?.phone ?? o.phone,
@@ -128,13 +129,13 @@ export async function refreshOrderStatus(db: SupabaseClient, orderIds: string[])
   for (let i = 0; i < orderIds.length; i += 200) {
     const ids = orderIds.slice(i, i + 200);
     const [{ data: orders }, { data: ships }] = await Promise.all([
-      db.from("orders").select("id, status, status_detail, cancelled_at, fulfillments, shipping_method, financial_status").in("id", ids),
+      db.from("orders").select("id, status, status_detail, cancelled_at, closed_at, fulfillments, shipping_method, financial_status").in("id", ids),
       db.from("shipments").select("order_id, state, state_description, state_at, tracking_number").in("order_id", ids),
     ]);
     const byOrder = new Map<string, ShipmentLike[]>();
     for (const s of ships ?? []) byOrder.set(s.order_id as string, [...(byOrder.get(s.order_id as string) ?? []), s as ShipmentLike]);
     for (const o of orders ?? []) {
-      const next = computeOrderStatus(o as { cancelled_at: string | null; fulfillments: Fulfillment[]; shipping_method: string | null; financial_status: string | null }, byOrder.get(o.id) ?? []);
+      const next = computeOrderStatus(o as { cancelled_at: string | null; closed_at: string | null; fulfillments: Fulfillment[]; shipping_method: string | null; financial_status: string | null }, byOrder.get(o.id) ?? []);
       if (next.status !== o.status || next.detail !== o.status_detail) {
         await db.from("orders").update({
           status: next.status,

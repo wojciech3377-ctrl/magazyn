@@ -153,6 +153,7 @@ export type ShopifyOrder = {
   createdAt: string;
   updatedAt: string;
   cancelledAt: string | null;
+  closedAt: string | null;
   displayFinancialStatus: string | null;
   displayFulfillmentStatus: string | null;
   paymentGatewayNames: string[];
@@ -181,7 +182,7 @@ export type ShopifyOrder = {
 };
 
 const ORDER_FIELDS = `
-  id legacyResourceId name createdAt updatedAt cancelledAt
+  id legacyResourceId name createdAt updatedAt cancelledAt closedAt
   displayFinancialStatus displayFulfillmentStatus paymentGatewayNames
   email phone note
   customAttributes { key value }

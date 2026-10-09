@@ -6,6 +6,7 @@ import { SubmitButton } from "@/components/SubmitButton";
 import { pullOrdersNow } from "./actions";
 import { SwapForm } from "./SwapForm";
 import { WtbButton } from "@/components/WtbButton";
+import { SelectAllNamed } from "@/components/SelectAll";
 import { OrderStatusPill, SALE_SELECT, SaleContract, UnitCell, type SaleUnit } from "./SaleBits";
 import { classifyShipment, ORDER_STATUS, paymentLabel, type Fulfillment, type OrderStatus } from "@/lib/orders/status";
 import type { LineItem } from "@/lib/sync/shop-orders";
@@ -57,12 +58,18 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
   const ids = (orders ?? []).map((o) => o.id);
   const [{ data: sales }, { data: shipments }] = ids.length
     ? await Promise.all([
-        supabase.from("sales").select("order_id, status, unit:units(id, code)").in("order_id", ids),
+        supabase.from("sales").select("id, order_id, status, variant_id, unit:units(id, code, contract_id)").in("order_id", ids),
         supabase.from("shipments").select("order_id, service, tracking_number, tracking_url, state, state_description").in("order_id", ids).order("created_at", { ascending: false }),
       ])
     : [{ data: [] }, { data: [] }];
-  const salesBy = new Map<string, { status: string; unit: { id: string; code: string } | null }[]>();
-  for (const s of sales ?? []) salesBy.set(s.order_id as string, [...(salesBy.get(s.order_id as string) ?? []), s as unknown as { status: string; unit: { id: string; code: string } | null }]);
+  type ListSale = { id: string; status: string; variant_id: string | null; unit: { id: string; code: string; contract_id: string | null } | null };
+  const salesBy = new Map<string, ListSale[]>();
+  for (const s of sales ?? []) salesBy.set(s.order_id as string, [...(salesBy.get(s.order_id as string) ?? []), s as unknown as ListSale]);
+  const listSaleIds = (sales ?? []).map((s) => s.id as string);
+  const { data: saleContracts } = listSaleIds.length
+    ? await supabase.from("contracts").select("sale_id").in("sale_id", listSaleIds).not("status", "in", "(cancelled,rejected)")
+    : { data: [] };
+  const saleHasContract = new Set((saleContracts ?? []).map((c) => c.sale_id as string));
   const shipBy = new Map<string, { service: string | null; tracking_number: string | null; tracking_url: string | null; state: string | null; state_description: string | null }>();
   for (const s of shipments ?? []) if (!shipBy.has(s.order_id as string) && classifyShipment(s) !== null) shipBy.set(s.order_id as string, s);
 
@@ -99,12 +106,17 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
         <button className="btn">Szukaj</button>
       </form>
 
+      {/* Zaznaczone zamówienia → paczka umów (ZIP). Pola wyboru są w wierszach (atrybut form). */}
+      <form id="umowy-paczka" action="/api/umowy/paczka" method="get" className="mb-2 flex flex-wrap items-center gap-3 text-sm">
+        <label className="flex items-center gap-2"><SelectAllNamed name="zamowienia" /> zaznacz wszystkie</label>
+        <button className="btn-secondary px-3 py-1.5 text-sm">Pobierz umowy zaznaczonych (ZIP)</button>
+      </form>
       <div className="card overflow-x-auto">
         <table className="table">
-          <thead><tr><th>Data</th><th>Zamówienie</th><th>Produkty</th><th>Wysyłka</th><th>Płatność</th><th>Status</th><th /></tr></thead>
+          <thead><tr><th className="w-8" /><th>Data</th><th>Zamówienie</th><th>Produkty</th><th>Wysyłka</th><th>Płatność</th><th>Status</th><th /></tr></thead>
           <tbody>
             {!orders?.length && (
-              <tr><td colSpan={7} className="py-10 text-center text-muted">{tab || q ? "Brak zamówień." : "Zamówienia pojawią się po pierwszym odczycie ze Shopify (co 5 minut albo przyciskiem „Pobierz zamówienia teraz”)."}</td></tr>
+              <tr><td colSpan={8} className="py-10 text-center text-muted">{tab || q ? "Brak zamówień." : "Zamówienia pojawią się po pierwszym odczycie ze Shopify (co 5 minut albo przyciskiem „Pobierz zamówienia teraz”)."}</td></tr>
             )}
             {orders?.map((o) => {
               const lines = ((o.line_items ?? []) as LineItem[]).map((l, i) => ({ ...l, i })).filter((l) => !l.service);
@@ -116,6 +128,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
               const status = o.status as OrderStatus;
               return (
                 <tr key={o.id} className={`relative cursor-pointer transition-colors ${status === "problem" ? "bg-rose-50/60 hover:bg-rose-100/70" : "hover:bg-sky-50"}`}>
+                  <td><input type="checkbox" name="zamowienia" value={o.id} form="umowy-paczka" className="relative z-10 h-4 w-4" aria-label={`Zaznacz ${o.name}`} /></td>
                   <td className="whitespace-nowrap text-muted">{dateTime(o.ordered_at)}</td>
                   <td className="whitespace-nowrap">
                     {/* Cały wiersz prowadzi do zamówienia (link rozciągnięty na wiersz); pozostałe linki są nad nim. */}
@@ -153,7 +166,12 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
                     <OrderStatusPill status={status} />
                     {o.status_detail && <span className={`mt-0.5 block text-xs ${status === "problem" ? "font-medium text-bad" : "text-muted"}`}>{o.status_detail}</span>}
                   </td>
-                  <td>{status === "new" && <Link className="btn-secondary relative z-10 whitespace-nowrap px-2.5 py-1 text-xs" href={`/sprzedaz/${o.id}#etykieta`}>Utwórz etykietę</Link>}</td>
+                  <td>
+                    <div className="flex flex-col items-start gap-1.5">
+                      <ContractAction sales={oSales} saleHasContract={saleHasContract} />
+                      {status === "new" && <Link className="btn-secondary relative z-10 whitespace-nowrap px-2.5 py-1 text-xs" href={`/sprzedaz/${o.id}#etykieta`}>Utwórz etykietę</Link>}
+                    </div>
+                  </td>
                 </tr>
               );
             })}
@@ -279,4 +297,23 @@ async function PosList({ page }: { page: number }) {
       <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={{ widok: "stacjonarna" }} />
     </>
   );
+}
+
+/**
+ * „Dołącz umowę” dla sprzedanych sztuk bez umowy (także gdy jedna z dwóch ma już umowę);
+ * „Generuj umowę” dla linii bez sztuki na stanie. Nic, gdy wszystko ma umowy.
+ */
+function ContractAction({ sales, saleHasContract }: {
+  sales: { id: string; status: string; variant_id: string | null; unit: { id: string; contract_id: string | null } | null }[];
+  saleHasContract: Set<string>;
+}) {
+  const live = sales.filter((s) => s.status !== "cancelled");
+  const unitsWithout = live.filter((s) => s.unit && !s.unit.contract_id && !saleHasContract.has(s.id)).map((s) => s.unit!.id);
+  if (unitsWithout.length) {
+    return <Link className="btn-secondary relative z-10 whitespace-nowrap px-2.5 py-1 text-xs" href={`/umowy/z-szablonu?ids=${unitsWithout.join(",")}`}>Dołącz umowę{unitsWithout.length > 1 ? ` (${unitsWithout.length})` : ""}</Link>;
+  }
+  const noUnit = live.find((s) => s.status === "no_unit" && s.variant_id && !saleHasContract.has(s.id));
+  if (noUnit) return <Link className="btn-secondary relative z-10 whitespace-nowrap px-2.5 py-1 text-xs" href={`/umowy/z-szablonu?sprzedaz=${noUnit.id}`}>Generuj umowę</Link>;
+  const has = live.some((s) => s.unit?.contract_id || saleHasContract.has(s.id));
+  return has ? <span className="whitespace-nowrap text-xs text-ok">umowa ✓</span> : null;
 }
