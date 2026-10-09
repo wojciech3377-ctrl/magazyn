@@ -4,7 +4,7 @@ import { requireProfile } from "@/lib/auth";
 import { CONTRACT_TYPE, dateOnly, money } from "@/lib/labels";
 import { Field, Notice, PageHeader, StatusBadge } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
-import { acceptContract, attachUnits, cancelContract, deleteContract, detachUnit, markPaid, rejectContract, replaceFile, retryFinalize, sendSigningEmail } from "../actions";
+import { acceptContract, attachUnits, cancelContract, deleteContract, detachUnit, markPaid, rejectContract, replaceFile, retryFinalize, sendSigningEmail, updateContractMeta } from "../actions";
 import { appUrl } from "@/lib/app-url";
 import { mailConfigured } from "@/lib/mail";
 import { contractTotal, formatMoney } from "@/lib/contracts/purchase";
@@ -49,6 +49,23 @@ export default async function ContractPage({ params, searchParams }: { params: P
       {c.template && <TemplateSection c={c} canSeePrices={profile.can_see_prices} />}
       <div className="grid gap-5 lg:grid-cols-3">
         <div className="min-w-0 space-y-5 lg:col-span-2">
+          <form action={updateContractMeta} className="card flex flex-wrap items-end gap-3 p-4">
+            <input type="hidden" name="id" value={c.id} />
+            <div>
+              <label className="label" htmlFor="doc_number">Numer umowy do JPK</label>
+              <input id="doc_number" className="input w-56" name="doc_number" defaultValue={c.doc_number ?? ""} placeholder={c.template && c.number ? String(c.number) : "np. NR00512"} />
+            </div>
+            {!c.template && (
+              <div>
+                <label className="label" htmlFor="currency">Waluta</label>
+                <select id="currency" className="input w-28" name="currency" defaultValue={c.currency ?? "PLN"}>
+                  <option value="PLN">PLN</option>
+                  <option value="EUR">EUR</option>
+                </select>
+              </div>
+            )}
+            <SubmitButton className="btn-secondary">Zapisz</SubmitButton>
+          </form>
           {!c.template && <section className="card p-4">
             <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
               <Field label="Typ">{CONTRACT_TYPE[c.type]}</Field>

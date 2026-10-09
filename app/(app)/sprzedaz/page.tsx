@@ -8,6 +8,7 @@ import { SwapForm } from "./SwapForm";
 import { WtbButton } from "@/components/WtbButton";
 import { ReceiptButton } from "@/components/ReceiptButton";
 import { SelectAllNamed } from "@/components/SelectAll";
+import { Invoices, Jpk } from "./Jpk";
 import { OrderStatusPill, SALE_SELECT, SaleContract, UnitCell, type SaleUnit } from "./SaleBits";
 import { classifyShipment, ORDER_STATUS, paymentLabel, type Fulfillment, type OrderStatus } from "@/lib/orders/status";
 import type { LineItem } from "@/lib/sync/shop-orders";
@@ -29,6 +30,15 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
   const page = Math.max(1, Number(sp.strona ?? 1));
   if (sp.widok === "stacjonarna") return <PosList page={page} />;
   if (sp.widok === "linie") return <SaleLines sp={sp} page={page} />;
+  if (sp.widok === "jpk" || sp.widok === "faktury") {
+    return (
+      <>
+        <PageHeader title="Sprzedaż" sub={sp.widok === "jpk" ? "JPK: wszystkie sprzedaże według daty paragonu lub faktury, z danymi zakupu z umowy." : "Faktury sprzedaży i KSeF."} />
+        <Tabs active={sp.widok} />
+        {sp.widok === "jpk" ? <Jpk sp={sp} /> : <Invoices />}
+      </>
+    );
+  }
   const { supabase, profile } = await requireProfile();
   const tab = ORDER_TABS.some((t) => t.key === sp.status) ? sp.status ?? "" : "";
 
@@ -253,13 +263,14 @@ async function SaleLines({ sp, page }: { sp: Record<string, string | undefined>;
   );
 }
 
-function Tabs({ active }: { active: "orders" | "lines" | "pos" }) {
+function Tabs({ active }: { active: "orders" | "lines" | "pos" | "faktury" | "jpk" }) {
   const cls = (on: boolean) => `rounded-md px-3 py-1.5 ${on ? "bg-ink text-white" : "text-muted hover:bg-panel"}`;
   return (
     <div className="mb-4 flex flex-wrap gap-1 text-sm">
       <Link href="/sprzedaz" className={cls(active === "orders")}>Zamówienia</Link>
-      <Link href="/sprzedaz?widok=linie" className={cls(active === "lines")}>Linie i sztuki</Link>
       <Link href="/sprzedaz?widok=stacjonarna" className={cls(active === "pos")}>Sprzedaż stacjonarna</Link>
+      <Link href="/sprzedaz?widok=faktury" className={cls(active === "faktury")}>Faktury</Link>
+      <Link href="/sprzedaz?widok=jpk" className={cls(active === "jpk" || active === "lines")}>JPK</Link>
     </div>
   );
 }

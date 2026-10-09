@@ -1,6 +1,8 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { warsawMidnight } from "@/lib/month";
 import { requireProfile } from "@/lib/auth";
 import { findVariantIds } from "@/lib/queries/units";
 import { adjustBaseStock } from "@/lib/stock";
@@ -154,4 +156,24 @@ export async function retryPosBase(formData: FormData) {
     base_pending: failed.map(({ variantId, locationId, delta }) => ({ variantId, locationId, delta })),
   }).eq("id", id);
   redirect(`/kasa/${id}`);
+}
+
+/** Numer paragonu do sprzedaży stacjonarnej (wpisany ręcznie – do czasu połączenia z drukarką Elzab). */
+export async function savePosReceipt(formData: FormData) {
+  const { supabase } = await requireProfile();
+  const posOrderId = String(formData.get("id"));
+  const number = String(formData.get("number") ?? "").trim().slice(0, 40);
+  const date = String(formData.get("date") ?? "");
+  const back = `/kasa/${posOrderId}`;
+  if (!number) redirect(`${back}?blad=${encodeURIComponent("Wpisz numer paragonu.")}`);
+  // Data i godzina z formularza to czas polski.
+  const m = date.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+  const issued = m ? new Date(warsawMidnight(+m[1], +m[2], +m[3]).getTime() + (+m[4] * 60 + +m[5]) * 60_000) : new Date();
+  const { data: existing } = await supabase.from("receipts").select("id").eq("pos_order_id", posOrderId).eq("source", "manual").maybeSingle();
+  const row = { number, issued_at: issued.toISOString(), pos_order_id: posOrderId, source: "manual" };
+  const { error } = existing
+    ? await supabase.from("receipts").update(row).eq("id", existing.id)
+    : await supabase.from("receipts").insert(row);
+  revalidatePath(back);
+  redirect(`${back}?${error ? "blad" : "ok"}=${encodeURIComponent(error ? error.message : "Paragon zapisany.")}`);
 }

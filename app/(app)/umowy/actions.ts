@@ -40,6 +40,8 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
       consignor_id: type === "consignment" ? String(formData.get("consignor_id") ?? "") || null : null,
       contract_date: String(formData.get("contract_date") ?? "") || null,
       amount: parseAmount(formData.get("amount")),
+      doc_number: String(formData.get("doc_number") ?? "").trim().slice(0, 60) || null,
+      currency: ["PLN", "EUR"].includes(String(formData.get("currency"))) ? String(formData.get("currency")) : null,
       notes: String(formData.get("notes") ?? "").trim() || null,
       file_path: file?.path ?? null,
       file_name: file?.name ?? null,
@@ -226,4 +228,17 @@ export async function markPaid(formData: FormData) {
   revalidatePath("/umowy");
   if (!data?.length) redirect(`${back}${back.includes("?") ? "&" : "?"}blad=${encodeURIComponent("Opłacić można tylko zaakceptowaną umowę.")}`);
   redirect(`${back}${back.includes("?") ? "&" : "?"}ok=${encodeURIComponent(undo ? "Cofnięto oznaczenie zapłaty." : "Umowa opłacona – przeniesiona do Gotowe.")}`);
+}
+
+/** Numer umowy z dokumentu i waluta (do JPK). */
+export async function updateContractMeta(formData: FormData) {
+  const { supabase } = await requireProfile();
+  const id = String(formData.get("id"));
+  const currency = String(formData.get("currency") ?? "");
+  const { error } = await supabase.from("contracts").update({
+    doc_number: String(formData.get("doc_number") ?? "").trim().slice(0, 60) || null,
+    ...(currency ? { currency: ["PLN", "EUR"].includes(currency) ? currency : null } : {}),
+  }).eq("id", id);
+  revalidatePath(`/umowy/${id}`);
+  redirect(`/umowy/${id}?${error ? "blad" : "ok"}=${encodeURIComponent(error ? error.message : "Zapisano.")}`);
 }

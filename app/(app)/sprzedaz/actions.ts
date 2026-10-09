@@ -5,6 +5,7 @@ import { requireAdmin, requireProfile } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { syncBaseOrders } from "@/lib/sync/orders";
 import { syncFurgonetkaShipments, syncShopifyOrders } from "@/lib/sync/shop-orders";
+import { syncBaseReceipts } from "@/lib/sync/receipts";
 import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/furgonetka";
 import { errorMessage } from "@/lib/errors";
 
@@ -27,6 +28,7 @@ export async function pullOrdersNow() {
   const jobs: [string, () => Promise<unknown>][] = [
     ["base-orders", () => syncBaseOrders(db)],
     ["shopify-orders", () => syncShopifyOrders(db)],
+    ["base-receipts", () => syncBaseReceipts(db)],
   ];
   if (furgonetkaConfigured() && (await furgonetkaConnection(db))) jobs.push(["furgonetka", () => syncFurgonetkaShipments(db)]);
   for (const [job, fn] of jobs) {

@@ -88,6 +88,11 @@ async function processOrders(db: SupabaseClient, orders: BaseOrder[], storeBySou
         p_sold_at: new Date((o.date_confirmed ?? o.date_add ?? Date.now() / 1000) * 1000).toISOString(),
       });
       if (error) throw error;
+      // Cena brutto sztuki z Base – potrzebna do JPK.
+      if (p.price_brutto !== undefined && p.price_brutto !== null) {
+        await db.from("sales").update({ price: Number(p.price_brutto) })
+          .eq("base_order_id", o.order_id).eq("base_order_product_id", p.order_product_id).is("price", null);
+      }
       lines++;
     }
   }

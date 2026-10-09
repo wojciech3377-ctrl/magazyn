@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { syncBaseOrders } from "@/lib/sync/orders";
 import { syncFurgonetkaShipments, syncShopifyOrders } from "@/lib/sync/shop-orders";
+import { syncBaseReceipts } from "@/lib/sync/receipts";
 import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/furgonetka";
 import { errorMessage } from "@/lib/errors";
 
@@ -34,10 +35,11 @@ export async function GET(req: NextRequest) {
   const db = createAdminClient();
   const base = await run(db, "base-orders", () => syncBaseOrders(db));
   const shop = await run(db, "shopify-orders", () => syncShopifyOrders(db));
+  const receipts = await run(db, "base-receipts", () => syncBaseReceipts(db));
   const ship = furgonetkaConfigured() && (await furgonetkaConnection(db))
     ? await run(db, "furgonetka", () => syncFurgonetkaShipments(db))
     : { ok: true, result: "niepołączona" };
-  return NextResponse.json({ base, shop, ship }, { status: base.ok && shop.ok && ship.ok ? 200 : 500 });
+  return NextResponse.json({ base, shop, receipts, ship }, { status: base.ok && shop.ok && receipts.ok && ship.ok ? 200 : 500 });
 }
 
 export const POST = GET;

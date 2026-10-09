@@ -126,6 +126,7 @@ export type BaseOrder = {
     sku?: string;
     ean?: string;
     quantity: number;
+    price_brutto?: number;
   }[];
 };
 
@@ -138,4 +139,24 @@ export async function getOrdersConfirmedFrom(fromUnix: number) {
 export async function addReceipt(orderId: number, seriesId?: number) {
   const r = await baseCall<{ receipt_id: number }>("addReceipt", { order_id: orderId, ...(seriesId ? { series_id: seriesId } : {}) });
   return r.receipt_id;
+}
+
+export type BaseReceipt = {
+  receipt_id: number;
+  series_id?: number;
+  receipt_full_nr?: string;
+  receipt_nr?: string | number;
+  order_id: number;
+  date_add: number;
+  currency?: string;
+  products?: { name: string; price_brutto: number; tax_rate: number; quantity: number; sku?: string }[];
+};
+
+/** Paragony wystawione w Base (po 100), od podanego ID albo daty. */
+export async function getReceipts(opts: { idFrom?: number; dateFrom?: number }) {
+  const r = await baseCall<{ receipts?: BaseReceipt[] }>("getReceipts", {
+    ...(opts.idFrom ? { id_from: opts.idFrom } : {}),
+    ...(opts.dateFrom ? { date_from: opts.dateFrom } : {}),
+  });
+  return r.receipts ?? [];
 }
