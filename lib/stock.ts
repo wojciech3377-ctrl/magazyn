@@ -1,6 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getStock, setStock } from "@/lib/integrations/base";
+import { errorMessage } from "@/lib/errors";
 
 export type StockChange = { variantId: string; locationId: string; delta: number };
 
@@ -39,7 +40,7 @@ export async function adjustBaseStock(db: SupabaseClient, changes: StockChange[]
       await setStock(store.base_inventory_id, { [String(link.base_product_id)]: { [loc.base_warehouse_id]: next } });
       results.push({ ...c, ok: true, message: `Base: ${current} → ${next}` });
     } catch (e) {
-      results.push({ ...c, ok: false, message: e instanceof Error ? e.message : String(e) });
+      results.push({ ...c, ok: false, message: errorMessage(e) });
     }
   }
   return results;

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { applyLinks, baseSyncChunk, baseSyncStart, importShopifyPage, shopifyImportFinish, shopifyImportStart, suggestLinks } from "./actions";
+import { errorMessage } from "@/lib/errors";
 
 type Store = { id: string; name: string; shopify_domain: string | null; base_inventory_id: number | null; base_storage_id: string | null };
 
@@ -17,7 +18,7 @@ export function SyncPanel({ stores }: { stores: Store[] }) {
     try {
       await task();
     } catch (e) {
-      say(`Błąd: ${e instanceof Error ? e.message : String(e)}`);
+      say(`Błąd: ${errorMessage(e)}`);
     } finally {
       setBusy(false);
       router.refresh();

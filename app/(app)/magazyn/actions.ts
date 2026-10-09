@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { requireAdmin, requireProfile } from "@/lib/auth";
 import { adjustBaseStock, type StockChange } from "@/lib/stock";
 import { parseAmount } from "@/lib/contracts/upload";
+import { errorMessage } from "@/lib/errors";
 
 /** Statusy, które Base liczy w stanie magazynu. */
 const COUNTED = ["in_stock", "reserved"];
@@ -112,7 +113,7 @@ export async function updateUnit(formData: FormData) {
       patch.purchase_price = parseAmount(formData.get("purchase_price"));
       patch.payout_amount = parseAmount(formData.get("payout_amount"));
     } catch (e) {
-      back(path, e instanceof Error ? e.message : String(e), "error");
+      back(path, errorMessage(e), "error");
     }
   }
   if (ownerType === "consignment" && !patch.consignor_id) back(path, "Wybierz komisanta.", "error");

@@ -4,6 +4,7 @@ import { ordersUpdatedSince, type ShopifyOrder } from "@/lib/integrations/shopif
 import { getPackage, listPackages, type FurgonetkaPackage } from "@/lib/integrations/furgonetka";
 import { computeOrderStatus, detectCod, detectPickupPoint, type Fulfillment, type ShipmentLike } from "@/lib/orders/status";
 import { isExcluded, loadExclusions, type Exclusions } from "@/lib/services";
+import { errorMessage } from "@/lib/errors";
 
 const FIRST_RUN_DAYS = 45;
 
@@ -112,7 +113,7 @@ export async function syncShopifyOrders(db: SupabaseClient, maxPages = 6) {
       await db.from("sync_state").upsert({ key, value: { since }, updated_at: new Date().toISOString() });
       result[s.name as string] = count;
     } catch (e) {
-      result[s.name as string] = `błąd: ${e instanceof Error ? e.message : String(e)}`;
+      result[s.name as string] = `błąd: ${errorMessage(e)}`;
     }
   }
   const { data: linked } = await db.rpc("link_sales_to_orders");

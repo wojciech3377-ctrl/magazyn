@@ -6,9 +6,10 @@ import { getCompany } from "./settings";
 import { contractTotal, formatMoney } from "./purchase";
 import { escapeHtml } from "./png";
 import { mailConfigured, sendMail } from "@/lib/mail";
+import { errorMessage } from "@/lib/errors";
 
 async function logError(db: SupabaseClient, job: string, id: string, e: unknown) {
-  await db.from("sync_log").insert({ job, ok: false, message: `${id}: ${e instanceof Error ? e.message : String(e)}` });
+  await db.from("sync_log").insert({ job, ok: false, message: `${id}: ${errorMessage(e)}` });
 }
 
 /** Sprzedający podpisał – e-mail do sklepu, że umowa czeka na zatwierdzenie (jeśli SMTP jest ustawiony). */
@@ -59,6 +60,6 @@ export async function deliverAcceptedContract(contractId: string): Promise<{ ema
     return { emailed: true };
   } catch (e) {
     await logError(db, "contract-pdf", contractId, e);
-    return { emailed: false, error: e instanceof Error ? e.message : String(e) };
+    return { emailed: false, error: errorMessage(e) };
   }
 }

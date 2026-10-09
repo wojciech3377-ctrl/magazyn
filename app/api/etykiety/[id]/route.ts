@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { requireProfile } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getLabel } from "@/lib/integrations/furgonetka";
+import { errorMessage } from "@/lib/errors";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +22,6 @@ export async function GET(_: NextRequest, { params }: { params: Promise<{ id: st
       },
     });
   } catch (e) {
-    return new Response(e instanceof Error ? e.message : String(e), { status: 502, headers: { "Content-Type": "text/plain; charset=utf-8" } });
+    return new Response(errorMessage(e), { status: 502, headers: { "Content-Type": "text/plain; charset=utf-8" } });
   }
 }

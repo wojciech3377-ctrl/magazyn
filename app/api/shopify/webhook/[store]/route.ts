@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { verifyWebhook } from "@/lib/integrations/shopify";
 import { removeShopifyProduct, syncSingleProduct, type Store } from "@/lib/sync/catalog";
+import { errorMessage } from "@/lib/errors";
 
 export const dynamic = "force-dynamic";
 
@@ -24,7 +25,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ sto
     else await syncSingleProduct(db, store as Store, gid);
     return NextResponse.json({ ok: true });
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
+    const message = errorMessage(e);
     await db.from("sync_log").insert({ job: `shopify-webhook-${code}`, ok: false, message });
     return NextResponse.json({ error: message }, { status: 500 });
   }

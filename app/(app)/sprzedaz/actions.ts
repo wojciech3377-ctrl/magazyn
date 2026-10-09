@@ -6,6 +6,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { syncBaseOrders } from "@/lib/sync/orders";
 import { syncFurgonetkaShipments, syncShopifyOrders } from "@/lib/sync/shop-orders";
 import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/furgonetka";
+import { errorMessage } from "@/lib/errors";
 
 /** Zamiana sztuki przy pakowaniu: skan kodu sztuki, IMEI albo numeru seryjnego. */
 export async function swapUnit(_: unknown, formData: FormData): Promise<{ ok?: string; error?: string }> {
@@ -33,7 +34,7 @@ export async function pullOrdersNow() {
       const result = await fn();
       await db.from("sync_log").insert({ job, ok: true, message: JSON.stringify(result) });
     } catch (e) {
-      await db.from("sync_log").insert({ job, ok: false, message: e instanceof Error ? e.message : String(e) });
+      await db.from("sync_log").insert({ job, ok: false, message: errorMessage(e) });
     }
   }
   revalidatePath("/sprzedaz");

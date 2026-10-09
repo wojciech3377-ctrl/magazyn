@@ -7,6 +7,7 @@ import { requireAdmin } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { registerProductWebhooks } from "@/lib/integrations/shopify";
 import { disconnect } from "@/lib/integrations/furgonetka";
+import { errorMessage } from "@/lib/errors";
 
 function done(msg: string, tone: "ok" | "blad" = "ok"): never {
   revalidatePath("/ustawienia");
@@ -61,7 +62,7 @@ export async function registerWebhooks(formData: FormData) {
     done(`${store.name}: ${r.join(", ")}`);
   } catch (e) {
     unstable_rethrow(e);
-    done(e instanceof Error ? e.message : String(e), "blad");
+    done(errorMessage(e), "blad");
   }
 }
 

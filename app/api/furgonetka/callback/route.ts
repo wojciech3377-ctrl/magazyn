@@ -4,6 +4,7 @@ import { requireProfile } from "@/lib/auth";
 import { appUrl } from "@/lib/app-url";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { exchangeCode } from "@/lib/integrations/furgonetka";
+import { errorMessage } from "@/lib/errors";
 
 export const dynamic = "force-dynamic";
 
@@ -30,7 +31,7 @@ export async function GET(req: NextRequest) {
   try {
     await exchangeCode(createAdminClient(), code, `${base}/api/furgonetka/callback`, profile.id);
   } catch (e) {
-    return back(e instanceof Error ? e.message : String(e), false);
+    return back(errorMessage(e), false);
   }
   return back("Furgonetka połączona.", true);
 }

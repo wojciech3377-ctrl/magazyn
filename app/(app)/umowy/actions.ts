@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireAdmin, requireProfile } from "@/lib/auth";
 import { parseAmount, uploadedFile } from "@/lib/contracts/upload";
+import { errorMessage } from "@/lib/errors";
 
 function codes(text: string) {
   return text.split(/[\s,;]+/).map((s) => s.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "")).filter(Boolean);
@@ -87,7 +88,7 @@ export async function replaceFile(formData: FormData) {
     if (!file) msg = "blad=" + encodeURIComponent("Wybierz plik.");
     else await supabase.from("contracts").update({ file_path: file.path, file_name: file.name }).eq("id", id);
   } catch (e) {
-    msg = "blad=" + encodeURIComponent(e instanceof Error ? e.message : String(e));
+    msg = "blad=" + encodeURIComponent(errorMessage(e));
   }
   revalidatePath(`/umowy/${id}`);
   redirect(`/umowy/${id}?${msg}`);
@@ -128,7 +129,7 @@ export async function sendSigningEmail(formData: FormData) {
       await supabase.from("contracts").update({ seller_email: to }).eq("id", id);
       msg = "ok=" + encodeURIComponent(`Wysłano link na ${to}.`);
     } catch (e) {
-      msg = "blad=" + encodeURIComponent(e instanceof Error ? e.message : String(e));
+      msg = "blad=" + encodeURIComponent(errorMessage(e));
     }
   }
   redirect(`/umowy/${id}?${msg}`);

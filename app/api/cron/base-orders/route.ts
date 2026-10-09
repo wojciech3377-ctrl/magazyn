@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { syncBaseOrders } from "@/lib/sync/orders";
 import { syncFurgonetkaShipments, syncShopifyOrders } from "@/lib/sync/shop-orders";
 import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/furgonetka";
+import { errorMessage } from "@/lib/errors";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -15,7 +16,7 @@ async function run(db: Db, job: string, fn: () => Promise<unknown>) {
     await db.from("sync_log").insert({ job, ok: true, message: JSON.stringify(result) });
     return { ok: true, result };
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
+    const message = errorMessage(e);
     await db.from("sync_log").insert({ job, ok: false, message });
     return { ok: false, error: message };
   }

@@ -12,12 +12,13 @@ import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/f
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getSender } from "@/lib/orders/sender";
 import { appUrl } from "@/lib/app-url";
+import { errorMessage } from "@/lib/errors";
 
 async function safe<T>(fn: () => Promise<T>): Promise<{ data: T | null; error: string | null }> {
   try {
     return { data: await fn(), error: null };
   } catch (e) {
-    return { data: null, error: e instanceof Error ? e.message : String(e) };
+    return { data: null, error: errorMessage(e) };
   }
 }
 

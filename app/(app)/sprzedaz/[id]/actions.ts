@@ -7,6 +7,7 @@ import { accountServices, createPackage, deletePackage, furgonetkaConnection, ge
 import { fulfillWithTracking, getOrder } from "@/lib/integrations/shopify";
 import { getSender, LOCKER_SIZES, SERVICE_LABEL, type ServiceKey } from "@/lib/orders/sender";
 import { refreshOrderStatus, saveShopifyOrders, syncFurgonetkaShipments } from "@/lib/sync/shop-orders";
+import { errorMessage } from "@/lib/errors";
 
 export type LabelState = { error?: string; ok?: string; warning?: string; shipmentId?: string; tracking?: string } | null;
 
@@ -88,7 +89,7 @@ export async function createLabel(_: LabelState, fd: FormData): Promise<LabelSta
   try {
     services = await accountServices(db);
   } catch (e) {
-    return { error: e instanceof Error ? e.message : String(e) };
+    return { error: errorMessage(e) };
   }
   const svc = services.find((s) => s.service === carrier);
   if (!svc) return { error: `Na koncie Furgonetki nie ma usługi ${carrier.toUpperCase()}.` };
@@ -111,7 +112,7 @@ export async function createLabel(_: LabelState, fd: FormData): Promise<LabelSta
     const pkg = await createPackage(db, body);
     packageId = String(pkg.package_id);
   } catch (e) {
-    return { error: e instanceof Error ? e.message : String(e) };
+    return { error: errorMessage(e) };
   }
   const { data: ship, error: insErr } = await db.from("shipments").insert({
     order_id: order.id, provider: "furgonetka", external_id: packageId, service: carrier, reference: order.name,
@@ -124,7 +125,7 @@ export async function createLabel(_: LabelState, fd: FormData): Promise<LabelSta
   } catch (e) {
     await deletePackage(db, packageId).catch(() => {});
     await db.from("shipments").delete().eq("id", ship.id);
-    return { error: e instanceof Error ? e.message : String(e) };
+    return { error: errorMessage(e) };
   }
 
   let tracking: string | null = null;
@@ -154,7 +155,7 @@ export async function createLabel(_: LabelState, fd: FormData): Promise<LabelSta
       const fresh = await getOrder(store.shopify_domain, store.code, order.shopify_order_id);
       if (fresh) await saveShopifyOrders(db, order.store_id, [fresh]);
     } catch (e) {
-      warning = `Etykieta jest, ale Shopify nie przyjął numeru: ${e instanceof Error ? e.message : String(e)}`;
+      warning = `Etykieta jest, ale Shopify nie przyjął numeru: ${errorMessage(e)}`;
     }
   }
   await refreshOrderStatus(db, [order.id]);
