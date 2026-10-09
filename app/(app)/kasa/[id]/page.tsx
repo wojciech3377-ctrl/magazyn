@@ -15,6 +15,7 @@ export default async function PosOrderPage({ params, searchParams }: { params: P
   const { data: o } = await supabase.from("pos_orders").select("*, store:stores(name)").eq("id", id).maybeSingle();
   if (!o) notFound();
   const { data: receipt } = await supabase.from("receipts").select("number, issued_at, source").eq("pos_order_id", id).order("issued_at", { ascending: false }).limit(1).maybeSingle();
+  const { data: invoice } = await supabase.from("invoices").select("id, number").eq("pos_order_id", id).not("status", "in", "(rejected,cancelled)").limit(1).maybeSingle();
   const { data: items } = await supabase
     .from("pos_order_items")
     .select("id, price, status, unit:units(id, code, identifier, variant:variants(option, product:products(title)))")
@@ -25,7 +26,14 @@ export default async function PosOrderPage({ params, searchParams }: { params: P
       <PageHeader
         title={`Sprzedaż ${o.code}`}
         sub={`${(o.store as { name: string }).name} · ${dateTime(o.created_at)} · płatność: ${PAYMENT[o.payment_method] ?? o.payment_method}${o.customer ? ` · ${o.customer}` : ""}`}
-        actions={<Link className="btn" href="/kasa">Nowa sprzedaż</Link>}
+        actions={
+          <>
+            {invoice
+              ? <Link className="btn-secondary" href={`/sprzedaz/faktury/${invoice.id}`}>Faktura {invoice.number}</Link>
+              : <Link className="btn-secondary" href={`/sprzedaz/faktury/nowa?kasa=${o.id}`}>Wystaw fakturę</Link>}
+            <Link className="btn" href="/kasa">Nowa sprzedaż</Link>
+          </>
+        }
       />
       {sp.ok && <div className="mb-4"><Notice tone="ok">{sp.ok}</Notice></div>}
       {sp.blad && <div className="mb-4"><Notice tone="error">{sp.blad}</Notice></div>}

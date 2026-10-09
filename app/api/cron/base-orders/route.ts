@@ -6,6 +6,8 @@ import { syncBaseReceipts } from "@/lib/sync/receipts";
 import { backfillContractNumbers } from "@/lib/contracts/docnumber";
 import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/furgonetka";
 import { errorMessage } from "@/lib/errors";
+import { pollKsef } from "@/lib/invoices/service";
+import { ksefConfigured } from "@/lib/ksef/client";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -43,6 +45,11 @@ export async function GET(req: NextRequest) {
     if (r.checked) await db.from("sync_log").insert({ job: "contract-numbers", ok: true, message: JSON.stringify(r) });
   } catch (e) {
     await db.from("sync_log").insert({ job: "contract-numbers", ok: false, message: errorMessage(e) });
+  }
+  // Statusy faktur w KSeF (tylko gdy jakieś czekają).
+  if (ksefConfigured()) {
+    const { count } = await db.from("invoices").select("id", { count: "exact", head: true }).eq("status", "sending");
+    if (count) await run(db, "ksef", () => pollKsef(db));
   }
   const ship = furgonetkaConfigured() && (await furgonetkaConnection(db))
     ? await run(db, "furgonetka", () => syncFurgonetkaShipments(db))

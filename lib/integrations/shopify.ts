@@ -168,11 +168,12 @@ export type ShopifyOrder = {
     name: string | null; firstName: string | null; lastName: string | null; company: string | null;
     address1: string | null; address2: string | null; city: string | null; zip: string | null; countryCodeV2: string | null; phone: string | null;
   } | null;
-  shippingLine: { title: string; code: string | null; source: string | null; originalPriceSet: { shopMoney: { amount: string } } } | null;
+  shippingLine: { title: string; code: string | null; source: string | null; originalPriceSet: { shopMoney: { amount: string } }; discountedPriceSet?: { shopMoney: { amount: string } } | null } | null;
   lineItems: {
     nodes: {
       id: string; title: string; variantTitle: string | null; sku: string | null; quantity: number;
       image: { url: string } | null; variant: { id: string } | null; originalUnitPriceSet: { shopMoney: { amount: string } };
+      discountedUnitPriceAfterAllDiscountsSet?: { shopMoney: { amount: string } } | null;
     }[];
   };
   fulfillments: {
@@ -190,8 +191,8 @@ const ORDER_FIELDS = `
   totalOutstandingSet { shopMoney { amount } }
   billingAddress { name }
   shippingAddress { name firstName lastName company address1 address2 city zip countryCodeV2 phone }
-  shippingLine { title code source originalPriceSet { shopMoney { amount } } }
-  lineItems(first: 50) { nodes { id title variantTitle sku quantity image { url } variant { id } originalUnitPriceSet { shopMoney { amount } } } }
+  shippingLine { title code source originalPriceSet { shopMoney { amount } } discountedPriceSet { shopMoney { amount } } }
+  lineItems(first: 50) { nodes { id title variantTitle sku quantity image { url } variant { id } originalUnitPriceSet { shopMoney { amount } } discountedUnitPriceAfterAllDiscountsSet { shopMoney { amount } } } }
   fulfillments(first: 10) { id status displayStatus createdAt updatedAt trackingInfo(first: 5) { number company url } }
 `;
 

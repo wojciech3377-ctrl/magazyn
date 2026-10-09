@@ -135,6 +135,7 @@ export async function saveCompany(formData: FormData) {
     nip: String(formData.get("nip") ?? "").replace(/[^0-9]/g, ""),
     email: String(formData.get("email") ?? "").trim(),
     payment_days: Math.max(0, Math.min(60, Number(formData.get("payment_days") ?? 7) || 7)),
+    bank_account: String(formData.get("bank_account") ?? "").replace(/[^0-9A-Za-z]/g, "").slice(0, 34),
   };
   if (!value.name || !value.street || !value.city || value.nip.length !== 10) done("Uzupełnij nazwę, adres i NIP (10 cyfr).", "blad");
   const { error } = await supabase.from("app_settings").upsert({ key: "company", value, updated_at: new Date().toISOString() });

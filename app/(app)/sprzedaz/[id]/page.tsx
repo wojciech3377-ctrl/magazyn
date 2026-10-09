@@ -39,6 +39,7 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
     : { data: [] };
   const pendingBySale = new Map((pendingContracts ?? []).map((c) => [c.sale_id as string, c]));
   const furgonetkaReady = furgonetkaConfigured() && !!(await furgonetkaConnection(createAdminClient()));
+  const { data: invoice } = await supabase.from("invoices").select("id, number").eq("order_id", id).not("status", "in", "(rejected,cancelled)").limit(1).maybeSingle();
 
   const store = order.store as { name: string; code: string; shopify_domain: string | null } | null;
   const addr = order.shipping_address as Address;
@@ -57,6 +58,9 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
         actions={
           <>
             {status !== "cancelled" && status !== "returned" && <ReceiptButton orderId={order.id} receiptId={order.receipt_id} />}
+            {invoice
+              ? <Link className="btn-secondary" href={`/sprzedaz/faktury/${invoice.id}`}>Faktura {invoice.number}</Link>
+              : status !== "cancelled" && <Link className="btn-secondary" href={`/sprzedaz/faktury/nowa?zamowienie=${order.id}`}>Wystaw fakturę</Link>}
             <a className="btn-secondary" href="#etykieta">Utwórz etykietę</a>
             <form action={refreshOrder}><input type="hidden" name="id" value={order.id} /><SubmitButton className="btn-secondary" pendingText="Odświeżam…">Odśwież</SubmitButton></form>
             {shopUrl && <a className="btn-secondary" href={shopUrl} target="_blank" rel="noreferrer">Otwórz w Shopify</a>}

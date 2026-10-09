@@ -4,7 +4,7 @@
  */
 import { countryName, CURRENCIES, formatAccount, type Lang } from "./options";
 
-export type Company = { name: string; street: string; city: string; nip: string; email: string; payment_days?: number };
+export type Company = { name: string; street: string; city: string; nip: string; email: string; payment_days?: number; bank_account?: string };
 export type ContractItem = { title: string; option: string; identifier?: string | null; qty: number; price: number };
 export type PurchaseContract = {
   number: number | string;

@@ -52,3 +52,17 @@ update public.wtb_items set status = 'bought';
 insert into public.wtb_items (title, size, source, order_id, order_line_id) values ('Jordan 4', '42', 'order', '30000000-0000-0000-0000-000000000003', 'gid://shopify/LineItem/1');
 select status, count(*) from public.wtb_items group by status order by status;
 rollback;
+-- Faktury: numeracja FVM/n/rok bez dziur.
+begin;
+select number from public.create_invoice('{"issue_date":"2026-10-09","seller":{},"buyer":{"name":"Jan"},"total_gross":100,"net_23":0,"vat_23":0,"margin_total":100}', '[{"name":"Buty","unit_price_gross":100,"total_gross":100,"vat":"margin"}]');
+select number from public.create_invoice('{"issue_date":"2026-10-09","seller":{},"buyer":{"name":"Jan"},"total_gross":123,"net_23":100,"vat_23":23,"margin_total":0}', '[{"name":"Buty","unit_price_gross":123,"total_gross":123,"vat":"23"}]');
+do $$ begin
+  perform public.create_invoice('{"issue_date":"2026-10-09","seller":{},"buyer":{}}', '[]');
+  raise exception 'pusta faktura nie powinna przejść';
+exception when others then
+  if sqlerrm like 'pusta%' then raise; end if;
+  raise notice 'OK: %', sqlerrm;
+end $$;
+select number from public.create_invoice('{"issue_date":"2026-10-10","seller":{},"buyer":{"name":"Jan"},"total_gross":1,"net_23":0,"vat_23":0,"margin_total":1}', '[{"name":"X","unit_price_gross":1,"total_gross":1,"vat":"margin"}]');
+select number, (select count(*) from public.invoice_items i where i.invoice_id = v.id) from public.invoices v order by seq;
+rollback;

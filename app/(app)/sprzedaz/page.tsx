@@ -35,7 +35,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
       <>
         <PageHeader title="Sprzedaż" sub={sp.widok === "jpk" ? "JPK: wszystkie sprzedaże według daty paragonu lub faktury, z danymi zakupu z umowy." : "Faktury sprzedaży i KSeF."} />
         <Tabs active={sp.widok} />
-        {sp.widok === "jpk" ? <Jpk sp={sp} /> : <Invoices />}
+        {sp.widok === "jpk" ? <Jpk sp={sp} /> : <Invoices sp={sp} />}
       </>
     );
   }

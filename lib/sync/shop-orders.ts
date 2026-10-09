@@ -31,7 +31,8 @@ function toRow(storeId: string, o: ShopifyOrder, ex: Exclusions) {
     quantity: l.quantity,
     image: l.image?.url ?? null,
     shopify_variant_id: l.variant?.id ?? null,
-    price: Number(l.originalUnitPriceSet.shopMoney.amount),
+    // Cena po rabatach (to zapłacił klient).
+    price: Number((l.discountedUnitPriceAfterAllDiscountsSet ?? l.originalUnitPriceSet).shopMoney.amount),
     service: isExcluded(ex, [l.sku], l.title),
   }));
   const fulfillments: Fulfillment[] = o.fulfillments.map((f) => ({
@@ -56,7 +57,7 @@ function toRow(storeId: string, o: ShopifyOrder, ex: Exclusions) {
       phone: addr?.phone ?? o.phone,
       shipping_address: addr,
       shipping_method: method,
-      shipping_price: o.shippingLine ? Number(o.shippingLine.originalPriceSet.shopMoney.amount) : null,
+      shipping_price: o.shippingLine ? Number((o.shippingLine.discountedPriceSet ?? o.shippingLine.originalPriceSet).shopMoney.amount) : null,
       pickup_point: detectPickupPoint(method, o.customAttributes, addr),
       payment_gateways: o.paymentGatewayNames,
       financial_status: o.displayFinancialStatus,

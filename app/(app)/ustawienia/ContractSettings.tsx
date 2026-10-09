@@ -21,6 +21,7 @@ export async function ContractSettings({ company, signature, general }: { compan
           <div className="grid grid-cols-3 gap-2">
             <input className="input" name="nip" defaultValue={company.nip} aria-label="NIP" />
             <input className="input col-span-2" name="email" defaultValue={company.email} aria-label="E-mail do umów" />
+            <input className="input col-span-2 font-mono" name="bank_account" defaultValue={company.bank_account ?? ""} placeholder="Numer konta na fakturach (przelew)" aria-label="Numer konta na fakturach" />
           </div>
           <label className="flex items-center gap-2 text-sm">Przelew w ciągu <input className="input w-20" name="payment_days" type="number" defaultValue={company.payment_days ?? 7} /> dni</label>
           <SubmitButton className="btn-secondary">Zapisz dane firmy</SubmitButton>

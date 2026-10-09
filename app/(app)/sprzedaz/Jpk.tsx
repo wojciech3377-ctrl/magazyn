@@ -6,6 +6,7 @@ import { monthLabel, monthRange, previousMonthKey } from "@/lib/month";
 import { Notice, Pill } from "@/components/ui";
 import { SelectAllNamed } from "@/components/SelectAll";
 import { errorMessage } from "@/lib/errors";
+import { KSEF_STATUS } from "@/lib/invoices/labels";
 
 const KINDS: { key: "all" | DocKind | "none"; label: string }[] = [
   { key: "all", label: "Paragony i faktury" },
@@ -61,7 +62,6 @@ export async function Jpk({ sp }: { sp: Record<string, string | undefined> }) {
       </div>
 
       {error && <div className="mb-4"><Notice tone="error">{error}</Notice></div>}
-      {kind === "invoice" && <div className="mb-4"><Notice>Faktury pojawią się tu po uruchomieniu modułu faktur (zakładka Faktury).</Notice></div>}
       {kind === "none" && <div className="mb-4"><Notice>Sprzedaże z {monthLabel(range.key)}, do których nie ma jeszcze paragonu ani faktury.</Notice></div>}
 
       <form id="jpk" action="/api/jpk" method="post">
@@ -119,14 +119,50 @@ export async function Jpk({ sp }: { sp: Record<string, string | undefined> }) {
   );
 }
 
-/** Zakładka Faktury – moduł w przygotowaniu (wystawianie FV + wysyłka do KSeF). */
-export function Invoices() {
+/** Zakładka Faktury: lista faktur (FVM/n/rok) ze statusem KSeF. */
+export async function Invoices({ sp }: { sp: Record<string, string | undefined> }) {
+  const { supabase } = await requireProfile();
+  const status = sp.ksef ?? "";
+  let q = supabase.from("invoices").select("id, number, issue_date, buyer, total_gross, status, ksef_number, order:orders(id, name), pos:pos_orders(id, code)")
+    .order("year", { ascending: false }).order("seq", { ascending: false }).limit(300);
+  if (status) q = q.eq("status", status);
+  const { data: rows } = await q;
   return (
-    <div className="card p-6">
-      <h2 className="h2 mb-2">Faktury</h2>
-      <p className="text-sm text-muted">
-        Tu będzie wystawianie faktur do zamówień i sprzedaży stacjonarnej oraz ich wysyłka do KSeF. Wystawione faktury trafią automatycznie do JPK (arkusz „Faktury”).
-      </p>
-    </div>
+    <>
+      <div className="mb-4 flex flex-wrap items-end gap-2">
+        <form method="get" className="flex gap-2">
+          <input type="hidden" name="widok" value="faktury" />
+          <select className="input w-56" name="ksef" defaultValue={status} aria-label="Status KSeF">
+            <option value="">Wszystkie</option>
+            {Object.entries(KSEF_STATUS).map(([k, v]) => <option key={k} value={k}>{v.text}</option>)}
+          </select>
+          <button className="btn-secondary">Pokaż</button>
+        </form>
+        <Link className="btn ml-auto" href="/sprzedaz/faktury/nowa">Nowa faktura</Link>
+      </div>
+      <div className="card overflow-x-auto">
+        <table className="table">
+          <thead><tr><th>Numer</th><th>Data</th><th>Nabywca</th><th className="text-right">Kwota</th><th>KSeF</th><th>Sprzedaż</th></tr></thead>
+          <tbody>
+            {!rows?.length && <tr><td colSpan={6} className="py-10 text-center text-muted">Brak faktur. Fakturę wystawisz z zamówienia, ze sprzedaży stacjonarnej albo przyciskiem „Nowa faktura”.</td></tr>}
+            {rows?.map((r) => {
+              const st = KSEF_STATUS[r.status] ?? KSEF_STATUS.issued;
+              const order = r.order as unknown as { id: string; name: string } | null;
+              const pos = r.pos as unknown as { id: string; code: string } | null;
+              return (
+                <tr key={r.id} className="relative hover:bg-sky-50">
+                  <td><Link className="font-medium text-accent after:absolute after:inset-0 after:content-[''] hover:underline" href={`/sprzedaz/faktury/${r.id}`}>{r.number}</Link></td>
+                  <td className="whitespace-nowrap text-muted">{dateOnly(r.issue_date)}</td>
+                  <td>{(r.buyer as { name: string }).name}</td>
+                  <td className="text-right tabular-nums">{money(r.total_gross)}</td>
+                  <td><Pill tone={st.tone}>{st.text}</Pill>{r.ksef_number && <span className="block font-mono text-xs text-muted">{r.ksef_number}</span>}</td>
+                  <td className="text-xs">{order ? <Link className="relative z-10 text-accent hover:underline" href={`/sprzedaz/${order.id}`}>{order.name}</Link> : pos ? <Link className="relative z-10 text-accent hover:underline" href={`/kasa/${pos.id}`}>{pos.code}</Link> : "–"}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }

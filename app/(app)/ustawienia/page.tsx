@@ -12,6 +12,8 @@ import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/f
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getSender } from "@/lib/orders/sender";
 import { appUrl } from "@/lib/app-url";
+import { ksefConfigured, ksefEnv } from "@/lib/ksef/client";
+import { testKsefAction } from "../sprzedaz/faktury/actions";
 import { errorMessage } from "@/lib/errors";
 
 async function safe<T>(fn: () => Promise<T>): Promise<{ data: T | null; error: string | null }> {
@@ -59,6 +61,7 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
     ["Zadanie cykliczne (CRON_SECRET)", !!process.env.CRON_SECRET],
     ["E-mail (SMTP)", mailConfigured()],
     ["Furgonetka (klucze aplikacji)", furgonetkaConfigured()],
+    [`KSeF (${ksefEnv()})`, ksefConfigured()],
   ] as [string, boolean][];
 
   return (
@@ -140,6 +143,17 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
                 <SubmitButton>Dodaj</SubmitButton>
               </form>
             </div>
+          </section>
+
+          <section id="ksef" className="card scroll-mt-4 p-4">
+            <h2 className="h2 mb-1">Faktury i KSeF</h2>
+            <p className="mb-3 text-sm text-muted">
+              Faktury FVM/kolejny/rok wysyłane do KSeF ({ksefEnv() === "prod" ? "produkcja" : ksefEnv()}). Token KSeF (z uprawnieniem do wystawiania faktur) i NIP wpisuje się w Vercel jako
+              KSEF_TOKEN i KSEF_NIP – nigdy w czacie. Dane sprzedawcy i numer konta na fakturach: sekcja „Umowy i dane firmy”.
+            </p>
+            {ksefConfigured()
+              ? <form action={testKsefAction}><SubmitButton className="btn-secondary" pendingText="Łączę…">Sprawdź połączenie z KSeF</SubmitButton></form>
+              : <Notice>Brak KSEF_TOKEN / KSEF_NIP w ustawieniach serwera.</Notice>}
           </section>
 
           {sender && (

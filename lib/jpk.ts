@@ -11,7 +11,7 @@ import type { LineItem } from "@/lib/sync/shop-orders";
 export type DocKind = "receipt" | "invoice";
 
 export type JpkLine = {
-  key: string;                 // o:<order id>:<pozycja>:<sztuka> | p:<pos item id>
+  key: string;                 // o:<order id>:<pozycja>:<sztuka> | p:<pos item id> | i:<pozycja faktury>
   source: "shop" | "pos";
   kind: DocKind | null;
   docNumber: string | null;
@@ -77,6 +77,21 @@ async function inChunks<T>(ids: (string | number)[], fn: (part: (string | number
 type Receipt = { number: string | null; issued_at: string; base_order_id: number | null; pos_order_id: string | null; items: { name: string; price_brutto: number; tax_rate: number }[] };
 const RECEIPT_FIELDS = "number, issued_at, base_order_id, pos_order_id, items";
 
+/** Dokument sprzedaży: paragon (ma pierwszeństwo – faktura do paragonu nie jest osobną sprzedażą) albo faktura. */
+type Doc = { kind: DocKind; number: string | null; date: string; items?: Receipt["items"] };
+type InvoiceRow = { id: string; number: string; issue_date: string; order_id: string | null; pos_order_id: string | null };
+
+/** Data faktury (dzień) jako chwila: północ czasu polskiego. */
+function invoiceInstant(day: string) {
+  const [y, m, d] = day.split("-").map(Number);
+  const guess = Date.UTC(y, m - 1, d);
+  const off = new Intl.DateTimeFormat("en-US", { timeZone: "Europe/Warsaw", timeZoneName: "shortOffset" }).formatToParts(new Date(guess)).find((p) => p.type === "timeZoneName")?.value ?? "GMT+1";
+  const h = Number(off.replace("GMT", "") || 0);
+  return new Date(guess - h * 3600_000).toISOString();
+}
+const receiptDoc = (r: Receipt | undefined): Doc | undefined => (r ? { kind: "receipt", number: r.number, date: r.issued_at, items: r.items } : undefined);
+const invoiceDoc = (i: InvoiceRow | undefined): Doc | undefined => (i ? { kind: "invoice", number: i.number, date: invoiceInstant(i.issue_date) } : undefined);
+
 type Order = {
   id: string; name: string; ordered_at: string; cancelled_at: string | null; status: string; cod: boolean; financial_status: string | null;
   base_order_id: number | null; line_items: LineItem[];
@@ -86,7 +101,7 @@ const ORDER_FIELDS = "id, name, ordered_at, cancelled_at, status, cod, financial
 type Sale = { id: string; order_id: string; variant_id: string | null; status: string; unit: Unit };
 
 /** Pozycje zamówień ze sklepu (każda sztuka osobno) z przypisanymi sztukami i umowami. */
-async function shopLines(db: SupabaseClient, orders: Order[], receiptOf: Map<number, Receipt>) {
+async function shopLines(db: SupabaseClient, orders: Order[], docOf: (o: Order) => Doc | undefined) {
   if (!orders.length) return [];
   const sales = await inChunks<Sale>(orders.map((o) => o.id), (part) =>
     db.from("sales").select(`id, order_id, variant_id, status, unit:units(${UNIT_FIELDS})`).in("order_id", part as string[]));
@@ -99,7 +114,7 @@ async function shopLines(db: SupabaseClient, orders: Order[], receiptOf: Map<num
 
   const lines: JpkLine[] = [];
   for (const o of orders) {
-    const r = o.base_order_id ? receiptOf.get(o.base_order_id) : undefined;
+    const r = docOf(o);
     const pool = [...(salesBy.get(o.id) ?? [])];
     const orderNote = o.cancelled_at
       ? (o.cod && o.status === "problem" ? "NIE ODEBRANE POBRANIE" : "ANULOWANE")
@@ -112,7 +127,7 @@ async function shopLines(db: SupabaseClient, orders: Order[], receiptOf: Map<num
         const sale = idx >= 0 ? pool.splice(idx, 1)[0] : null;
         const item = r?.items?.find((i) => i.name && l.title && i.name.toLowerCase().includes(l.title.toLowerCase().slice(0, 12)));
         lines.push({
-          key: `o:${o.id}:${li}:${n}`, source: "shop", kind: r ? "receipt" : null, docNumber: r?.number ?? null, docDate: r?.issued_at ?? null,
+          key: `o:${o.id}:${li}:${n}`, source: "shop", kind: r?.kind ?? null, docNumber: r?.number ?? null, docDate: r?.date ?? null,
           saleDate: o.ordered_at, name: [l.title, l.variant_title].filter(Boolean).join(" "), price: Number(l.price),
           vat: vatOf(sale?.unit ?? null, item?.tax_rate), ...unitPart(sale?.unit ?? null),
           orderLabel: o.name, orderHref: `/sprzedaz/${o.id}`,
@@ -130,15 +145,15 @@ type PosItem = {
   unit: (NonNullable<Unit> & { variant: { option: string; product: { title: string } } | null }) | null;
 };
 
-async function posLines(db: SupabaseClient, posOrderIds: string[], receiptOf: Map<string, Receipt>) {
+async function posLines(db: SupabaseClient, posOrderIds: string[], docOf: (posOrderId: string) => Doc | undefined) {
   if (!posOrderIds.length) return [];
   const items = await inChunks<PosItem>(posOrderIds, (part) =>
     db.from("pos_order_items").select(`id, order_id, price, status, order:pos_orders(id, code, created_at), unit:units(${UNIT_FIELDS}, variant:variants(option, product:products(title)))`)
       .in("order_id", part as string[]));
   return items.map((i): JpkLine => {
-    const r = receiptOf.get(i.order_id);
+    const r = docOf(i.order_id);
     return {
-      key: `p:${i.id}`, source: "pos", kind: r ? "receipt" : null, docNumber: r?.number ?? null, docDate: r?.issued_at ?? null, saleDate: i.order?.created_at ?? "",
+      key: `p:${i.id}`, source: "pos", kind: r?.kind ?? null, docNumber: r?.number ?? null, docDate: r?.date ?? null, saleDate: i.order?.created_at ?? "",
       name: i.unit?.variant ? `${i.unit.variant.product.title} ${i.unit.variant.option}` : "",
       price: Number(i.price), vat: vatOf(i.unit), ...unitPart(i.unit),
       orderLabel: i.order?.code ?? "", orderHref: i.order ? `/kasa/${i.order.id}` : null,
@@ -152,16 +167,39 @@ export function sortLines(lines: JpkLine[]) {
     || (a.docNumber ?? "").localeCompare(b.docNumber ?? "", "pl", { numeric: true }) || a.name.localeCompare(b.name));
 }
 
-async function receiptsFor(db: SupabaseClient, baseIds: number[], posIds: string[]) {
-  const [rb, rp] = await Promise.all([
+async function docsFor(db: SupabaseClient, orders: Order[], posIds: string[]) {
+  const baseIds = orders.map((o) => o.base_order_id).filter((x): x is number => !!x).map(Number);
+  const [rb, rp, ib, ip] = await Promise.all([
     inChunks<Receipt>(baseIds, (part) => db.from("receipts").select(RECEIPT_FIELDS).in("base_order_id", part as number[]).order("issued_at")),
     inChunks<Receipt>(posIds, (part) => db.from("receipts").select(RECEIPT_FIELDS).in("pos_order_id", part as string[]).order("issued_at")),
+    inChunks<InvoiceRow>(orders.map((o) => o.id), (part) => db.from("invoices").select(INVOICE_FIELDS).in("order_id", part as string[]).not("status", "in", "(rejected,cancelled)")),
+    inChunks<InvoiceRow>(posIds, (part) => db.from("invoices").select(INVOICE_FIELDS).in("pos_order_id", part as string[]).not("status", "in", "(rejected,cancelled)")),
   ]);
   const byBase = new Map<number, Receipt>();
   const byPos = new Map<string, Receipt>();
   for (const r of rb) if (r.base_order_id && !byBase.has(Number(r.base_order_id))) byBase.set(Number(r.base_order_id), r);
   for (const r of rp) if (r.pos_order_id && !byPos.has(r.pos_order_id)) byPos.set(r.pos_order_id, r);
-  return { byBase, byPos };
+  const invByOrder = new Map(ib.map((i) => [i.order_id as string, i]));
+  const invByPos = new Map(ip.map((i) => [i.pos_order_id as string, i]));
+  return {
+    orderDoc: (o: Order) => receiptDoc(o.base_order_id ? byBase.get(Number(o.base_order_id)) : undefined) ?? invoiceDoc(invByOrder.get(o.id)),
+    posDoc: (id: string) => receiptDoc(byPos.get(id)) ?? invoiceDoc(invByPos.get(id)),
+  };
+}
+
+const INVOICE_FIELDS = "id, number, issue_date, order_id, pos_order_id";
+
+type InvoiceItemRow = { id: string; name: string; total_gross: number; vat: string; invoice: InvoiceRow; unit: Unit };
+
+/** Faktury wystawione ręcznie (bez zamówienia i kasy) – pozycje z faktury. */
+async function manualInvoiceLines(db: SupabaseClient, invoiceIds: string[]) {
+  const items = await inChunks<InvoiceItemRow>(invoiceIds, (part) =>
+    db.from("invoice_items").select(`id, name, total_gross, vat, invoice:invoices(${INVOICE_FIELDS}), unit:units(${UNIT_FIELDS})`).in("invoice_id", part as string[]));
+  return items.map((i): JpkLine => ({
+    key: `i:${i.id}`, source: "shop", kind: "invoice", docNumber: i.invoice.number, docDate: invoiceInstant(i.invoice.issue_date), saleDate: invoiceInstant(i.invoice.issue_date),
+    name: i.name, price: Number(i.total_gross), vat: i.unit ? vatOf(i.unit) : i.vat === "23" ? "A" : "F", ...unitPart(i.unit),
+    orderLabel: i.invoice.number, orderHref: `/sprzedaz/faktury/${i.invoice.id}`, saleNote: null,
+  }));
 }
 
 /**
@@ -171,39 +209,45 @@ async function receiptsFor(db: SupabaseClient, baseIds: number[], posIds: string
 export async function loadJpkLines(db: SupabaseClient, opts: { from: Date; to: Date; kind: "all" | DocKind | "none" }): Promise<JpkLine[]> {
   const from = opts.from.toISOString();
   const to = opts.to.toISOString();
-  const [{ data: monthReceipts, error: e1 }, { data: monthOrders, error: e2 }, { data: monthPos, error: e3 }] = await Promise.all([
+  const fromDay = new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Warsaw" }).format(opts.from);
+  const toDay = new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Warsaw" }).format(opts.to);
+  const [{ data: monthReceipts, error: e1 }, { data: monthOrders, error: e2 }, { data: monthPos, error: e3 }, { data: monthInvoices, error: e4 }] = await Promise.all([
     db.from("receipts").select("base_order_id, pos_order_id").gte("issued_at", from).lt("issued_at", to).limit(10000),
     db.from("orders").select("id").gte("ordered_at", from).lt("ordered_at", to).limit(10000),
     db.from("pos_orders").select("id").gte("created_at", from).lt("created_at", to).limit(10000),
+    db.from("invoices").select(INVOICE_FIELDS).gte("issue_date", fromDay).lt("issue_date", toDay).not("status", "in", "(rejected,cancelled)").limit(10000),
   ]);
-  if (e1 || e2 || e3) throw e1 ?? e2 ?? e3;
+  if (e1 || e2 || e3 || e4) throw e1 ?? e2 ?? e3 ?? e4;
+  const invoicesM = (monthInvoices ?? []) as InvoiceRow[];
   const recBase = [...new Set((monthReceipts ?? []).map((r) => r.base_order_id).filter((x): x is number => !!x).map(Number))];
-  const recPos = [...new Set((monthReceipts ?? []).map((r) => r.pos_order_id).filter((x): x is string => !!x))];
+  const docPos = [...new Set([...(monthReceipts ?? []).map((r) => r.pos_order_id), ...invoicesM.map((i) => i.pos_order_id)].filter((x): x is string => !!x))];
 
   const ordersByReceipt = await inChunks<Order>(recBase, (part) => db.from("orders").select(ORDER_FIELDS).in("base_order_id", part as number[]));
-  const extraIds = (monthOrders ?? []).map((o) => o.id as string).filter((id) => !ordersByReceipt.some((o) => o.id === id));
-  const ordersInMonth = await inChunks<Order>(extraIds, (part) => db.from("orders").select(ORDER_FIELDS).in("id", part as string[]));
-  const orders = [...ordersByReceipt, ...ordersInMonth];
-  const posIds = [...new Set([...recPos, ...(monthPos ?? []).map((p) => p.id as string)])];
+  const known = new Set(ordersByReceipt.map((o) => o.id));
+  const extraIds = [...new Set([...(monthOrders ?? []).map((o) => o.id as string), ...invoicesM.map((i) => i.order_id).filter((x): x is string => !!x)])].filter((id) => !known.has(id));
+  const ordersMore = await inChunks<Order>(extraIds, (part) => db.from("orders").select(ORDER_FIELDS).in("id", part as string[]));
+  const orders = [...ordersByReceipt, ...ordersMore];
+  const posIds = [...new Set([...docPos, ...(monthPos ?? []).map((p) => p.id as string)])];
 
-  const { byBase, byPos } = await receiptsFor(db, orders.map((o) => o.base_order_id).filter((x): x is number => !!x).map(Number), posIds);
+  const { orderDoc, posDoc } = await docsFor(db, orders, posIds);
   const inMonth = (d: string | null) => !!d && d >= from && d < to;
+  const posInMonth = new Set((monthPos ?? []).map((p) => p.id as string));
 
   const keepOrders = orders.filter((o) => {
-    const r = o.base_order_id ? byBase.get(Number(o.base_order_id)) : undefined;
-    if (r) return inMonth(r.issued_at);
+    const d = orderDoc(o);
+    if (d) return inMonth(d.date);
     return !o.cancelled_at && inMonth(o.ordered_at);
   });
   const keepPos = posIds.filter((id) => {
-    const r = byPos.get(id);
-    return r ? inMonth(r.issued_at) : true;
+    const d = posDoc(id);
+    return d ? inMonth(d.date) : posInMonth.has(id);
   });
-  // Sprzedaż stacjonarna bez paragonu tylko z tego miesiąca.
-  const posInMonth = new Set((monthPos ?? []).map((p) => p.id as string));
+  const manual = invoicesM.filter((i) => !i.order_id && !i.pos_order_id).map((i) => i.id);
 
   const lines = [
-    ...(await shopLines(db, keepOrders, byBase)),
-    ...(await posLines(db, keepPos.filter((id) => byPos.has(id) || posInMonth.has(id)), byPos)),
+    ...(await shopLines(db, keepOrders, orderDoc)),
+    ...(await posLines(db, keepPos, posDoc)),
+    ...(await manualInvoiceLines(db, manual)),
   ];
   const filtered = opts.kind === "all" ? lines : opts.kind === "none" ? lines.filter((l) => !l.kind) : lines.filter((l) => l.kind === opts.kind);
   return sortLines(filtered);
@@ -213,11 +257,17 @@ export async function loadJpkLines(db: SupabaseClient, opts: { from: Date; to: D
 export async function loadJpkLinesByKeys(db: SupabaseClient, keys: string[]) {
   const orderIds = [...new Set(keys.filter((k) => k.startsWith("o:")).map((k) => k.split(":")[1]))];
   const posItemIds = keys.filter((k) => k.startsWith("p:")).map((k) => k.slice(2));
+  const invItemIds = keys.filter((k) => k.startsWith("i:")).map((k) => k.slice(2));
   const orders = await inChunks<Order>(orderIds, (part) => db.from("orders").select(ORDER_FIELDS).in("id", part as string[]));
   const posItems = await inChunks<{ order_id: string }>(posItemIds, (part) => db.from("pos_order_items").select("order_id").in("id", part as string[]));
+  const invItems = await inChunks<{ invoice_id: string }>(invItemIds, (part) => db.from("invoice_items").select("invoice_id").in("id", part as string[]));
   const posIds = [...new Set(posItems.map((p) => p.order_id))];
-  const { byBase, byPos } = await receiptsFor(db, orders.map((o) => o.base_order_id).filter((x): x is number => !!x).map(Number), posIds);
+  const { orderDoc, posDoc } = await docsFor(db, orders, posIds);
   const want = new Set(keys);
-  const lines = [...(await shopLines(db, orders, byBase)), ...(await posLines(db, posIds, byPos))].filter((l) => want.has(l.key));
+  const lines = [
+    ...(await shopLines(db, orders, orderDoc)),
+    ...(await posLines(db, posIds, posDoc)),
+    ...(await manualInvoiceLines(db, [...new Set(invItems.map((i) => i.invoice_id))])),
+  ].filter((l) => want.has(l.key));
   return sortLines(lines);
 }
