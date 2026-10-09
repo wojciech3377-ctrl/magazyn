@@ -1,6 +1,6 @@
 /** Statusy zamówień i rozpoznawanie wysyłki / płatności. Bez zależności serwerowych (UI + synchronizacja). */
 
-export type OrderStatus = "new" | "shipped" | "delivered" | "problem" | "cancelled";
+export type OrderStatus = "new" | "shipped" | "delivered" | "problem" | "cancelled" | "returned";
 
 export const ORDER_STATUS: Record<OrderStatus, string> = {
   new: "Nowe",
@@ -8,6 +8,7 @@ export const ORDER_STATUS: Record<OrderStatus, string> = {
   delivered: "Dostarczone",
   problem: "Problem",
   cancelled: "Anulowane",
+  returned: "Zwrócone",
 };
 
 export const ORDER_STATUS_TONE: Record<OrderStatus, "slate" | "red" | "amber" | "green" | "blue"> = {
@@ -16,6 +17,7 @@ export const ORDER_STATUS_TONE: Record<OrderStatus, "slate" | "red" | "amber" | 
   delivered: "green",
   problem: "red",
   cancelled: "slate",
+  returned: "slate",
 };
 
 export type Fulfillment = {
@@ -31,7 +33,7 @@ const PROBLEM_STATE = /return|lost|damag|refus|undeliver|not_deliver|fail|proble
 const PROBLEM_TEXT = /zwrot|nieudan|odmow|zagubi|uszkodz|niedor[eę]cz|nie dor[eę]cz|awiz|problem|nie odebra|b[łl][eę]dn|wstrzyma|nieobecn|brak odbiorcy|returned|undeliver|failed|refused|damaged|lost/i;
 
 /** Stan przesyłki z Furgonetki → etap zamówienia. null = przesyłka anulowana (nie liczy się). */
-export function classifyShipment(s: Pick<ShipmentLike, "state" | "state_description">): Exclude<OrderStatus, "new" | "cancelled"> | null {
+export function classifyShipment(s: Pick<ShipmentLike, "state" | "state_description">): "shipped" | "delivered" | "problem" | null {
   const state = (s.state ?? "").toLowerCase();
   const text = s.state_description ?? "";
   if (/^cancel+ed$|^canceled$/.test(state) || /^anulowan/i.test(text)) return null;
@@ -48,14 +50,15 @@ export function isPersonalPickup(method: string | null | undefined) {
 
 /** Etap zamówienia z anulowania, przesyłek Furgonetki i realizacji w Shopify. */
 export function computeOrderStatus(
-  o: { cancelled_at: string | null; fulfillments: Fulfillment[]; shipping_method: string | null },
+  o: { cancelled_at: string | null; fulfillments: Fulfillment[]; shipping_method: string | null; financial_status?: string | null },
   shipments: ShipmentLike[],
 ): { status: OrderStatus; detail: string | null } {
   if (o.cancelled_at) return { status: "cancelled", detail: null };
+  if ((o.financial_status ?? "").toUpperCase() === "REFUNDED") return { status: "returned", detail: "pieniądze zwrócone" };
 
   const active = shipments
     .map((s) => ({ s, kind: classifyShipment(s) }))
-    .filter((x): x is { s: ShipmentLike; kind: Exclude<OrderStatus, "new" | "cancelled"> } => x.kind !== null)
+    .filter((x): x is { s: ShipmentLike; kind: "shipped" | "delivered" | "problem" } => x.kind !== null)
     .sort((a, b) => (b.s.state_at ?? "").localeCompare(a.s.state_at ?? ""));
   if (active.length) {
     const problem = active.find((x) => x.kind === "problem");
@@ -84,7 +87,8 @@ export function detectCod(gateways: string[], shippingMethod: string | null | un
 export function paymentLabel(o: { financial_status: string | null; cod: boolean; outstanding?: number | string | null }): { text: string; tone: "green" | "amber" | "red" | "slate" | "blue" } {
   const fs = (o.financial_status ?? "").toUpperCase();
   if (fs === "REFUNDED") return { text: "zwrócone", tone: "slate" };
-  if (fs === "PAID" || fs === "PARTIALLY_REFUNDED") return { text: "opłacone", tone: "green" };
+  if (fs === "PARTIALLY_REFUNDED") return { text: "częściowy zwrot", tone: "amber" };
+  if (fs === "PAID") return { text: "opłacone", tone: "green" };
   if (o.cod) return { text: "za pobraniem", tone: "blue" };
   if (fs === "PARTIALLY_PAID") return { text: "częściowo opłacone", tone: "amber" };
   if (fs === "VOIDED") return { text: "anulowana płatność", tone: "slate" };

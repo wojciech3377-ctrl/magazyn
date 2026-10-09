@@ -3,8 +3,13 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { ImageResponse } from "next/og";
 
+/** Grafika „SNEAKERS DEPOT WTB” (1080×1350): nagłówek i siatka butów, które chcemy kupić. */
+
 const W = 1080;
 const H = 1350;
+const HEADER = 190;
+const PAD = 40;
+export const WTB_PER_PAGE = 16;
 
 export type WtbItem = { title: string; size: string | null; sku: string | null; image: string | null };
 
@@ -19,14 +24,14 @@ async function fonts() {
   return fontCache;
 }
 
-/** Zdjęcie produktu jako data URL (PNG/JPEG – bez WebP, którego generator nie obsługuje). */
-export async function imageData(url: string | null) {
+/** Zdjęcie produktu jako data URL (PNG/JPEG – bez WebP, którego generator nie obsługuje). Tylko z CDN Shopify. */
+export async function imageData(url: string | null, width = 1200) {
   if (!url) return null;
   try {
     const u = new URL(url);
     if (u.hostname !== "cdn.shopify.com" && !u.hostname.endsWith(".shopify.com")) return null;
-    u.searchParams.set("width", "1200");
-    const res = await fetch(u, { headers: { Accept: "image/png,image/jpeg;q=0.9" }, cache: "no-store" });
+    u.searchParams.set("width", String(width));
+    const res = await fetch(u, { headers: { Accept: "image/png,image/jpeg;q=0.9" }, cache: "no-store", signal: AbortSignal.timeout(8000) });
     const type = res.headers.get("content-type") ?? "";
     if (!res.ok || !/image\/(png|jpe?g)/.test(type)) return null;
     return `data:${type};base64,${Buffer.from(await res.arrayBuffer()).toString("base64")}`;
@@ -35,31 +40,73 @@ export async function imageData(url: string | null) {
   }
 }
 
-/** Grafika „SNEAKERS DEPOT WTB”: zdjęcie produktu, rozmiar i SKU ze Shopify (PNG 1080×1350). */
-export async function renderWtb(item: WtbItem, img: string | null, download: boolean) {
+/** Podział listy na strony po maks. 16 butów, możliwie równo (np. 20 → 10 + 10). */
+export function wtbPages<T>(items: T[]): T[][] {
+  if (!items.length) return [];
+  const pages = Math.ceil(items.length / WTB_PER_PAGE);
+  const per = Math.ceil(items.length / pages);
+  return Array.from({ length: pages }, (_, i) => items.slice(i * per, (i + 1) * per));
+}
+
+function grid(n: number) {
+  const cols = n <= 1 ? 1 : n <= 4 ? 2 : n <= 9 ? 3 : 4;
+  return { cols, rows: Math.ceil(n / cols) };
+}
+
+export async function renderWtbSheet(items: (WtbItem & { img: string | null })[], opts: { page: number; pages: number; download: boolean }) {
   const f = await fonts();
-  const filename = `WTB ${item.title} ${item.size ?? ""}`.replace(/[^\p{L}\p{N} ._-]/gu, "").trim().slice(0, 80) || "WTB";
+  const { cols, rows } = grid(items.length);
+  const gap = cols >= 3 ? 16 : 24;
+  const cellW = Math.floor((W - PAD * 2 - gap * (cols - 1)) / cols);
+  const cellH = Math.floor((H - HEADER - PAD * 2 - gap * (rows - 1)) / rows);
+  const single = items.length === 1;
+  const sizeFont = single ? 64 : cols === 2 ? 42 : cols === 3 ? 34 : 28;
+  const skuFont = single ? 40 : cols === 2 ? 24 : cols === 3 ? 20 : 17;
+  const titleFont = single ? 36 : cols === 2 ? 22 : 0;
+  const footer = single ? 250 : titleFont ? sizeFont + skuFont + titleFont * 2.5 + 36 : sizeFont + skuFont + 26;
+  const filename = opts.pages > 1 ? `WTB-${opts.page}-z-${opts.pages}` : "WTB";
+
   return new ImageResponse(
     (
       <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", background: "#ffffff", fontFamily: "DejaVu" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 28, height: 200, background: "#0b0b0b", color: "#ffffff" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 26, height: HEADER, background: "#0b0b0b", color: "#ffffff", position: "relative" }}>
           <div style={{ fontSize: 60, fontWeight: 700, letterSpacing: 4 }}>SNEAKERS DEPOT</div>
           <div style={{ display: "flex", fontSize: 60, fontWeight: 700, letterSpacing: 4, background: "#ffffff", color: "#0b0b0b", padding: "4px 22px", borderRadius: 10 }}>WTB</div>
+          {opts.pages > 1 && <div style={{ position: "absolute", right: 28, bottom: 16, fontSize: 22, color: "#9a9a9a" }}>{`${opts.page}/${opts.pages}`}</div>}
         </div>
-        <div style={{ display: "flex", flex: 1, alignItems: "center", justifyContent: "center", padding: "40px 70px" }}>
-          {img ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={img} alt="" width={940} height={900} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
-          ) : (
-            <div style={{ display: "flex", fontSize: 36, color: "#9a9a9a" }}>brak zdjęcia</div>
-          )}
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", padding: "0 70px 64px" }}>
-          <div style={{ display: "flex", fontSize: 38, fontWeight: 700, color: "#111111", lineHeight: 1.2, marginBottom: 28, maxHeight: 92, overflow: "hidden" }}>{item.title}</div>
-          <div style={{ display: "flex", gap: 24 }}>
-            <Box label="ROZMIAR" value={item.size ?? "–"} />
-            <Box label="SKU" value={item.sku ?? "–"} grow />
-          </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap, padding: PAD, flex: 1, alignContent: "center", justifyContent: "center" }}>
+          {items.map((it, i) => (
+            <div
+              key={i}
+              style={{
+                display: "flex", flexDirection: "column", width: cellW, height: cellH,
+                border: single ? "none" : "3px solid #e6e6e6", borderRadius: 18, padding: single ? 0 : cols >= 3 ? 10 : 16, overflow: "hidden",
+              }}
+            >
+              <div style={{ display: "flex", flex: 1, alignItems: "center", justifyContent: "center", minHeight: 0 }}>
+                {it.img ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={it.img} alt="" width={cellW} height={Math.max(40, cellH - footer)} style={{ width: "100%", height: Math.max(40, cellH - footer), objectFit: "contain" }} />
+                ) : (
+                  <div style={{ display: "flex", fontSize: Math.max(16, skuFont), color: "#b0b0b0" }}>brak zdjęcia</div>
+                )}
+              </div>
+              {titleFont > 0 && (
+                <div style={{ display: "flex", fontSize: titleFont, fontWeight: 700, color: "#111111", lineHeight: 1.2, maxHeight: titleFont * 2.45, overflow: "hidden", marginTop: 8 }}>{it.title}</div>
+              )}
+              {single ? (
+                <div style={{ display: "flex", gap: 24, marginTop: 24 }}>
+                  <Box label="ROZMIAR" value={it.size ?? "–"} />
+                  <Box label="SKU" value={it.sku ?? "–"} grow />
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", marginTop: 6 }}>
+                  <div style={{ display: "flex", fontSize: sizeFont, fontWeight: 700, color: "#0b0b0b", lineHeight: 1.1 }}>{it.size ? `${it.size}` : "–"}</div>
+                  <div style={{ display: "flex", fontSize: skuFont, fontWeight: 700, color: "#6b6b6b", letterSpacing: 1, marginTop: 4, whiteSpace: "nowrap", overflow: "hidden" }}>{it.sku ?? ""}</div>
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       </div>
     ),
@@ -72,7 +119,7 @@ export async function renderWtb(item: WtbItem, img: string | null, download: boo
       ],
       headers: {
         "Cache-Control": "private, no-store",
-        ...(download ? { "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(filename)}.png` } : {}),
+        ...(opts.download ? { "Content-Disposition": `attachment; filename="${filename}.png"` } : {}),
       },
     },
   );

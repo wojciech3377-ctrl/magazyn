@@ -5,6 +5,7 @@ import { Notice, PageHeader, Pagination, Pill } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
 import { pullOrdersNow } from "./actions";
 import { SwapForm } from "./SwapForm";
+import { WtbButton } from "@/components/WtbButton";
 import { OrderStatusPill, SALE_SELECT, SaleContract, UnitCell, type SaleUnit } from "./SaleBits";
 import { classifyShipment, ORDER_STATUS, paymentLabel, type Fulfillment, type OrderStatus } from "@/lib/orders/status";
 import type { LineItem } from "@/lib/sync/shop-orders";
@@ -18,6 +19,7 @@ const ORDER_TABS: { key: string; label: string }[] = [
   { key: "delivered", label: ORDER_STATUS.delivered },
   { key: "problem", label: ORDER_STATUS.problem },
   { key: "cancelled", label: ORDER_STATUS.cancelled },
+  { key: "returned", label: ORDER_STATUS.returned },
 ];
 
 export default async function SprzedazPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
@@ -113,10 +115,11 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
               const tracking = ship?.tracking_number ? { number: ship.tracking_number, url: ship.tracking_url } : shopTracking ? { number: shopTracking.number!, url: shopTracking.url } : null;
               const status = o.status as OrderStatus;
               return (
-                <tr key={o.id} className={status === "problem" ? "bg-rose-50/60" : ""}>
+                <tr key={o.id} className={`relative cursor-pointer transition-colors ${status === "problem" ? "bg-rose-50/60 hover:bg-rose-100/70" : "hover:bg-sky-50"}`}>
                   <td className="whitespace-nowrap text-muted">{dateTime(o.ordered_at)}</td>
                   <td className="whitespace-nowrap">
-                    <Link className="font-medium text-accent hover:underline" href={`/sprzedaz/${o.id}`}>{o.name}</Link>
+                    {/* Cały wiersz prowadzi do zamówienia (link rozciągnięty na wiersz); pozostałe linki są nad nim. */}
+                    <Link className="font-medium text-accent after:absolute after:inset-0 after:content-[''] hover:underline" href={`/sprzedaz/${o.id}`}>{o.name}</Link>
                     <span className="block text-xs text-muted">{(o.store as unknown as { name: string } | null)?.name ?? ""}</span>
                     {o.customer_name && <span className="block text-xs">{o.customer_name}</span>}
                   </td>
@@ -125,13 +128,13 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
                       {lines.map((l) => (
                         <li key={l.id} className="flex items-baseline gap-2">
                           <span className="line-clamp-1">{l.title} · <b>{l.variant_title ?? "–"}</b>{l.quantity > 1 ? ` ×${l.quantity}` : ""}</span>
-                          <a className="shrink-0 text-xs text-accent hover:underline" href={`/api/wtb?zamowienie=${o.id}&linia=${l.i}`} target="_blank" rel="noreferrer" title="Grafika SNEAKERS DEPOT WTB">WTB</a>
+                          <WtbButton orderId={o.id} line={l.i} compact />
                         </li>
                       ))}
                     </ul>
                     <div className="mt-0.5 flex flex-wrap gap-1 font-mono text-xs">
                       {oSales.map((s, i) => s.unit
-                        ? <Link key={i} className="text-accent hover:underline" href={`/magazyn/${s.unit.id}`}>{s.unit.code}</Link>
+                        ? <Link key={i} className="relative z-10 text-accent hover:underline" href={`/magazyn/${s.unit.id}`}>{s.unit.code}</Link>
                         : s.status === "no_unit" ? <Pill key={i} tone="red">brak sztuki</Pill> : null)}
                     </div>
                   </td>
@@ -139,7 +142,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
                     <span className="line-clamp-2">{o.shipping_method ?? "–"}</span>
                     {o.pickup_point && <span className="block font-mono text-xs text-muted">{o.pickup_point}</span>}
                     {tracking && (tracking.url
-                      ? <a className="block font-mono text-xs text-accent hover:underline" href={tracking.url} target="_blank" rel="noreferrer">{tracking.number}</a>
+                      ? <a className="relative z-10 block font-mono text-xs text-accent hover:underline" href={tracking.url} target="_blank" rel="noreferrer">{tracking.number}</a>
                       : <span className="block font-mono text-xs">{tracking.number}</span>)}
                   </td>
                   <td className="whitespace-nowrap">
@@ -150,7 +153,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
                     <OrderStatusPill status={status} />
                     {o.status_detail && <span className={`mt-0.5 block text-xs ${status === "problem" ? "font-medium text-bad" : "text-muted"}`}>{o.status_detail}</span>}
                   </td>
-                  <td>{status === "new" && <Link className="btn-secondary whitespace-nowrap px-2.5 py-1 text-xs" href={`/sprzedaz/${o.id}#etykieta`}>Utwórz etykietę</Link>}</td>
+                  <td>{status === "new" && <Link className="btn-secondary relative z-10 whitespace-nowrap px-2.5 py-1 text-xs" href={`/sprzedaz/${o.id}#etykieta`}>Utwórz etykietę</Link>}</td>
                 </tr>
               );
             })}
@@ -218,7 +221,7 @@ async function SaleLines({ sp, page }: { sp: Record<string, string | undefined>;
                   <td><Pill tone={s.status === "assigned" ? "green" : s.status === "cancelled" ? "slate" : "red"}>{SALE_STATUS[s.status]}</Pill></td>
                   <td className="whitespace-nowrap"><SaleContract saleId={s.id} status={s.status} hasVariant={!!s.variant_id} unit={s.unit as unknown as SaleUnit} pending={pendingBySale.get(s.id)} /></td>
                   <td>{s.status !== "cancelled" && s.status !== "unmatched" && <SwapForm saleId={s.id} />}</td>
-                  <td>{s.variant_id && <a className="text-xs text-accent hover:underline" href={`/api/wtb?sprzedaz=${s.id}`} target="_blank" rel="noreferrer">WTB</a>}</td>
+                  <td>{s.variant_id && <WtbButton saleId={s.id} compact />}</td>
                 </tr>
               );
             })}

@@ -11,6 +11,8 @@ import type { LineItem } from "@/lib/sync/shop-orders";
 import { OrderStatusPill, SALE_SELECT, SaleContract, UnitCell, type SaleUnit } from "../SaleBits";
 import { SwapForm } from "../SwapForm";
 import { LabelForm } from "./LabelForm";
+import { OrderOps } from "./OrderOps";
+import { WtbButton } from "@/components/WtbButton";
 import { refreshOrder } from "./actions";
 
 type Address = { name: string | null; company: string | null; address1: string | null; address2: string | null; city: string | null; zip: string | null; countryCodeV2: string | null; phone: string | null } | null;
@@ -22,7 +24,7 @@ function shopifyAdminUrl(domain: string | null, legacyId: string | null) {
 
 export default async function OrderPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const { supabase } = await requireProfile();
+  const { supabase, profile } = await requireProfile();
   const { data: order } = await supabase.from("orders").select("*, store:stores(name, code, shopify_domain)").eq("id", id).maybeSingle();
   if (!order) notFound();
 
@@ -137,7 +139,7 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
                 <td className="font-mono text-xs">{l.sku ?? "–"}</td>
                 <td className="text-right tabular-nums">{l.quantity}</td>
                 <td className="text-right tabular-nums">{money(l.price)}</td>
-                <td>{!l.service && <a className="btn-secondary whitespace-nowrap px-2.5 py-1 text-xs" href={`/api/wtb?zamowienie=${order.id}&linia=${i}`} target="_blank" rel="noreferrer">Dodaj do WTB</a>}</td>
+                <td>{!l.service && <WtbButton orderId={order.id} line={i} />}</td>
               </tr>
             ))}
           </tbody>
@@ -199,6 +201,20 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
           </>
         )}
       </section>
+      {profile.role === "admin" && (status !== "cancelled" || fulfillments.length > 0) && (
+        <section className="card mt-5 p-4">
+          <h2 className="h2 mb-1">Anulowanie i zwrot</h2>
+          <p className="mb-3 text-sm text-muted">Zmiana trafia do Shopify (zwrot pieniędzy, e-mail do klienta), a sztuki wracają na stan w magazynie.</p>
+          <OrderOps
+            orderId={order.id}
+            lines={lines.filter((l) => !l.service).map((l) => ({ id: l.id, title: l.title, variant_title: l.variant_title, quantity: l.quantity }))}
+            paid={["PAID", "PARTIALLY_REFUNDED", "PARTIALLY_PAID"].includes(String(order.financial_status ?? "").toUpperCase())}
+            hasLabels={activeShipments.length > 0}
+            canCancel={status !== "cancelled" && status !== "returned"}
+            canReturn={fulfillments.length > 0 && status !== "returned"}
+          />
+        </section>
+      )}
     </>
   );
 }

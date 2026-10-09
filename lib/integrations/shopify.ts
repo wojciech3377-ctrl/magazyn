@@ -247,3 +247,92 @@ export async function fulfillWithTracking(
   if (err) throw new Error(`Shopify: ${err}`);
   return null;
 }
+
+export type CancelReason = "CUSTOMER" | "DECLINED" | "FRAUD" | "INVENTORY" | "OTHER" | "STAFF";
+
+/**
+ * Anulowanie zamówienia w Shopify (nieodwracalne). Stan magazynowy prowadzi Base, więc restock = false –
+ * sztuki wracają na stan w aplikacji, a Base aktualizuje sklep. Wymaga uprawnienia write_orders.
+ */
+export async function cancelShopifyOrder(
+  domain: string,
+  storeCode: string,
+  orderId: string,
+  opts: { reason: CancelReason; refund: boolean; notify: boolean; note?: string },
+) {
+  const data = await shopifyGraphql<{ orderCancel: { job: { id: string; done: boolean } | null; orderCancelUserErrors: { message: string }[] } }>(
+    domain,
+    storeCode,
+    `mutation Cancel($id: ID!, $reason: OrderCancelReason!, $refund: OrderCancelRefundMethodInput, $notify: Boolean, $note: String) {
+      orderCancel(orderId: $id, reason: $reason, refundMethod: $refund, restock: false, notifyCustomer: $notify, staffNote: $note) {
+        job { id done } orderCancelUserErrors { field message code }
+      }
+    }`,
+    {
+      id: orderId,
+      reason: opts.reason,
+      refund: opts.refund ? { originalPaymentMethodsRefund: true } : null,
+      notify: opts.notify,
+      note: opts.note?.slice(0, 255) || null,
+    },
+  );
+  const err = data.orderCancel.orderCancelUserErrors.map((e) => e.message).join("; ");
+  if (err) throw new Error(`Shopify: ${err}`);
+}
+
+/**
+ * Zwrot pozycji: zwrot pieniędzy na oryginalną metodę płatności (kwotę liczy Shopify),
+ * opcjonalnie z kosztem wysyłki. Bez zwrotu pieniędzy zapisuje tylko zwrócone pozycje.
+ */
+export async function refundShopifyLines(
+  domain: string,
+  storeCode: string,
+  orderId: string,
+  lines: { lineItemId: string; quantity: number }[],
+  opts: { refundMoney: boolean; shipping: boolean; notify: boolean; note?: string },
+) {
+  const refundLineItems = lines.map((l) => ({ lineItemId: l.lineItemId, quantity: l.quantity, restockType: "NO_RESTOCK" }));
+  let transactions: { orderId: string; gateway: string; kind: "REFUND"; amount: string; parentId: string | null }[] = [];
+  let amount = 0;
+  if (opts.refundMoney) {
+    const s = await shopifyGraphql<{
+      order: { suggestedRefund: { amountSet: { shopMoney: { amount: string } }; suggestedTransactions: { gateway: string | null; amountSet: { shopMoney: { amount: string } }; parentTransaction: { id: string } | null }[] } } | null;
+    }>(
+      domain,
+      storeCode,
+      `query Suggest($id: ID!, $lines: [RefundLineItemInput!], $ship: Boolean) {
+        order(id: $id) { suggestedRefund(refundLineItems: $lines, refundShipping: $ship) {
+          amountSet { shopMoney { amount currencyCode } }
+          suggestedTransactions { gateway kind amountSet { shopMoney { amount } } parentTransaction { id } }
+        } }
+      }`,
+      { id: orderId, lines: refundLineItems, ship: opts.shipping },
+    );
+    const sug = s.order?.suggestedRefund;
+    amount = Number(sug?.amountSet.shopMoney.amount ?? 0);
+    transactions = (sug?.suggestedTransactions ?? [])
+      .filter((t) => t.gateway && Number(t.amountSet.shopMoney.amount) > 0)
+      .map((t) => ({ orderId, gateway: t.gateway!, kind: "REFUND", amount: t.amountSet.shopMoney.amount, parentId: t.parentTransaction?.id ?? null }));
+  }
+  const data = await shopifyGraphql<{ refundCreate: { refund: { id: string; totalRefundedSet: { shopMoney: { amount: string } } } | null; userErrors: { message: string }[] } }>(
+    domain,
+    storeCode,
+    `mutation Refund($input: RefundInput!, $key: String!) {
+      refundCreate(input: $input) @idempotent(key: $key) { refund { id totalRefundedSet { shopMoney { amount } } } userErrors { field message } }
+    }`,
+    {
+      key: crypto.randomUUID(),
+      input: {
+        orderId,
+        notify: opts.notify,
+        note: opts.note || null,
+        refundLineItems,
+        ...(opts.shipping ? { shipping: { fullRefund: true } } : {}),
+        ...(transactions.length ? { transactions } : {}),
+      },
+    },
+  );
+  const err = data.refundCreate.userErrors.map((e) => e.message).join("; ");
+  if (err) throw new Error(`Shopify: ${err}`);
+  return { refunded: Number(data.refundCreate.refund?.totalRefundedSet.shopMoney.amount ?? 0), suggested: amount, moneyBack: transactions.length > 0 };
+}

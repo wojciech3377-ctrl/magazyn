@@ -1,40 +1,30 @@
 import type { NextRequest } from "next/server";
 import { requireProfile } from "@/lib/auth";
-import type { LineItem } from "@/lib/sync/shop-orders";
-import { imageData, renderWtb, type WtbItem } from "@/lib/wtb";
+import { imageData, renderWtbSheet, wtbPages } from "@/lib/wtb";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
-async function loadItem(req: NextRequest): Promise<WtbItem | null> {
+const UUID = /^[0-9a-f-]{36}$/i;
+
+/** Grafika WTB z wybranych pozycji (ids=…) albo całej aktywnej listy; strona=N przy więcej niż 16 butach. */
+export async function GET(req: NextRequest) {
   const { supabase } = await requireProfile();
   const sp = req.nextUrl.searchParams;
-  const orderId = sp.get("zamowienie");
-  if (orderId) {
-    const { data: order } = await supabase.from("orders").select("line_items").eq("id", orderId).maybeSingle();
-    const line = ((order?.line_items ?? []) as LineItem[])[Number(sp.get("linia") ?? 0)];
-    if (!line) return null;
-    let image = line.image;
-    let sku = line.sku;
-    if ((!image || !sku) && line.shopify_variant_id) {
-      const { data: link } = await supabase.from("variant_store_links").select("sku, variant:variants(product:products(image_url, style_sku))").eq("shopify_variant_id", line.shopify_variant_id).maybeSingle();
-      const p = (link?.variant as unknown as { product: { image_url: string | null; style_sku: string | null } } | null)?.product;
-      image ??= p?.image_url ?? null;
-      sku ??= p?.style_sku ?? link?.sku ?? null;
-    }
-    return { title: line.title, size: line.variant_title, sku, image };
-  }
-  const saleId = sp.get("sprzedaz");
-  if (saleId) {
-    const { data: sale } = await supabase.from("sales").select("product_name, variant:variants(option, product:products(title, image_url, style_sku))").eq("id", saleId).maybeSingle();
-    const v = sale?.variant as unknown as { option: string; product: { title: string; image_url: string | null; style_sku: string | null } } | null;
-    if (!v) return sale ? { title: sale.product_name ?? "", size: null, sku: null, image: null } : null;
-    return { title: v.product.title, size: v.option, sku: v.product.style_sku, image: v.product.image_url };
-  }
-  return null;
-}
+  const ids = (sp.get("ids") ?? "").split(",").filter((x) => UUID.test(x)).slice(0, 200);
+  let query = supabase.from("wtb_items").select("id, title, size, sku, image_url, created_at");
+  query = ids.length ? query.in("id", ids) : query.eq("status", "active");
+  const { data } = await query.order("created_at");
+  const rows = ids.length ? ids.map((id) => data?.find((d) => d.id === id)).filter((x): x is NonNullable<typeof x> => !!x) : data ?? [];
+  if (!rows.length) return new Response("Lista WTB jest pusta", { status: 404 });
 
-export async function GET(req: NextRequest) {
-  const item = await loadItem(req);
-  if (!item) return new Response("Nie znaleziono pozycji", { status: 404 });
-  return renderWtb(item, await imageData(item.image), req.nextUrl.searchParams.get("pobierz") === "1");
+  const pages = wtbPages(rows);
+  const page = Math.min(pages.length, Math.max(1, Number(sp.get("strona") ?? 1)));
+  const items = pages[page - 1];
+  const width = items.length === 1 ? 1200 : items.length <= 4 ? 700 : 450;
+  const imgs = await Promise.all(items.map((it) => imageData(it.image_url, width)));
+  return renderWtbSheet(
+    items.map((it, i) => ({ title: it.title, size: it.size, sku: it.sku, image: it.image_url, img: imgs[i] })),
+    { page, pages: pages.length, download: sp.get("pobierz") === "1" },
+  );
 }

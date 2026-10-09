@@ -9,6 +9,7 @@ const LINKS = [
   { href: "/kasa", label: "Kasa" },
   { href: "/sprzedaz", label: "Sprzedaż" },
   { href: "/umowy", label: "Umowy" },
+  { href: "/wtb", label: "WTB" },
   { href: "/katalog", label: "Katalog" },
   { href: "/komisanci", label: "Komisanci" },
   { href: "/ustawienia", label: "Ustawienia" },

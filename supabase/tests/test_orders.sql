@@ -35,3 +35,20 @@ do $$ begin
 exception when insufficient_privilege then raise notice 'OK, brak uprawnień do link_sales_to_orders';
 end $$;
 rollback;
+-- WTB i status „Zwrócone”.
+begin;
+insert into auth.users (id, email) values ('00000000-0000-0000-0000-000000000001', 'szef@example.com');
+insert into public.orders (id, store_id, shopify_order_id, name, number, ordered_at, status)
+select '30000000-0000-0000-0000-000000000003', id, 'gid://shopify/Order/9', '#1', '1', now(), 'returned' from public.stores where code = 'sneakers-depot';
+set local role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000001', true);
+insert into public.wtb_items (title, size, source, order_id, order_line_id) values ('Jordan 4', '42', 'order', '30000000-0000-0000-0000-000000000003', 'gid://shopify/LineItem/1');
+do $$ begin
+  insert into public.wtb_items (title, size, source, order_id, order_line_id) values ('Jordan 4', '42', 'order', '30000000-0000-0000-0000-000000000003', 'gid://shopify/LineItem/1');
+  raise exception 'duplikat nie powinien przejść';
+exception when unique_violation then raise notice 'OK, ta sama pozycja raz na liście';
+end $$;
+update public.wtb_items set status = 'bought';
+insert into public.wtb_items (title, size, source, order_id, order_line_id) values ('Jordan 4', '42', 'order', '30000000-0000-0000-0000-000000000003', 'gid://shopify/LineItem/1');
+select status, count(*) from public.wtb_items group by status order by status;
+rollback;

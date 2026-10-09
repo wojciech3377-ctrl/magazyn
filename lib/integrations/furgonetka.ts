@@ -285,3 +285,17 @@ export async function accountServices(db: SupabaseClient) {
   const body = await json<{ services?: { id: number; service: string; name: string }[] }>(await furgonetkaFetch(db, "/account/services"));
   return body.services ?? [];
 }
+
+/** Anulowanie przesyłek (dopóki kurier ich nie odebrał). */
+export async function cancelPackages(db: SupabaseClient, packageIds: string[]) {
+  const uuid = crypto.randomUUID();
+  await json(await furgonetkaFetch(db, `/cancel-command/${uuid}`, { method: "PUT", body: { packages: packageIds.map((id) => ({ id: Number(id) || id })) } }));
+  for (let i = 0; i < 8; i++) {
+    await new Promise((r) => setTimeout(r, 1500));
+    const s = await json<{ status: string; errors?: { path?: string; message?: string }[] }>(await furgonetkaFetch(db, `/cancel-command/${uuid}`));
+    if (s.status === "successful" || s.status === "success" || s.status === "done") return;
+    if (s.status === "failed" || s.status === "error" || s.errors?.length) {
+      throw new FurgonetkaError(422, s.errors?.map((e) => [e.path, e.message].filter(Boolean).join(": ")).join("; ") || "nie udało się anulować przesyłki");
+    }
+  }
+}
