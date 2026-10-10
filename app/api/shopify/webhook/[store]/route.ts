@@ -46,6 +46,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ sto
       if (!gid) return NextResponse.json({ ok: true });
       if (topic === "products/delete") await removeShopifyProduct(db, store as Store, gid);
       else await syncSingleProduct(db, store as Store, gid);
+      // Usunięty produkt / rozmiar → z magazynu od razu (tylko sztuki bez historii).
+      await db.rpc("purge_non_shopify", { p_dry_run: false, p_max: 100 });
     }
     return NextResponse.json({ ok: true });
   } catch (e) {

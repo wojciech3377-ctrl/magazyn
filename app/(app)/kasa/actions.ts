@@ -3,7 +3,7 @@
 import { redirect } from "next/navigation";
 import { requireProfile } from "@/lib/auth";
 import { findVariantIds } from "@/lib/queries/units";
-import { adjustBaseStock } from "@/lib/stock";
+import { adjustStock } from "@/lib/stock";
 
 export type PosUnit = {
   id: string;
@@ -129,9 +129,9 @@ export async function finishPosOrder(_: unknown, formData: FormData): Promise<{ 
   });
   if (error) return { error: error.message };
 
-  // Sprzedaż poza Base: stan w Base −1 za każdą sztukę (Base zaktualizuje sklepy).
+  // Sprzedaż w kasie: stan w Shopify (i pomocniczo w Base) −1 za każdą sztukę.
   const { data: units } = await supabase.from("units").select("variant_id, location_id").in("id", parsed.map((p) => p.unit_id));
-  const results = await adjustBaseStock(supabase, (units ?? []).map((u) => ({ variantId: u.variant_id, locationId: u.location_id, delta: -1 })));
+  const results = await adjustStock(supabase, (units ?? []).map((u) => ({ variantId: u.variant_id, locationId: u.location_id, delta: -1 })));
   const failed = results.filter((r) => !r.ok);
   await supabase.from("pos_orders").update({
     base_sync_status: failed.length ? "error" : "ok",
@@ -146,7 +146,7 @@ export async function retryPosBase(formData: FormData) {
   const { supabase } = await requireProfile();
   const id = String(formData.get("id"));
   const { data: o } = await supabase.from("pos_orders").select("base_pending").eq("id", id).single();
-  const results = await adjustBaseStock(supabase, (o?.base_pending ?? []) as { variantId: string; locationId: string; delta: number }[]);
+  const results = await adjustStock(supabase, (o?.base_pending ?? []) as { variantId: string; locationId: string; delta: number }[]);
   const failed = results.filter((r) => !r.ok);
   await supabase.from("pos_orders").update({
     base_sync_status: failed.length ? "error" : "ok",

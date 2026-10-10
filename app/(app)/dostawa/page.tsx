@@ -13,7 +13,7 @@ export default async function DostawaPage() {
   ]);
   return (
     <>
-      <PageHeader title="Przyjęcie dostawy" sub="Każda sztuka dostaje osobny kod i etykietę. Stan w Base rośnie o liczbę przyjętych sztuk." />
+      <PageHeader title="Przyjęcie dostawy" sub="Każda sztuka dostaje osobny kod i etykietę. Stan w Shopify rośnie o liczbę przyjętych sztuk." />
       <DeliveryForm
         stores={stores ?? []}
         locations={locations ?? []}

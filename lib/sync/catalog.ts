@@ -161,6 +161,19 @@ export async function upsertShopifyProducts(db: SupabaseClient, store: Store, al
     if (error) throw error;
   }
 
+  // Rozmiary usunięte z produktu w Shopify: powiązanie ze Shopify znika (SKU z Base zostaje) → „brak w Shopify”.
+  const liveGids = new Set(allProducts.flatMap((p) => p.variants.nodes.map((v) => v.id)));
+  const complete = new Set(allProducts.filter((p) => p.variants.nodes.length < 250).map((p) => productIdByGid.get(p.id)).filter(Boolean));
+  const checkVariants = existingVariants.filter((v) => complete.has(v.product_id)).map((v) => v.id);
+  const stale = await selectIn<{ variant_id: string; shopify_variant_id: string }>(checkVariants, (chunk) =>
+    db.from("variant_store_links").select("variant_id, shopify_variant_id").eq("store_id", store.id).in("variant_id", chunk).not("shopify_variant_id", "is", null));
+  const gone = stale.filter((l) => !liveGids.has(l.shopify_variant_id)).map((l) => l.shopify_variant_id);
+  for (let i = 0; i < gone.length; i += 100) {
+    const { error } = await db.from("variant_store_links").update({ shopify_variant_id: null, shopify_inventory_item_id: null, price: null, updated_at: new Date().toISOString() })
+      .eq("store_id", store.id).in("shopify_variant_id", gone.slice(i, i + 100));
+    if (error) throw error;
+  }
+
   return { products: products.length, variants: allVariants.length, created };
 }
 

@@ -11,6 +11,7 @@ import { ksefCheck, ksefConfigured } from "@/lib/ksef/client";
 import { lookupNip } from "@/lib/invoices/nip-lookup";
 import { emailInvoice, maybeAutoEmail } from "@/lib/invoices/email";
 import { findVariantIds } from "@/lib/queries/units";
+import { adjustStock } from "@/lib/stock";
 
 export type InvoiceFormState = { error?: string } | null;
 
@@ -63,6 +64,14 @@ export async function createInvoiceAction(_: InvoiceFormState, fd: FormData): Pr
     return { error: "Potwierdź stawki VAT pozycji oznaczonych na pomarańczowo (brak sztuki z magazynu)." };
   }
 
+  // Faktura „ręczna” ze sztukami z magazynu = sprzedaż: sztuki muszą być na stanie (potem schodzą ze stanu).
+  const manualUnits = !orderId && !posOrderId ? [...new Set(items.map((i) => i.unit_id).filter((x): x is string => !!x))] : [];
+  if (manualUnits.length) {
+    const { data: us } = await db.from("units").select("id, code, status").in("id", manualUnits);
+    const bad = (us ?? []).filter((u) => !["in_stock", "reserved"].includes(u.status as string));
+    if (bad.length || (us ?? []).length !== manualUnits.length) return { error: `Sztuka ${bad.map((u) => u.code).join(", ") || "z faktury"} nie jest na stanie – nie można jej sprzedać fakturą.` };
+  }
+
   const draft: InvoiceDraft = {
     buyer: { name, nip: nip || null, address1: s(fd, "address1") || null, address2: s(fd, "address2") || null, country, email: s(fd, "email") || null, company },
     issueDate, saleDate, paymentMethod: method, paid,
@@ -78,6 +87,17 @@ export async function createInvoiceAction(_: InvoiceFormState, fd: FormData): Pr
     return { error: errorMessage(e) };
   }
   if (fd.get("save_customer") === "1") await saveCustomer(db, draft.buyer, profile.id);
+  let stockNote = "";
+  if (manualUnits.length) {
+    const { data: sold } = await db.from("units").update({ status: "sold", sold_at: new Date().toISOString() })
+      .in("id", manualUnits).in("status", ["in_stock", "reserved"]).select("id, variant_id, location_id");
+    if (sold?.length) {
+      await db.from("unit_events").insert(sold.map((u) => ({ unit_id: u.id, type: "sold", data: { invoice_id: id, note: "sprzedaż na fakturę" }, created_by: profile.id })));
+      const r = await adjustStock(db, sold.map((u) => ({ variantId: u.variant_id as string, locationId: u.location_id as string, delta: -1 })));
+      const failed = r.filter((x) => !x.ok);
+      stockNote = failed.length ? ` Uwaga: stan w Shopify nie zmieniony (${failed.map((f) => f.message).join("; ")}) – popraw go ręcznie.` : ` Sztuki zdjęte ze stanu (${sold.length}).`;
+    }
+  }
   let msg = "Faktura wystawiona.";
   const toKsef = fd.get("send_ksef") === "1" && ksefConfigured();
   if (toKsef) {
@@ -90,6 +110,7 @@ export async function createInvoiceAction(_: InvoiceFormState, fd: FormData): Pr
   }
   // E-mail do nabywcy: od razu (bez KSeF) albo po przyjęciu w KSeF (także później, z zadania cyklicznego).
   const mailed = await maybeAutoEmail(db, id, { force: !toKsef });
+  msg += stockNote;
   if (mailed) msg += ` Wysłana e-mailem na ${mailed}.`;
   else if (draft.buyer.email && toKsef) msg += " E-mail do nabywcy pójdzie po przyjęciu w KSeF.";
   revalidatePath("/sprzedaz");

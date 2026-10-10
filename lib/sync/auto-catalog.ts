@@ -143,8 +143,10 @@ export async function runAutoCatalog(db: SupabaseClient, force = false) {
   await db.from("sync_state").upsert({ key: "auto_catalog", value: { at: new Date().toISOString() }, updated_at: new Date().toISOString() });
   // Ręcznie (przycisk) – cały katalog do ~4 min; z automatu – do 1,5 min, reszta przy kolejnym odczycie.
   const shopify = await syncShopifyProductsIncremental(db, force ? 200 : 20, Date.now() + (force ? 210_000 : 90_000));
+  // Produkty, których nie ma już w Shopify: sztuki bez historii znikają (z umową / sprzedażą – zostają z oznaczeniem).
+  const { data: purged, error: purgeErr } = await db.rpc("purge_non_shopify", { p_dry_run: false, p_max: 100 });
   const base = await syncNewBaseProducts(db);
   // Stany wyłącznie ze Shopify (albo z aplikacji do Shopify) – Base nie wpływa na liczbę sztuk.
   const stock = await syncStock(db);
-  return { shopify, base, stock };
+  return { shopify, base, stock, notInShopify: purgeErr ? purgeErr.message : purged };
 }

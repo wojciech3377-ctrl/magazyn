@@ -31,15 +31,15 @@ export default async function DeliveryPage({ params }: { params: Promise<{ id: s
         }
       />
       <div className="mb-4 space-y-2">
-        {d.base_sync_status === "ok" && <Notice tone="ok">Stan w Base zaktualizowany. Base zmieni stan w sklepie przy najbliższej synchronizacji.</Notice>}
-        {d.base_sync_status === "skipped" && <Notice>Towar w drodze – stan w Base podniesiesz, przyjmując sztuki na stan w Magazynie.</Notice>}
+        {d.base_sync_status === "ok" && <Notice tone="ok">Stan w Shopify zaktualizowany.</Notice>}
+        {d.base_sync_status === "skipped" && <Notice>Towar w drodze – stan w Shopify podniesiesz, przyjmując sztuki na stan w Magazynie.</Notice>}
         {d.base_sync_status === "error" && (
           <Notice tone="error">
-            <div className="whitespace-pre-line">Base: {d.base_sync_error}</div>
+            <div className="whitespace-pre-line">Stan w Shopify nie zmieniony: {d.base_sync_error}</div>
             {(d.base_pending as unknown[]).length > 0 && (
               <form action={retryDeliveryBase} className="mt-2">
                 <input type="hidden" name="id" value={d.id} />
-                <SubmitButton className="btn-secondary" pendingText="Wysyłam…">Wyślij ponownie do Base</SubmitButton>
+                <SubmitButton className="btn-secondary" pendingText="Wysyłam…">Wyślij ponownie do Shopify</SubmitButton>
               </form>
             )}
           </Notice>

@@ -175,7 +175,7 @@ export function PosForm({ stores }: { stores: { id: string; name: string }[] }) 
           </div>
           {state?.error && <p className="text-sm text-bad">{state.error}</p>}
           <button className="btn w-full py-3 text-base" disabled={submitting || !lines.length}>{submitting ? "Zapisuję…" : "Zakończ sprzedaż"}</button>
-          <p className="text-xs text-muted">Sztuki zmienią status na „sprzedana”, a stan w Base spadnie o 1 za każdą (Base zaktualizuje sklepy). Paragon wystawiasz na kasie fiskalnej jak dotąd.</p>
+          <p className="text-xs text-muted">Sztuki zmienią status na „sprzedana”, a stan w Shopify spadnie o 1 za każdą. Paragon wystawiasz na kasie fiskalnej jak dotąd.</p>
         </section>
       </div>
     </form>

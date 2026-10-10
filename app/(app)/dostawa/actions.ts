@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import { requireProfile } from "@/lib/auth";
 import { fillContractNumber } from "@/lib/contracts/docnumber";
 import { findVariantIds } from "@/lib/queries/units";
-import { adjustBaseStock } from "@/lib/stock";
+import { adjustStock } from "@/lib/stock";
 import { parseAmount, uploadedFile } from "@/lib/contracts/upload";
 
 export type VariantHit = {
@@ -110,9 +110,9 @@ export async function createDelivery(_: unknown, formData: FormData): Promise<{ 
       deliveryId = data as string;
     }
 
-    // Stan w Base: +N dla każdego rozmiaru, tak jak ręczne 0 → 1.
+    // Stan w Shopify (i pomocniczo w Base): +N dla każdego rozmiaru.
     if (status === "in_stock") {
-      const results = await adjustBaseStock(supabase, lines.map((l) => ({ variantId: l.variantId, locationId, delta: l.quantity })));
+      const results = await adjustStock(supabase, lines.map((l) => ({ variantId: l.variantId, locationId, delta: l.quantity })));
       await saveBaseResult(supabase, deliveryId!, results);
     } else {
       await supabase.from("deliveries").update({ base_sync_status: "skipped" }).eq("id", deliveryId!);
@@ -120,7 +120,7 @@ export async function createDelivery(_: unknown, formData: FormData): Promise<{ 
   } catch (e) {
     const msg = e instanceof Error ? e.message : typeof e === "object" && e && "message" in e ? String((e as { message: unknown }).message) : String(e);
     if (!deliveryId) return { error: msg };
-    // Zapisane linie jeszcze nie trafiły do Base – zostają do ponowienia z ekranu dostawy.
+    // Zapisane linie jeszcze nie trafiły do Shopify – zostają do ponowienia z ekranu dostawy.
     const { data: saved } = await supabase.from("units").select("variant_id, location_id").eq("delivery_id", deliveryId).eq("status", "in_stock");
     const pending = new Map<string, { variantId: string; locationId: string; delta: number }>();
     for (const u of saved ?? []) {
@@ -140,7 +140,7 @@ export async function createDelivery(_: unknown, formData: FormData): Promise<{ 
 async function saveBaseResult(
   supabase: Awaited<ReturnType<typeof requireProfile>>["supabase"],
   deliveryId: string,
-  results: Awaited<ReturnType<typeof adjustBaseStock>>,
+  results: Awaited<ReturnType<typeof adjustStock>>,
 ) {
   const failed = results.filter((r) => !r.ok);
   await supabase.from("deliveries").update({
@@ -150,13 +150,13 @@ async function saveBaseResult(
   }).eq("id", deliveryId);
 }
 
-/** Ponowienie tych zmian stanu w Base, które za pierwszym razem się nie udały. */
+/** Ponowienie tych zmian stanu w Shopify, które za pierwszym razem się nie udały. */
 export async function retryDeliveryBase(formData: FormData) {
   const { supabase } = await requireProfile();
   const id = String(formData.get("id"));
   const { data: d } = await supabase.from("deliveries").select("base_pending").eq("id", id).single();
   const pending = (d?.base_pending ?? []) as { variantId: string; locationId: string; delta: number }[];
-  const results = await adjustBaseStock(supabase, pending);
+  const results = await adjustStock(supabase, pending);
   await saveBaseResult(supabase, id, results);
   redirect(`/dostawa/${id}`);
 }

@@ -222,3 +222,48 @@ export async function syncStock(db: SupabaseClient) {
   const result = master === "app" ? await pushStockToShopify(db) : await reconcileFromShopify(db);
   return { master, ...(mapped.length ? { mapped } : {}), result };
 }
+
+export type StockDiff = { store: string; title: string; option: string; shopify: number; app: number; waitingSince: string | null };
+
+/** Porównanie stanu Shopify ↔ aplikacja (rozmiary, które się różnią) – do podglądu w Ustawieniach. */
+export async function compareStock(db: SupabaseClient, limit = 300) {
+  const { stores, locs } = await storesAndLocations(db);
+  const diffs: (Omit<StockDiff, "title" | "option"> & { variantId: string; locationId: string })[] = [];
+  const notes: string[] = [];
+  for (const s of stores) {
+    const mapped = locs.filter((l) => l.store_id === s.id && l.active && l.shopify_location_id);
+    if (!mapped.length) { notes.push(`${s.name}: brak lokalizacji Shopify przy lokalizacjach aplikacji`); continue; }
+    const links = await trackedLinks(db, s.id);
+    const { data: counts, error } = await db.rpc("stock_counts", { p_location_ids: mapped.map((l) => l.id) });
+    if (error) throw error;
+    for (const [shopLoc, group] of groupByShopLocation(mapped)) {
+      const levels = await readLevels(s.shopify_domain, s.code, shopLoc);
+      const ids = new Set(group.map((g) => g.id));
+      const app = new Map<string, number>();
+      for (const c of (counts ?? []) as { variant_id: string; location_id: string; qty: number }[]) if (ids.has(c.location_id)) app.set(c.variant_id, (app.get(c.variant_id) ?? 0) + c.qty);
+      const shop = new Map<string, number>();
+      for (const l of links) if (levels.has(l.shopify_inventory_item_id)) shop.set(l.variant_id, Math.max(shop.get(l.variant_id) ?? 0, levels.get(l.shopify_inventory_item_id)!));
+      for (const v of new Set([...shop.keys(), ...app.keys()])) {
+        const a = app.get(v) ?? 0;
+        const sh = shop.get(v);
+        if (sh === undefined || sh === a) continue;
+        diffs.push({ store: s.name, variantId: v, locationId: group[0].id, shopify: Math.max(0, sh), app: a, waitingSince: null });
+      }
+    }
+  }
+  const top = diffs.slice(0, limit);
+  const vids = [...new Set(top.map((d) => d.variantId))];
+  const names = new Map<string, { title: string; option: string }>();
+  for (let i = 0; i < vids.length; i += 150) {
+    const { data } = await db.from("variants").select("id, option, product:products(title)").in("id", vids.slice(i, i + 150));
+    for (const v of data ?? []) names.set(v.id as string, { title: (v.product as unknown as { title: string } | null)?.title ?? "", option: v.option as string });
+  }
+  const { data: waiting } = vids.length ? await db.from("stock_excess").select("variant_id, location_id, first_seen_at").in("variant_id", vids) : { data: [] };
+  const since = new Map((waiting ?? []).map((w) => [`${w.variant_id}|${w.location_id}`, w.first_seen_at as string]));
+  return {
+    total: diffs.length,
+    notes,
+    rows: top.map((d): StockDiff => ({ store: d.store, ...(names.get(d.variantId) ?? { title: "?", option: "" }), shopify: d.shopify, app: d.app, waitingSince: since.get(`${d.variantId}|${d.locationId}`) ?? null }))
+      .sort((a, b) => a.title.localeCompare(b.title, "pl")),
+  };
+}

@@ -9,7 +9,7 @@ import { getBuyerSignature, getCompany } from "@/lib/contracts/settings";
 import { mailConfigured } from "@/lib/mail";
 import { ContractSettings } from "./ContractSettings";
 import { addExclusion, createUser, deleteExclusion, disconnectFurgonetka, importInitialStock, purgeExcluded, purgeNonShopify, registerWebhooks, runStockNow, saveInvoiceSettings, saveLocation, saveSender, saveShopifyLocation, saveStockMaster, saveStore, saveUser } from "./actions";
-import { getStockMaster, planPushToShopify, shopifyLocations, type ShopifyLocation } from "@/lib/sync/shopify-stock";
+import { compareStock, getStockMaster, planPushToShopify, shopifyLocations, type ShopifyLocation } from "@/lib/sync/shopify-stock";
 import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/furgonetka";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getSender } from "@/lib/orders/sender";
@@ -74,9 +74,10 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
         const shopLocs = new Map<string, { data: ShopifyLocation[] | null; error: string | null }>();
         for (const st of (stores ?? []).filter((x) => x.shopify_domain)) shopLocs.set(st.id, await safe(() => shopifyLocations(st.shopify_domain as string, st.code as string)));
         const plan = sp.podglad === "1" ? await safe(() => planPushToShopify(db)) : null;
+        const compare = sp.porownaj === "1" ? await safe(() => compareStock(db)) : null;
         const { data: last } = await db.from("sync_log").select("job, ok, message, created_at").in("job", ["stock", "auto-catalog"]).order("created_at", { ascending: false }).limit(1).maybeSingle();
         const { data: purge } = await supabase.rpc("purge_non_shopify", { p_dry_run: true });
-        return { master, shopLocs, plan, last, purge: purge as { units: number; kept: number; variants: number } | null };
+        return { master, shopLocs, plan, compare, last, purge: purge as { units: number; kept: number; variants: number } | null };
       })()
     : null;
   // Stan webhooków („na żywo”) każdego sklepu.
@@ -306,9 +307,37 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
             </div>
             <div className="flex flex-wrap items-center gap-2 border-t border-line pt-4">
               <form action={runStockNow}><SubmitButton className="btn-secondary" pendingText="Sprawdzam…">Sprawdź stany teraz</SubmitButton></form>
+              <Link className="btn-secondary" href="/ustawienia?zakladka=stany&porownaj=1">Porównaj stany: Shopify ↔ aplikacja</Link>
               <Link className="btn-secondary" href="/ustawienia?zakladka=stany&podglad=1">Pokaż różnice: aplikacja → Shopify</Link>
               {stock.last && <span className="text-xs text-muted">Ostatnio: {dateTime(stock.last.created_at)} {stock.last.ok ? "" : "(błąd)"}</span>}
             </div>
+            {stock.compare && (stock.compare.error
+              ? <Notice tone="error">{stock.compare.error}</Notice>
+              : stock.compare.data && (
+                <div className="space-y-2">
+                  {stock.compare.data.notes.map((n) => <Notice key={n}>{n}</Notice>)}
+                  <p className="text-sm">{stock.compare.data.total ? <>Różni się <b>{stock.compare.data.total}</b> rozmiarów (sztuki na stanie w aplikacji vs „dostępne” w Shopify):</> : "Stany w aplikacji i w Shopify są zgodne."}</p>
+                  {stock.compare.data.rows.length > 0 && (
+                    <div className="max-h-96 overflow-auto rounded-md border border-line">
+                      <table className="table text-sm">
+                        <thead><tr><th>Sklep</th><th>Produkt</th><th>Rozmiar</th><th className="text-right">Shopify</th><th className="text-right">Aplikacja</th><th>Stan</th></tr></thead>
+                        <tbody>
+                          {stock.compare.data.rows.map((r, i) => (
+                            <tr key={i}>
+                              <td className="whitespace-nowrap text-muted">{r.store}</td>
+                              <td>{r.title}</td>
+                              <td className="font-medium">{r.option}</td>
+                              <td className="text-right tabular-nums">{r.shopify}</td>
+                              <td className="text-right tabular-nums">{r.app}</td>
+                              <td className="text-xs text-muted">{r.waitingSince ? `czeka na potwierdzenie od ${dateTime(r.waitingSince)}` : r.shopify > r.app ? "dojdzie przy odczycie" : "nadmiar w aplikacji (sztuki z historią zostają)"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              ))}
             {stock.plan && (stock.plan.error
               ? <Notice tone="error">{stock.plan.error}</Notice>
               : (

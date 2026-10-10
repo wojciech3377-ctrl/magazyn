@@ -59,6 +59,7 @@ export type UnitRow = {
   notes: string | null;
   consignor: { id: string; name: string } | null;
   price_error?: string | null;     // dlaczego nie ma ceny ze sklepu (z widoku units_list)
+  shop_missing?: boolean;          // rozmiaru nie ma w żadnym sklepie Shopify
   contract: { id: string; type: string; counterparty: string } | null;
   location: { id: string; name: string; store_id: string; store: { id: string; name: string } };
   variant: { id: string; option: string; links: { store_id: string; base_sku: string | null; price: number | null }[]; product: { id: string; title: string; style_sku: string | null; image_url: string | null } };
@@ -71,6 +72,7 @@ type ListRow = {
   location_id: string; location_name: string; store_id: string; store_name: string; consignor_id: string | null; consignor_name: string | null;
   contract_type: string | null; contract_counterparty: string | null; shop_price: number | null; base_sku: string | null;
   shop_price_error?: string | null;
+  shop_missing?: boolean | null;
 };
 
 const num = (v: string | undefined) => (v && v.trim() !== "" && Number.isFinite(Number(v.replace(",", "."))) ? Number(v.replace(",", ".")) : null);
@@ -123,7 +125,7 @@ export async function queryUnits(db: SupabaseClient, f: UnitFilters, range?: [nu
   const rows = ((data ?? []) as ListRow[]).map((r): UnitRow => ({
     id: r.id, code: r.code, status: r.status, owner_type: r.owner_type, purchase_form: r.purchase_form, purchase_price: r.purchase_price,
     payout_amount: r.payout_amount, identifier: r.identifier, shelf: r.shelf, received_at: r.received_at, sold_at: r.sold_at,
-    contract_id: r.contract_id, notes: r.notes, price_error: r.shop_price_error ?? null,
+    contract_id: r.contract_id, notes: r.notes, price_error: r.shop_price_error ?? null, shop_missing: !!r.shop_missing,
     consignor: r.consignor_id ? { id: r.consignor_id, name: r.consignor_name ?? "" } : null,
     contract: r.contract_id ? { id: r.contract_id, type: r.contract_type ?? "", counterparty: r.contract_counterparty ?? "umowa" } : null,
     location: { id: r.location_id, name: r.location_name, store_id: r.store_id, store: { id: r.store_id, name: r.store_name } },

@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { requireAdmin, requireProfile } from "@/lib/auth";
 import { addReceipt } from "@/lib/integrations/base";
 import { errorMessage } from "@/lib/errors";
-import { adjustBaseStock, type StockChange } from "@/lib/stock";
+import { adjustStock, type StockChange } from "@/lib/stock";
 import type { LineItem } from "@/lib/sync/shop-orders";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { accountServices, cancelPackages, createPackage, deletePackage, furgonetkaConnection, getPackage, orderPackages, type Address, type NewPackage } from "@/lib/integrations/furgonetka";
@@ -218,7 +218,7 @@ async function releaseSales(saleIds: string[], backToStock: boolean, notes: stri
     }
   }
   if (changes.length) {
-    for (const r of await adjustBaseStock(supabase, changes)) if (!r.ok) notes.push(`Base: ${r.message}`);
+    for (const r of await adjustStock(supabase, changes)) if (!r.ok) notes.push(`Stan w Shopify: ${r.message}`);
   }
 }
 

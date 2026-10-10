@@ -5,7 +5,7 @@ import { runAutoCatalog } from "@/lib/sync/auto-catalog";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireAdmin, requireProfile } from "@/lib/auth";
-import { adjustBaseStock, type StockChange } from "@/lib/stock";
+import { adjustStock, type StockChange } from "@/lib/stock";
 import { parseAmount } from "@/lib/contracts/upload";
 import { errorMessage } from "@/lib/errors";
 
@@ -20,7 +20,7 @@ function back(path: string, msg: string, tone: "ok" | "error" = "ok"): never {
 function baseSummary(results: { ok: boolean; message: string }[]) {
   const failed = results.filter((r) => !r.ok);
   if (!results.length) return "";
-  return failed.length ? ` Uwaga, Base nie zaktualizowany: ${failed.map((f) => f.message).join("; ")}` : " Stan w Base zaktualizowany.";
+  return failed.length ? ` Uwaga, stan w Shopify nie zaktualizowany: ${failed.map((f) => f.message).join("; ")}` : " Stan w Shopify zaktualizowany.";
 }
 
 /** Akcje zbiorcze z listy Magazyn. */
@@ -51,7 +51,7 @@ export async function bulkAction(formData: FormData) {
     const { error: e } = await supabase.from("units").update({ location_id: locationId }).in("id", moved.map((u) => u.id));
     if (e) back(returnTo, e.message, "error");
     await supabase.from("unit_events").insert(moved.map((u) => ({ unit_id: u.id, type: "moved", data: { from: u.location_id, to: locationId } })));
-    const results = await adjustBaseStock(supabase, changes);
+    const results = await adjustStock(supabase, changes);
     revalidatePath("/magazyn");
     back(returnTo, `Przeniesiono ${moved.length} szt.${baseSummary(results)}`, results.some((r) => !r.ok) ? "error" : "ok");
   }
@@ -72,7 +72,7 @@ export async function bulkAction(formData: FormData) {
     const rows = (received ?? []) as { unit_id: string; variant_id: string; location_id: string; to_status: string }[];
     if (!rows.length) back(returnTo, "Żadna z zaznaczonych sztuk nie jest „w drodze”.", "error");
     const toStock = rows.filter((r) => r.to_status === "in_stock");
-    const results = await adjustBaseStock(supabase, toStock.map((u) => ({ variantId: u.variant_id, locationId: u.location_id, delta: 1 })));
+    const results = await adjustStock(supabase, toStock.map((u) => ({ variantId: u.variant_id, locationId: u.location_id, delta: 1 })));
     revalidatePath("/magazyn");
     const forOrders = rows.length - toStock.length;
     back(returnTo, `Przyjęto ${rows.length} szt.: na stan ${toStock.length}${forOrders ? `, do zamówień ${forOrders} (sprzedane)` : ""}.${baseSummary(results)}`, results.some((r) => !r.ok) ? "error" : "ok");
@@ -144,7 +144,7 @@ export async function changeStatus(formData: FormData) {
   if ((to === "return_to_stock" || to === "returned") && ["sold", "shipped", "returned"].includes(u!.status)) {
     const { error } = await supabase.rpc("return_unit", { p_unit_id: id, p_back_to_stock: to === "return_to_stock" });
     if (error) back(path, error.message, "error");
-    const results = to === "return_to_stock" ? await adjustBaseStock(supabase, [{ variantId: u!.variant_id, locationId: u!.location_id, delta: 1 }]) : [];
+    const results = to === "return_to_stock" ? await adjustStock(supabase, [{ variantId: u!.variant_id, locationId: u!.location_id, delta: 1 }]) : [];
     revalidatePath(path);
     back(path, `Zwrot zapisany.${baseSummary(results)}`, results.some((r) => !r.ok) ? "error" : "ok");
   }
@@ -154,7 +154,7 @@ export async function changeStatus(formData: FormData) {
     const { data: received, error } = await supabase.rpc("receive_in_transit", { p_unit_ids: [id] });
     if (error) back(path, error.message, "error");
     const row = ((received ?? []) as { to_status: string }[])[0];
-    const results = row?.to_status === "in_stock" ? await adjustBaseStock(supabase, [{ variantId: u!.variant_id, locationId: u!.location_id, delta: 1 }]) : [];
+    const results = row?.to_status === "in_stock" ? await adjustStock(supabase, [{ variantId: u!.variant_id, locationId: u!.location_id, delta: 1 }]) : [];
     revalidatePath(path);
     back(path, row?.to_status === "sold" ? "Sztuka dotarła i jest przypisana do zamówienia (sprzedana)." : `Przyjęto na stan.${baseSummary(results)}`, results.some((r) => !r.ok) ? "error" : "ok");
   }
@@ -176,7 +176,7 @@ export async function changeStatus(formData: FormData) {
   if (error) back(path, error.message, "error");
   if (!updated?.length) back(path, "Status sztuki zmienił się w międzyczasie (np. sprzedaż z Base). Odśwież i spróbuj ponownie.", "error");
   await supabase.from("unit_events").insert({ unit_id: id, type: "status", data: { from: u!.status, to } });
-  const results = delta ? await adjustBaseStock(supabase, [{ variantId: u!.variant_id, locationId: u!.location_id, delta }]) : [];
+  const results = delta ? await adjustStock(supabase, [{ variantId: u!.variant_id, locationId: u!.location_id, delta }]) : [];
   revalidatePath(path);
   back(path, `Status zmieniony.${baseSummary(results)}`, results.some((r) => !r.ok) ? "error" : "ok");
 }
@@ -191,7 +191,7 @@ export async function deleteUnit(formData: FormData) {
   if (count) back(`/magazyn/${id}`, "Ta sztuka ma sprzedaż – nie można jej usunąć. Zmień status zamiast usuwać.", "error");
   const { error } = await supabase.from("units").delete().eq("id", id);
   if (error) back(`/magazyn/${id}`, error.message, "error");
-  const results = COUNTED.includes(u!.status) ? await adjustBaseStock(supabase, [{ variantId: u!.variant_id, locationId: u!.location_id, delta: -1 }]) : [];
+  const results = COUNTED.includes(u!.status) ? await adjustStock(supabase, [{ variantId: u!.variant_id, locationId: u!.location_id, delta: -1 }]) : [];
   revalidatePath("/magazyn");
   back("/magazyn", `Sztuka usunięta.${baseSummary(results)}`, results.some((r) => !r.ok) ? "error" : "ok");
 }

@@ -184,6 +184,7 @@ update public.stock_excess set first_seen_at = now() - interval '1 hour';
 select public.reconcile_stock('[{"variant_id":"20000000-0000-0000-0000-000000000004","location_id":"60000000-0000-0000-0000-000000000009","qty":0}]', 300, 'Shopify', array['60000000-0000-0000-0000-000000000009'::uuid], 10, true, 30) as surplus_removed;
 select count(*) as left_units, count(contract_id) as with_contract from public.units where variant_id = '20000000-0000-0000-0000-000000000004';
 select public.purge_non_shopify(true) as preview;
-select public.purge_non_shopify(false) as purged;
+select public.purge_non_shopify(false, 100) as purged;
+select count(*) filter (where shop_missing) as missing_flagged from public.units_list;
 select count(*) as base_only_products from public.products where id = '10000000-0000-0000-0000-000000000003';
 rollback;

@@ -173,6 +173,12 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
                       <span>
                         <span className="block font-medium leading-tight hover:underline">{u.variant.product.title}</span>
                         <span className="text-xs text-muted">{u.variant.product.style_sku ?? "bez SKU"}</span>
+                        {u.shop_missing && (
+                          <span className="mt-0.5 flex flex-wrap gap-1">
+                            <span className="rounded bg-rose-100 px-1.5 py-0.5 text-[11px] font-semibold text-bad" title="Tego rozmiaru nie ma w żadnym sklepie Shopify">brak w Shopify</span>
+                            {u.contract_id && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-semibold text-amber-800" title="Sztuka ma umowę – nie usuwamy jej automatycznie">umowa nadal aktywna</span>}
+                          </span>
+                        )}
                       </span>
                     </Link>
                   </td>

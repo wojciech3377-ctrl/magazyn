@@ -43,14 +43,14 @@ export default async function PosOrderPage({ params, searchParams }: { params: P
         {receipt && <span className="text-muted">· {dateTime(receipt.issued_at)}</span>}
       </div>
       <div className="mb-4">
-        {o.base_sync_status === "ok" && <Notice tone="ok">Stan w Base zmniejszony. Base zaktualizuje sklepy.</Notice>}
+        {o.base_sync_status === "ok" && <Notice tone="ok">Stan w Shopify zmniejszony.</Notice>}
         {o.base_sync_status === "error" && (
           <Notice tone="error">
-            <div className="whitespace-pre-line">Base: {o.base_sync_error}</div>
+            <div className="whitespace-pre-line">Stan w Shopify nie zmieniony: {o.base_sync_error}</div>
             {(o.base_pending as unknown[]).length > 0 && (
               <form action={retryPosBase} className="mt-2">
                 <input type="hidden" name="id" value={o.id} />
-                <SubmitButton className="btn-secondary" pendingText="Wysyłam…">Wyślij ponownie do Base</SubmitButton>
+                <SubmitButton className="btn-secondary" pendingText="Wysyłam…">Wyślij ponownie do Shopify</SubmitButton>
               </form>
             )}
           </Notice>
