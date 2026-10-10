@@ -242,8 +242,8 @@ export async function runStockNow(formData: FormData) {
     const r = await syncStock(db, { force });
     await db.from("sync_log").insert({ job: "stock", ok: true, message: JSON.stringify(r) });
     const parts = Object.entries(r.result as Record<string, unknown>).map(([store, x]) => {
-      const v = x as { created?: number; removed?: number; waiting?: number; kept?: number } | string;
-      return typeof v === "string" ? `${store}: ${v}` : `${store}: +${v.created ?? 0} / −${v.removed ?? 0}${v.waiting ? `, czeka ${v.waiting}` : ""}${v.kept ? `, z historią zostaje ${v.kept}` : ""}`;
+      const v = x as { created?: number; removed?: number; withdrawn?: number; waiting?: number; kept?: number } | string;
+      return typeof v === "string" ? `${store}: ${v}` : `${store}: dodano ${v.created ?? 0}, usunięto ${v.removed ?? 0}${v.withdrawn ? `, wycofano (z historią) ${v.withdrawn}` : ""}${v.waiting ? `, czeka na potwierdzenie ${v.waiting}` : ""}${v.kept ? `, zostaje ${v.kept} (komis albo reszta przy kolejnym odczycie)` : ""}`;
     });
     await done(`Stany sprawdzone. ${parts.join(" · ")}`);
   } catch (e) {

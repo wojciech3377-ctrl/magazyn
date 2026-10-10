@@ -78,6 +78,21 @@ export async function bulkAction(formData: FormData) {
     back(returnTo, `Przyjęto ${rows.length} szt.: na stan ${toStock.length}${forOrders ? `, do zamówień ${forOrders} (sprzedane)` : ""}.${baseSummary(results)}`, results.some((r) => !r.ok) ? "error" : "ok");
   }
 
+  if (action === "consignor_return") {
+    // Wysyłka do komisanta: rzecz komisowa wychodzi z magazynu (stan w Shopify −1), historia zostaje w karcie sztuki.
+    const { data: cons } = await supabase.from("units").select("id, status, owner_type, variant_id, location_id, consignor_id").in("id", ids);
+    const ok = (cons ?? []).filter((u) => u.owner_type === "consignment" && ["in_stock", "reserved", "returned"].includes(u.status as string));
+    if (!ok.length) back(returnTo, "Zaznacz rzeczy komisowe, które są na stanie.", "error");
+    const { error: e } = await supabase.from("units").update({ status: "consignor_returned" }).in("id", ok.map((u) => u.id));
+    if (e) back(returnTo, e.message, "error");
+    await supabase.from("unit_events").insert(ok.map((u) => ({ unit_id: u.id, type: "consignor_returned", data: { consignor_id: u.consignor_id, note: "wysyłka do komisanta" } })));
+    const counted = ok.filter((u) => COUNTED.includes(u.status as string));
+    const results = await adjustStock(supabase, counted.map((u) => ({ variantId: u.variant_id as string, locationId: u.location_id as string, delta: -1 })));
+    revalidatePath("/magazyn");
+    const skipped = ids.length - ok.length;
+    back(returnTo, `Oddano komisantowi ${ok.length} szt.${skipped ? ` Pominięto ${skipped} (nie komis albo nie na stanie).` : ""}${baseSummary(results)}`, results.some((r) => !r.ok) ? "error" : "ok");
+  }
+
   if (action === "delete") {
     // Usuwanie z aplikacji (np. pomyłki, usługi z importu) – tylko administrator, stan w Base bez zmian.
     if (profile.role !== "admin") back(returnTo, "Usuwać sztuki może tylko administrator.", "error");
@@ -204,13 +219,13 @@ export async function runAutoCatalogNow() {
   let ok = true;
   try {
     const r = await runAutoCatalog(db, true);
-    const sum = (vals: unknown[], key: "created" | "changed" | "removed" | "waiting") => vals.reduce<number>((n, x) => n + (typeof x === "object" && x && key in x ? Number((x as Record<string, unknown>)[key]) || 0 : 0), 0);
+    const sum = (vals: unknown[], key: "created" | "changed" | "removed" | "waiting" | "withdrawn") => vals.reduce<number>((n, x) => n + (typeof x === "object" && x && key in x ? Number((x as Record<string, unknown>)[key]) || 0 : 0), 0);
     const pendingShops = r?.shopify.__pending ?? 0;
     const products = Object.entries(r?.shopify ?? {}).filter(([k]) => k !== "__pending").reduce((n, [, x]) => n + x, 0);
     const stockVals = Object.values(r?.stock.result ?? {});
     const stockMsg = r?.stock.master === "app"
       ? `zmieniono ${sum(stockVals, "changed")} stanów w Shopify (główny: magazyn aplikacji)`
-      : `ze stanów Shopify: dodano ${sum(stockVals, "created")}, usunięto ${sum(stockVals, "removed")} sztuk (czeka na potwierdzenie: ${sum(stockVals, "waiting")})`;
+      : `ze stanów Shopify: dodano ${sum(stockVals, "created")}, usunięto ${sum(stockVals, "removed")}, wycofano ${sum(stockVals, "withdrawn")} sztuk (czeka na potwierdzenie: ${sum(stockVals, "waiting")})`;
     msg = `Sprawdzono: ${products} produktów ze Shopify${pendingShops ? " (katalog jest duży – reszta dojdzie przy kolejnym kliknięciu albo odczycie co 15 min)" : " – cały katalog"}, ${r?.base.added ?? 0} nowych w Base, ${stockMsg}.`;
     await db.from("sync_log").insert({ job: "auto-catalog", ok: true, message: JSON.stringify(r) });
   } catch (e) {

@@ -13,6 +13,7 @@ const TABS = [
   { key: "done", label: "Gotowe", categories: ["done"] },
   { key: "pending", label: "Oczekujące", categories: ["pending"] },
   { key: "rejected", label: "Odrzucone", categories: ["rejected"] },
+  { key: "bez-rzeczy", label: "Bez rzeczy (niewykorzystane)", categories: [] as string[] },
 ] as const;
 
 type Row = {
@@ -40,18 +41,21 @@ export default async function UmowyPage({ searchParams }: { searchParams: Promis
   const tab = TABS.some((t) => t.key === sp.kategoria) ? sp.kategoria ?? "" : "";
 
   let query = supabase
-    .from("contract_overview")
+    .from(sp.kategoria === "bez-rzeczy" ? "contract_overview_unused" : "contract_overview")
     .select("*", { count: "exact" })
     .order("created_at", { ascending: false })
     .range((page - 1) * PER_PAGE, page * PER_PAGE - 1);
   const active = TABS.find((t) => t.key === tab)!;
   if (active.categories.length) query = query.in("category", [...active.categories]);
+  // „Magazyn umów”: umowy, z którymi żadna rzecz nie jest w magazynie, nie jest sprzedana ani w drodze.
+  const { count: unusedCount } = await supabase.from("contracts_unused").select("id", { count: "exact", head: true });
   if (sp.q) query = query.ilike("counterparty", `%${sp.q.replace(/[%,()]/g, "")}%`);
   if (sp.typ) query = query.eq("type", sp.typ);
   if (sp.plik === "brak") query = query.is("file_path", null);
 
   const counts = await Promise.all(
     TABS.map((t) => {
+      if (t.key === "bez-rzeczy") return Promise.resolve({ count: unusedCount ?? 0 });
       let q = supabase.from("contract_overview").select("id", { count: "exact", head: true });
       if (t.categories.length) q = q.in("category", [...t.categories]);
       return q;

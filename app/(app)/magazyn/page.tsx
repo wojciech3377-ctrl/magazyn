@@ -60,11 +60,13 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
     );
   };
 
+  const { count: unusedContracts } = await supabase.from("contracts_unused").select("id", { count: "exact", head: true });
+
   return (
     <>
       <PageHeader
         title="Magazyn"
-        sub={<>{count} szt. w widoku{noContract ? <> · <Link className="text-accent underline" href="/magazyn?umowa=brak">{noContract} na stanie bez umowy</Link></> : null}</>}
+        sub={<>{count} szt. w widoku{noContract ? <> · <Link className="text-accent underline" href="/magazyn?umowa=brak">{noContract} na stanie bez umowy</Link></> : null}{unusedContracts ? <> · <Link className="text-accent underline" href="/umowy?kategoria=bez-rzeczy">{unusedContracts} umów bez rzeczy</Link></> : null}</>}
         actions={
           <>
             {profile.role === "admin" && <form action={runAutoCatalogNow}><SubmitButton className="btn-secondary" pendingText="Sprawdzam…">Sprawdź nowe produkty i stany</SubmitButton></form>}
@@ -252,6 +254,9 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
           </div>
           <button type="submit" className="btn-secondary" formAction="/umowy/z-szablonu" formMethod="get">Umowa dla zaznaczonych</button>
           <SubmitButton className="btn-secondary" name="action" value="receive">Przyjmij na stan (z „w drodze”)</SubmitButton>
+          <ConfirmSubmit name="action" value="consignor_return" className="btn-secondary" message="Oddać zaznaczone rzeczy komisantowi? Znikną z magazynu (stan w Shopify −1), historia zostanie w karcie sztuki.">
+            Wysyłka do komisanta
+          </ConfirmSubmit>
           <button type="submit" className="btn-secondary" formAction="/etykiety" formMethod="get" formTarget="_blank">Drukuj etykietę</button>
           {profile.role === "admin" && (
             <ConfirmSubmit name="action" value="delete" className="btn-danger ml-auto" message="Usunąć zaznaczone sztuki z aplikacji? Stan w Base się nie zmieni. Sztuk ze sprzedażą nie da się usunąć.">

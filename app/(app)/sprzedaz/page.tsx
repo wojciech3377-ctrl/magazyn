@@ -29,7 +29,7 @@ const ORDER_TABS: { key: string; label: string }[] = [
 export default async function SprzedazPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const sp = await searchParams;
   const page = Math.max(1, Number(sp.strona ?? 1));
-  if (sp.widok === "stacjonarna") return <PosList page={page} />;
+  if (sp.widok === "stacjonarna") return <PosList page={page} q={sp.q ?? ""} />;
   if (sp.widok === "linie") return <SaleLines sp={sp} page={page} />;
   if (sp.widok === "jpk" || sp.widok === "faktury") {
     return (
@@ -333,28 +333,52 @@ function Tabs({ active }: { active: "orders" | "lines" | "pos" | "faktury" | "jp
 
 const PAYMENT: Record<string, string> = { card: "karta", cash: "gotówka", blik: "BLIK", transfer: "przelew", other: "inna" };
 
-async function PosList({ page }: { page: number }) {
+async function PosList({ page, q }: { page: number; q: string }) {
   const { supabase } = await requireProfile();
-  const { data, count } = await supabase
+  let query = supabase
     .from("pos_orders")
-    .select("id, code, total, payment_method, customer, created_at, base_sync_status, store:stores(name), items:pos_order_items(count)", { count: "exact" })
+    .select("id, code, total, payment_method, customer, created_at, base_sync_status, store:stores(name), items:pos_order_items(price, unit:units(code, identifier, variant:variants(option, product:products(title))))", { count: "exact" })
     .order("created_at", { ascending: false })
     .range((page - 1) * PER_PAGE, page * PER_PAGE - 1);
+  const text = q.replace(/[%,()*\\]/g, " ").trim();
+  if (text) {
+    // Szukanie po nazwie przedmiotu, SKU, kodzie sztuki, IMEI, numerze sprzedaży albo kliencie.
+    const { data: units } = await supabase.from("units_list").select("id")
+      .or(`title.ilike.%${text}%,style_sku.ilike.%${text}%,code.ilike.%${text}%,identifier.ilike.%${text}%,base_sku.ilike.%${text}%`).limit(300);
+    const unitIds = (units ?? []).map((u) => u.id as string);
+    const { data: items } = unitIds.length ? await supabase.from("pos_order_items").select("order_id").in("unit_id", unitIds).limit(500) : { data: [] };
+    const orderIds = [...new Set((items ?? []).map((i) => i.order_id as string))];
+    query = query.or([`code.ilike.%${text}%`, `customer.ilike.%${text}%`, ...(orderIds.length ? [`id.in.(${orderIds.slice(0, 150).join(",")})`] : [])].join(","));
+  }
+  const { data, count } = await query;
+  type PosItem = { price: number; unit: { code: string; identifier: string | null; variant: { option: string; product: { title: string } } | null } | null };
   return (
     <>
       <PageHeader title="Sprzedaż" sub="Sprzedaż stacjonarna z kasy." actions={<Link className="btn" href="/kasa">Nowa sprzedaż</Link>} />
       <Tabs active="pos" />
+      <form className="mb-4 flex flex-wrap gap-2" method="get">
+        <input type="hidden" name="widok" value="stacjonarna" />
+        <input className="input w-80" name="q" defaultValue={q} placeholder="Nazwa przedmiotu, SKU, kod sztuki, IMEI, numer, klient" aria-label="Szukaj sprzedaży stacjonarnej" />
+        <button className="btn">Szukaj</button>
+        {q && <Link className="btn-secondary" href="/sprzedaz?widok=stacjonarna">Wyczyść</Link>}
+      </form>
       <div className="card overflow-x-auto">
         <table className="table">
-          <thead><tr><th>Data</th><th>Numer</th><th>Sklep</th><th className="text-right">Sztuk</th><th>Płatność</th><th className="text-right">Kwota</th><th>Base</th></tr></thead>
+          <thead><tr><th>Data</th><th>Numer</th><th>Przedmioty</th><th>Sklep</th><th>Płatność</th><th className="text-right">Kwota</th><th>Stan</th></tr></thead>
           <tbody>
-            {!data?.length && <tr><td colSpan={7} className="py-10 text-center text-muted">Brak sprzedaży stacjonarnej.</td></tr>}
+            {!data?.length && <tr><td colSpan={7} className="py-10 text-center text-muted">{q ? "Nic nie znaleziono." : "Brak sprzedaży stacjonarnej."}</td></tr>}
             {data?.map((o) => (
               <tr key={o.id}>
                 <td className="whitespace-nowrap text-muted">{dateTime(o.created_at)}</td>
                 <td><Link className="font-medium text-accent hover:underline" href={`/kasa/${o.id}`}>{o.code}</Link>{o.customer && <span className="block text-xs text-muted">{o.customer}</span>}</td>
+                <td className="min-w-64 max-w-96">
+                  <ul className="space-y-0.5 text-sm">
+                    {((o.items ?? []) as unknown as PosItem[]).map((i, k) => (
+                      <li key={k} className="line-clamp-1">{i.unit?.variant ? <>{i.unit.variant.product.title} · <b>{i.unit.variant.option}</b></> : "–"} <span className="font-mono text-xs text-muted">{i.unit?.code}</span></li>
+                    ))}
+                  </ul>
+                </td>
                 <td>{(o.store as unknown as { name: string }).name}</td>
-                <td className="text-right tabular-nums">{(o.items as unknown as { count: number }[])[0]?.count ?? 0}</td>
                 <td>{PAYMENT[o.payment_method] ?? o.payment_method}</td>
                 <td className="text-right tabular-nums">{money(o.total)}</td>
                 <td><Pill tone={o.base_sync_status === "ok" ? "green" : "red"}>{o.base_sync_status === "ok" ? "ok" : "do sprawdzenia"}</Pill></td>
@@ -363,7 +387,7 @@ async function PosList({ page }: { page: number }) {
           </tbody>
         </table>
       </div>
-      <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={{ widok: "stacjonarna" }} />
+      <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={{ widok: "stacjonarna", q: q || undefined }} />
     </>
   );
 }

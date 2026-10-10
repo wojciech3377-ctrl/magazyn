@@ -113,10 +113,11 @@ export async function reconcileFromShopify(db: SupabaseClient, opts: { force?: b
     }
     const { data, error } = await db.rpc("reconcile_stock", {
       // Ręczne zatwierdzenie (po obejrzeniu porównania): bez limitu i bez czekania na potwierdzenie.
-      p_rows: [...best.values()], p_limit: opts.force ? 100000 : 300, p_source: `Shopify ${s.name}`, p_scope: mapped.map((l) => l.id),
+      // Magazyn = stan w Shopify: sztuki bez historii dochodzą / znikają bez limitu (po potwierdzeniu przy kolejnym odczycie),
+      // własne sztuki z historią są wycofywane po 50 na raz; komisu automat nie rusza.
+      p_rows: [...best.values()], p_limit: 100000, p_source: `Shopify ${s.name}`, p_scope: mapped.map((l) => l.id),
       p_confirm_minutes: opts.force ? 0 : 10,
-      // Stan tylko ze Shopify: nadmiarowe sztuki bez historii znikają, gdy różnica utrzyma się 30 min.
-      p_remove: true, p_surplus_minutes: opts.force ? 0 : 30,
+      p_remove: true, p_surplus_minutes: opts.force ? 0 : 30, p_history_limit: opts.force ? 100000 : 50,
     });
     if (error) throw error;
     results[s.name] = data;
