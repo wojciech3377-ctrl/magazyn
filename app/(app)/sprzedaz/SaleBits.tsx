@@ -23,7 +23,7 @@ export function SaleContract({ saleId, status, hasVariant, unit, pending }: { sa
           {pending.status === "sent" ? "czeka na podpis" : pending.status === "signed" ? "do zatwierdzenia" : pending.status === "rejected" ? "odrzucona" : "zatwierdzona"}
         </Link>
       ) : status === "no_unit" && hasVariant ? (
-        <Link className="btn-secondary px-2.5 py-1 text-xs" href={`/umowy/z-szablonu?sprzedaz=${saleId}`}>Generuj umowę</Link>
+        <Link className="btn-secondary px-2.5 py-1 text-xs" href={`/umowy/z-szablonu?sprzedaz=${saleId}`}>Dołącz umowę</Link>
       ) : unit ? (
         <Link className="btn-secondary px-2.5 py-1 text-xs" href={`/umowy/z-szablonu?ids=${unit.id}`}>Dodaj umowę</Link>
       ) : null}

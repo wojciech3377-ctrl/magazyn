@@ -45,7 +45,7 @@ export default async function TemplateContractPage({ searchParams }: { searchPar
       <PageHeader
         title="Umowa kupna z szablonu"
         sub="Ty ustalasz, co kupujesz i za ile. Sprzedający dostaje link, wpisuje swoje dane i podpisuje."
-        actions={<Link className="btn-secondary" href={`/umowy/nowa${ids.length ? `?${ids.map((i) => `ids=${i}`).join("&")}` : ""}`}>Mam papierową umowę – wgraj skan</Link>}
+        actions={<Link className="btn-secondary" href={`/umowy/nowa${ids.length ? `?${ids.map((i) => `ids=${i}`).join("&")}` : saleId ? `?sprzedaz=${saleId}` : ""}`}>Mam papierową umowę – wgraj skan</Link>}
       />
       <TemplateContractForm
         initialLines={lines}

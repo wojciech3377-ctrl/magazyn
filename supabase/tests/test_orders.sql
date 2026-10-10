@@ -66,3 +66,22 @@ end $$;
 select number from public.create_invoice('{"issue_date":"2026-10-10","seller":{},"buyer":{"name":"Jan"},"total_gross":1,"net_23":0,"vat_23":0,"margin_total":1}', '[{"name":"X","unit_price_gross":1,"total_gross":1,"vat":"margin"}]');
 select number, (select count(*) from public.invoice_items i where i.invoice_id = v.id) from public.invoices v order by seq;
 rollback;
+-- Umowa do sprzedanego przedmiotu bez sztuki.
+begin;
+insert into auth.users (id, email) values ('00000000-0000-0000-0000-000000000001', 'szef@example.com');
+insert into public.locations (store_id, name) select id, 'Sklep' from public.stores where code = 'sneakers-depot';
+insert into public.products (id, title) values ('10000000-0000-0000-0000-000000000009', 'Dunk');
+insert into public.variants (id, product_id, option) values ('20000000-0000-0000-0000-000000000009', '10000000-0000-0000-0000-000000000009', '42');
+insert into public.sales (id, store_id, base_order_id, base_order_product_id, variant_id, status)
+select '40000000-0000-0000-0000-000000000001', id, 77, 1, '20000000-0000-0000-0000-000000000009', 'no_unit' from public.stores where code = 'sneakers-depot';
+insert into public.contracts (id, type, counterparty) values ('50000000-0000-0000-0000-000000000001', 'purchase', 'Jan');
+select public.attach_sale_unit('40000000-0000-0000-0000-000000000001', '50000000-0000-0000-0000-000000000001', 300) is not null as attached;
+select s.status, u.status as unit_status, u.contract_id is not null as has_contract, u.purchase_price from public.sales s join public.units u on u.id = s.unit_id;
+do $$ begin
+  perform public.attach_sale_unit('40000000-0000-0000-0000-000000000001', '50000000-0000-0000-0000-000000000001', 300);
+  raise exception 'drugi raz nie powinno przejść';
+exception when others then
+  if sqlerrm like 'drugi raz%' then raise; end if;
+  raise notice 'OK: %', sqlerrm;
+end $$;
+rollback;

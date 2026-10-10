@@ -4,12 +4,14 @@ import { useActionState, useState } from "react";
 import { createContract } from "./actions";
 import { ContractFileInput } from "@/components/ContractFileInput";
 
-export function ContractForm({ consignors, defaultUnits, canSeePrices, returnTo = "" }: { consignors: { id: string; name: string }[]; defaultUnits: string; canSeePrices: boolean; returnTo?: string }) {
+export function ContractForm({ consignors, defaultUnits, canSeePrices, returnTo = "", saleId = null, saleLabel = null }: { consignors: { id: string; name: string }[]; defaultUnits: string; canSeePrices: boolean; returnTo?: string; saleId?: string | null; saleLabel?: string | null }) {
   const [state, action, pending] = useActionState(createContract, null);
   const [type, setType] = useState("purchase");
   return (
     <form action={action} className="card grid max-w-2xl gap-3 p-4 md:grid-cols-2">
       <input type="hidden" name="returnTo" value={returnTo} />
+      {saleId && <input type="hidden" name="sale_id" value={saleId} />}
+      {saleLabel && <p className="rounded-md bg-sky-50 p-2 text-sm md:col-span-2">Umowa do sprzedanego przedmiotu: <b>{saleLabel}</b>. Przedmiot dostanie sztukę w magazynie (sprzedaną) z tą umową; kwota umowy = cena zakupu.</p>}
       <div>
         <label className="label" htmlFor="type">Typ</label>
         <select className="input" id="type" name="type" value={type} onChange={(e) => setType(e.target.value)}>

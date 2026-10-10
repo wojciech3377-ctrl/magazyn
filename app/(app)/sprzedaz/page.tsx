@@ -313,8 +313,8 @@ async function PosList({ page }: { page: number }) {
 }
 
 /**
- * „Dołącz umowę” dla sprzedanych sztuk bez umowy (także gdy jedna z dwóch ma już umowę);
- * „Generuj umowę” dla linii bez sztuki na stanie. Nic, gdy wszystko ma umowy.
+ * „Dołącz umowę” dla każdego sprzedanego przedmiotu bez umowy – także już wysłanego (1 umowa na przedmiot):
+ * sztuki z magazynu bez umowy oraz pozycje bez sztuki (umowa utworzy dla nich sprzedaną sztukę).
  */
 function ContractAction({ sales, saleHasContract }: {
   sales: { id: string; status: string; variant_id: string | null; unit: { id: string; contract_id: string | null } | null }[];
@@ -322,11 +322,15 @@ function ContractAction({ sales, saleHasContract }: {
 }) {
   const live = sales.filter((s) => s.status !== "cancelled");
   const unitsWithout = live.filter((s) => s.unit && !s.unit.contract_id && !saleHasContract.has(s.id)).map((s) => s.unit!.id);
-  if (unitsWithout.length) {
-    return <Link className="btn-secondary relative z-10 whitespace-nowrap px-2.5 py-1 text-xs" href={`/umowy/z-szablonu?ids=${unitsWithout.join(",")}`}>Dołącz umowę{unitsWithout.length > 1 ? ` (${unitsWithout.length})` : ""}</Link>;
+  const noUnit = live.filter((s) => !s.unit && s.variant_id && !saleHasContract.has(s.id));
+  const btn = "btn-secondary relative z-10 whitespace-nowrap px-2.5 py-1 text-xs";
+  if (!unitsWithout.length && !noUnit.length) {
+    return live.some((s) => s.unit?.contract_id || saleHasContract.has(s.id)) ? <span className="whitespace-nowrap text-xs text-ok">umowa ✓</span> : null;
   }
-  const noUnit = live.find((s) => s.status === "no_unit" && s.variant_id && !saleHasContract.has(s.id));
-  if (noUnit) return <Link className="btn-secondary relative z-10 whitespace-nowrap px-2.5 py-1 text-xs" href={`/umowy/z-szablonu?sprzedaz=${noUnit.id}`}>Generuj umowę</Link>;
-  const has = live.some((s) => s.unit?.contract_id || saleHasContract.has(s.id));
-  return has ? <span className="whitespace-nowrap text-xs text-ok">umowa ✓</span> : null;
+  return (
+    <>
+      {unitsWithout.length > 0 && <Link className={btn} href={`/umowy/z-szablonu?ids=${unitsWithout.join(",")}`}>Dołącz umowę{unitsWithout.length > 1 ? ` (${unitsWithout.length})` : ""}</Link>}
+      {noUnit.map((s) => <Link key={s.id} className={btn} href={`/umowy/z-szablonu?sprzedaz=${s.id}`}>Dołącz umowę{noUnit.length > 1 || unitsWithout.length ? " (bez sztuki)" : ""}</Link>)}
+    </>
+  );
 }
