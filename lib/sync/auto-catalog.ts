@@ -10,8 +10,8 @@ import { syncStock } from "./shopify-stock";
  * Automat katalogu (co ~15 min z zadania cyklicznego; na żywo robią to webhooki Shopify):
  * 1. nowe i zmienione produkty ze Shopify (z cenami) → katalog,
  * 2. nowe produkty z Base → uzupełnienie o SKU i powiązania z Base,
- * 3. stany: Shopify → brakujące sztuki w Magazynie albo (gdy główny jest magazyn aplikacji) aplikacja → Shopify.
- *    Bez lokalizacji Shopify przy lokalizacjach – jak dawniej ze stanów Base.
+ * 3. stany: Shopify → sztuki w Magazynie albo (gdy główny jest magazyn aplikacji) aplikacja → Shopify.
+ *    Base nie zmienia liczby sztuk (reconcileStock z Base zostaje tylko do ręcznego użycia).
  */
 
 type ShopState = { since: string; after: string | null; high: string };
@@ -134,8 +134,7 @@ export async function runAutoCatalog(db: SupabaseClient, force = false) {
   await db.from("sync_state").upsert({ key: "auto_catalog", value: { at: new Date().toISOString() }, updated_at: new Date().toISOString() });
   const shopify = await syncShopifyProductsIncremental(db);
   const base = await syncNewBaseProducts(db);
-  const { count: mapped } = await db.from("locations").select("id", { count: "exact", head: true }).eq("active", true).not("shopify_location_id", "is", null);
+  // Stany wyłącznie ze Shopify (albo z aplikacji do Shopify) – Base nie wpływa na liczbę sztuk.
   const stock = await syncStock(db);
-  const baseStock = !mapped && stock.master === "shopify" && !(stock.mapped as string[] | undefined)?.length ? await reconcileStock(db) : undefined;
-  return { shopify, base, stock, ...(baseStock ? { baseStock } : {}) };
+  return { shopify, base, stock };
 }

@@ -135,6 +135,27 @@ export async function registerProductWebhooks(domain: string, storeCode: string,
   return results;
 }
 
+/** Webhooki aplikacji w sklepie (tylko te na adres tej aplikacji, jeśli podano). */
+export async function listWebhooks(domain: string, storeCode: string, uriPart?: string) {
+  const data = await shopifyGraphql<{ webhookSubscriptions: { nodes: { id: string; topic: string; uri: string }[] } }>(
+    domain, storeCode, `query { webhookSubscriptions(first: 100) { nodes { id topic uri } } }`,
+  );
+  return data.webhookSubscriptions.nodes.filter((n) => !uriPart || n.uri.includes(uriPart));
+}
+
+export async function deleteWebhooks(domain: string, storeCode: string, ids: string[]) {
+  const errors: string[] = [];
+  for (const id of ids) {
+    const data = await shopifyGraphql<{ webhookSubscriptionDelete: { userErrors: { message: string }[] } }>(
+      domain, storeCode,
+      `mutation Del($id: ID!) { webhookSubscriptionDelete(id: $id) { deletedWebhookSubscriptionId userErrors { message } } }`,
+      { id },
+    );
+    errors.push(...data.webhookSubscriptionDelete.userErrors.map((e) => e.message));
+  }
+  return errors;
+}
+
 export function verifyWebhook(rawBody: string, hmacHeader: string | null, storeCode: string) {
   const { clientSecret } = shopifyCredentials(storeCode);
   if (!clientSecret || !hmacHeader) return false;

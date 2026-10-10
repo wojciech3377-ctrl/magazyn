@@ -165,3 +165,25 @@ set local role authenticated;
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000001', true);
 select option, shop_price, shop_price_error is not null as has_error from public.units_list where product_id = '10000000-0000-0000-0000-000000000007' order by option;
 rollback;
+-- Tylko Shopify: nadmiar w aplikacji znika (sztuki bez historii), produkty spoza Shopify do usunięcia.
+begin;
+insert into auth.users (id, email) values ('00000000-0000-0000-0000-000000000001', 'szef@example.com');
+insert into public.sync_state (key, value) values ('initial_stock_imported', '{}');
+insert into public.locations (id, store_id, name) select '60000000-0000-0000-0000-000000000009', id, 'Sklep' from public.stores where code = 'sneakers-depot';
+insert into public.products (id, title) values ('10000000-0000-0000-0000-000000000004', 'Track'), ('10000000-0000-0000-0000-000000000003', 'Tylko Base');
+insert into public.variants (id, product_id, option) values ('20000000-0000-0000-0000-000000000004', '10000000-0000-0000-0000-000000000004', '42'), ('20000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000003', '40');
+insert into public.variant_store_links (variant_id, store_id, shopify_variant_id)
+select '20000000-0000-0000-0000-000000000004', id, 'gid://shopify/ProductVariant/4' from public.stores where code = 'sneakers-depot';
+insert into public.units (variant_id, location_id, received_at) select '20000000-0000-0000-0000-000000000004', '60000000-0000-0000-0000-000000000009', now() - (g || ' days')::interval from generate_series(1, 3) g;
+insert into public.contracts (id, type, counterparty) values ('50000000-0000-0000-0000-000000000009', 'purchase', 'X');
+update public.units set contract_id = '50000000-0000-0000-0000-000000000009' where id = (select id from public.units where variant_id = '20000000-0000-0000-0000-000000000004' order by received_at desc limit 1);
+insert into public.units (variant_id, location_id) values ('20000000-0000-0000-0000-000000000003', '60000000-0000-0000-0000-000000000009');
+-- Shopify: 1 sztuka; aplikacja: 3 (jedna z umową) → najpierw czeka, potem usuwa 2 bez historii
+select public.reconcile_stock('[{"variant_id":"20000000-0000-0000-0000-000000000004","location_id":"60000000-0000-0000-0000-000000000009","qty":0}]', 300, 'Shopify', array['60000000-0000-0000-0000-000000000009'::uuid], 10, true, 30) as surplus_waits;
+update public.stock_excess set first_seen_at = now() - interval '1 hour';
+select public.reconcile_stock('[{"variant_id":"20000000-0000-0000-0000-000000000004","location_id":"60000000-0000-0000-0000-000000000009","qty":0}]', 300, 'Shopify', array['60000000-0000-0000-0000-000000000009'::uuid], 10, true, 30) as surplus_removed;
+select count(*) as left_units, count(contract_id) as with_contract from public.units where variant_id = '20000000-0000-0000-0000-000000000004';
+select public.purge_non_shopify(true) as preview;
+select public.purge_non_shopify(false) as purged;
+select count(*) as base_only_products from public.products where id = '10000000-0000-0000-0000-000000000003';
+rollback;

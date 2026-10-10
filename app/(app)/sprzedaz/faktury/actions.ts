@@ -10,6 +10,7 @@ import { nipValid, onlyDigits } from "@/lib/invoices/xml";
 import { ksefCheck, ksefConfigured } from "@/lib/ksef/client";
 import { lookupNip } from "@/lib/invoices/nip-lookup";
 import { emailInvoice, maybeAutoEmail } from "@/lib/invoices/email";
+import { findVariantIds } from "@/lib/queries/units";
 
 export type InvoiceFormState = { error?: string } | null;
 
@@ -212,4 +213,59 @@ export async function emailInvoiceAction(fd: FormData) {
   }
   revalidatePath(`/sprzedaz/faktury/${id}`);
   redirect(`/sprzedaz/faktury/${id}?${q}`);
+}
+
+export type InvoiceItemHit = { key: string; name: string; detail: string; price: number | null; vat: "23" | "margin"; unit_id: string | null; checkVat: boolean };
+
+/** Pozycje faktury z magazynu (sztuki na stanie – z formą zakupu i IMEI) albo z katalogu (rozmiar bez sztuki). */
+export async function searchInvoiceItemsAction(q: string): Promise<InvoiceItemHit[]> {
+  const { supabase } = await requireProfile();
+  const text = q.trim().replace(/[,()*%\\]/g, " ").trim();
+  if (text.length < 2) return [];
+  const like = `%${text}%`;
+  const variantIds = await findVariantIds(supabase, text);
+  const unitOr = [`code.ilike.${like}`, `identifier.ilike.${like}`, `title.ilike.${like}`, `style_sku.ilike.${like}`];
+  if (variantIds.length) unitOr.push(`variant_id.in.(${variantIds.slice(0, 150).join(",")})`);
+  const { data: units } = await supabase.from("units_list")
+    .select("id, code, identifier, title, option, shop_price, purchase_form, variant_id")
+    .eq("status", "in_stock").or(unitOr.join(",")).order("received_at", { ascending: true }).limit(10);
+  const hits: InvoiceItemHit[] = (units ?? []).map((u) => ({
+    key: `u:${u.id}`,
+    name: `${u.title} ${u.option}${u.identifier ? ` (IMEI/SN ${u.identifier})` : ""}`.trim(),
+    detail: `sztuka ${u.code} · ${u.purchase_form === "vat_23" ? "VAT 23%" : "marża"}`,
+    price: u.shop_price === null ? null : Number(u.shop_price),
+    vat: u.purchase_form === "vat_23" ? "23" : "margin",
+    unit_id: u.id as string,
+    checkVat: false,
+  }));
+  const withUnits = new Set((units ?? []).map((u) => u.variant_id as string));
+  const rest = variantIds.filter((v) => !withUnits.has(v)).slice(0, 8);
+  if (rest.length) {
+    const { data: vars } = await supabase.from("variants")
+      .select("id, option, product:products(title), links:variant_store_links(price)").in("id", rest);
+    for (const v of vars ?? []) {
+      const p = v.product as unknown as { title: string } | null;
+      const price = ((v.links ?? []) as { price: number | null }[]).find((l) => l.price !== null)?.price ?? null;
+      hits.push({ key: `v:${v.id}`, name: `${p?.title ?? ""} ${v.option}`.trim(), detail: "z katalogu – bez sztuki na stanie", price: price === null ? null : Number(price), vat: "margin", unit_id: null, checkVat: true });
+    }
+  }
+  return hits;
+}
+
+/** Ustawienia: e-mail testowy (sprawdzenie SMTP). */
+export async function sendTestMailAction(fd: FormData) {
+  await requireAdmin();
+  const { getCompany } = await import("@/lib/contracts/settings");
+  const { sendMail } = await import("@/lib/mail");
+  const company = await getCompany(createAdminClient());
+  const to = s(fd, "to") || company.email;
+  let q: string;
+  try {
+    if (!to) throw new Error("Podaj adres e-mail.");
+    await sendMail(to, "Test wysyłki – magazyn", `<p>Wysyłka e-maili z aplikacji działa. Faktury będą wychodzić z tego adresu automatycznie.</p>`);
+    q = `ok=${encodeURIComponent(`E-mail testowy wysłany na ${to}.`)}`;
+  } catch (e) {
+    q = `blad=${encodeURIComponent(`SMTP: ${errorMessage(e)}`)}`;
+  }
+  redirect(`/ustawienia?zakladka=faktury&${q}`);
 }

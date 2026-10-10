@@ -5,7 +5,7 @@ import { headers } from "next/headers";
 import { redirect, unstable_rethrow } from "next/navigation";
 import { requireAdmin } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { registerProductWebhooks } from "@/lib/integrations/shopify";
+import { deleteWebhooks, listWebhooks, registerProductWebhooks } from "@/lib/integrations/shopify";
 import { disconnect } from "@/lib/integrations/furgonetka";
 import { errorMessage } from "@/lib/errors";
 
@@ -56,6 +56,7 @@ export async function saveLocation(formData: FormData) {
   await done("Lokalizacja zapisana.");
 }
 
+/** Przełącznik „na żywo”: webhooki produktów, zamówień, zwrotów i stanów (włącz / wyłącz). */
 export async function registerWebhooks(formData: FormData) {
   const { supabase } = await requireAdmin();
   const { data: store } = await supabase.from("stores").select("*").eq("id", String(formData.get("id"))).single();
@@ -63,9 +64,17 @@ export async function registerWebhooks(formData: FormData) {
   const h = await headers();
   const host = h.get("x-forwarded-host") ?? h.get("host");
   if (!host || host.startsWith("localhost")) return done("Webhooki rejestruj z opublikowanej aplikacji (adres https), nie lokalnie.", "blad");
+  const turnOn = String(formData.get("live") ?? "1") === "1";
   try {
-    const r = await registerProductWebhooks(store.shopify_domain, store.code, `https://${host}/api/shopify/webhook/${store.code}`);
-    await done(`${store.name}: ${r.join(", ")}`);
+    if (turnOn) {
+      const r = await registerProductWebhooks(store.shopify_domain, store.code, `https://${host}/api/shopify/webhook/${store.code}`);
+      const failed = r.filter((x) => !/: (ok|już włączony)$/.test(x));
+      await done(failed.length ? `${store.name}: włączone częściowo – ${failed.join(", ")}` : `${store.name}: na żywo włączone (produkty, zamówienia, zwroty, stany).`, failed.length ? "blad" : "ok");
+    } else {
+      const mine = await listWebhooks(store.shopify_domain, store.code, `/api/shopify/webhook/${store.code}`);
+      const errors = await deleteWebhooks(store.shopify_domain, store.code, mine.map((w) => w.id));
+      await done(errors.length ? `${store.name}: ${errors.join("; ")}` : `${store.name}: na żywo wyłączone – zmiany przyjdą przy odczycie co 15 min.`, errors.length ? "blad" : "ok");
+    }
   } catch (e) {
     unstable_rethrow(e);
     await done(errorMessage(e), "blad");
@@ -243,4 +252,14 @@ export async function saveInvoiceSettings(formData: FormData) {
   const { error } = await supabase.from("app_settings").upsert({ key: "invoices", value: { auto_email: formData.get("auto_email") === "1" }, updated_at: new Date().toISOString() });
   if (error) return done(error.message, "blad");
   await done("Ustawienia faktur zapisane.");
+}
+
+/** Usunięcie z magazynu produktów spoza Shopify (sztuki bez historii; komis, umowy i sprzedaż zostają). */
+export async function purgeNonShopify(formData: FormData) {
+  const { supabase } = await requireAdmin();
+  if (formData.get("confirm") !== "1") return done("Zaznacz potwierdzenie usunięcia.", "blad");
+  const { data, error } = await supabase.rpc("purge_non_shopify", { p_dry_run: false });
+  if (error) return done(error.message, "blad");
+  const r = data as { units: number; kept: number; variants: number; products: number };
+  await done(`Usunięto ${r.units} sztuk, ${r.variants} rozmiarów i ${r.products} produktów spoza Shopify.${r.kept ? ` Zostało ${r.kept} sztuk z historią (umowa, komis, sprzedaż) – przejrzyj je ręcznie.` : ""}`);
 }

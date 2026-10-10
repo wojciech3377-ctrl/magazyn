@@ -88,8 +88,8 @@ function groupByShopLocation(mapped: Loc[]) {
 }
 
 /**
- * Shopify jest główny: stan „dostępne” → brakujące sztuki w aplikacji (mniej w Shopify – nic nie usuwa).
- * Nadwyżka musi się utrzymać do kolejnego odczytu (poza zupełnie nowymi produktami) – patrz reconcile_stock.
+ * Shopify jest główny: stan „dostępne” = stan w aplikacji. Brakujące sztuki dochodzą (nowy produkt od razu,
+ * inne po potwierdzeniu przy kolejnym odczycie), nadmiarowe sztuki bez historii znikają po 30 min – patrz reconcile_stock.
  */
 export async function reconcileFromShopify(db: SupabaseClient) {
   const { stores, locs } = await storesAndLocations(db);
@@ -105,13 +105,16 @@ export async function reconcileFromShopify(db: SupabaseClient) {
       const levels = await readLevels(s.shopify_domain, s.code, shopLoc);
       for (const [item, qty] of levels) {
         const variantId = variantOf.get(item);
-        if (!variantId || qty <= 0) continue;
+        if (!variantId) continue;
         const key = `${variantId}|${shopLoc}`;
-        if ((best.get(key)?.qty ?? 0) < qty) best.set(key, { variant_id: variantId, location_id: group[0].id, qty, count_locations: group.map((g) => g.id) });
+        const prev = best.get(key);
+        if (!prev || prev.qty < qty) best.set(key, { variant_id: variantId, location_id: group[0].id, qty: Math.max(0, qty), count_locations: group.map((g) => g.id) });
       }
     }
     const { data, error } = await db.rpc("reconcile_stock", {
       p_rows: [...best.values()], p_limit: 300, p_source: `Shopify ${s.name}`, p_scope: mapped.map((l) => l.id), p_confirm_minutes: 10,
+      // Stan tylko ze Shopify: nadmiarowe sztuki bez historii znikają, gdy różnica utrzyma się 30 min.
+      p_remove: true, p_surplus_minutes: 30,
     });
     if (error) throw error;
     results[s.name] = data;

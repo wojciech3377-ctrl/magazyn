@@ -4,18 +4,18 @@ import { dateTime } from "@/lib/labels";
 import { Notice, PageHeader, Pill } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
 import { getInventories, getInventoryWarehouses, getOrderSources } from "@/lib/integrations/base";
-import { shopifyCredentials } from "@/lib/integrations/shopify";
+import { listWebhooks, shopifyCredentials, WEBHOOK_TOPICS } from "@/lib/integrations/shopify";
 import { getBuyerSignature, getCompany } from "@/lib/contracts/settings";
 import { mailConfigured } from "@/lib/mail";
 import { ContractSettings } from "./ContractSettings";
-import { addExclusion, createUser, deleteExclusion, disconnectFurgonetka, importInitialStock, purgeExcluded, registerWebhooks, runStockNow, saveInvoiceSettings, saveLocation, saveSender, saveShopifyLocation, saveStockMaster, saveStore, saveUser } from "./actions";
+import { addExclusion, createUser, deleteExclusion, disconnectFurgonetka, importInitialStock, purgeExcluded, purgeNonShopify, registerWebhooks, runStockNow, saveInvoiceSettings, saveLocation, saveSender, saveShopifyLocation, saveStockMaster, saveStore, saveUser } from "./actions";
 import { getStockMaster, planPushToShopify, shopifyLocations, type ShopifyLocation } from "@/lib/sync/shopify-stock";
 import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/furgonetka";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getSender } from "@/lib/orders/sender";
 import { appUrl } from "@/lib/app-url";
 import { ksefConfigured, ksefEnv } from "@/lib/ksef/client";
-import { testKsefAction } from "../sprzedaz/faktury/actions";
+import { sendTestMailAction, testKsefAction } from "../sprzedaz/faktury/actions";
 import { errorMessage } from "@/lib/errors";
 
 async function safe<T>(fn: () => Promise<T>): Promise<{ data: T | null; error: string | null }> {
@@ -75,9 +75,18 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
         for (const st of (stores ?? []).filter((x) => x.shopify_domain)) shopLocs.set(st.id, await safe(() => shopifyLocations(st.shopify_domain as string, st.code as string)));
         const plan = sp.podglad === "1" ? await safe(() => planPushToShopify(db)) : null;
         const { data: last } = await db.from("sync_log").select("job, ok, message, created_at").in("job", ["stock", "auto-catalog"]).order("created_at", { ascending: false }).limit(1).maybeSingle();
-        return { master, shopLocs, plan, last };
+        const { data: purge } = await supabase.rpc("purge_non_shopify", { p_dry_run: true });
+        return { master, shopLocs, plan, last, purge: purge as { units: number; kept: number; variants: number } | null };
       })()
     : null;
+  // Stan webhooków („na żywo”) każdego sklepu.
+  const live = new Map<string, { topics: string[]; error: string | null }>();
+  if (isAdmin && tab === "sklepy") {
+    for (const st of (stores ?? []).filter((x) => x.shopify_domain)) {
+      const r = await safe(() => listWebhooks(st.shopify_domain as string, st.code as string, `/api/shopify/webhook/${st.code}`));
+      live.set(st.id, { topics: [...new Set((r.data ?? []).map((w) => w.topic))], error: r.error });
+    }
+  }
   const { data: invoiceSettings } = isAdmin && tab === "faktury" ? await supabase.from("app_settings").select("value").eq("key", "invoices").maybeSingle() : { data: null };
 
   const envStatus = [
@@ -154,10 +163,39 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
                   <div><label className="label">Sklep w katalogu Base (wykrywany automatycznie)</label><input className="input" name="base_storage_id" defaultValue={s.base_storage_id ?? ""} placeholder="shop_1234" /></div>
                   <div className="flex flex-wrap gap-2">
                     <SubmitButton>Zapisz</SubmitButton>
-                    <SubmitButton className="btn-secondary" formAction={registerWebhooks} pendingText="Rejestruję…">Włącz na żywo: produkty, zamówienia, stany</SubmitButton>
                   </div>
                 </form>
               ))}
+            </div>
+          </section>
+          )}
+
+          {tab === "sklepy" && (
+          <section className="card p-4">
+            <h2 className="h2 mb-1">Na żywo ze Shopify</h2>
+            <p className="mb-3 text-sm text-muted">Nowe produkty, zamówienia, anulowania, zwroty i zmiany stanów trafiają do aplikacji od razu (webhooki). Wyłączone – co 15 minut.</p>
+            <div className="space-y-2">
+              {stores?.filter((st) => st.shopify_domain).map((st) => {
+                const l = live.get(st.id);
+                const on = (l?.topics.length ?? 0) > 0;
+                const missing = WEBHOOK_TOPICS.filter((t) => !l?.topics.includes(t));
+                return (
+                  <form key={st.id} action={registerWebhooks} className="flex flex-wrap items-center gap-3">
+                    <input type="hidden" name="id" value={st.id} />
+                    <button type="submit" name="live" value={on ? "0" : "1"} role="switch" aria-checked={on} aria-label={`Na żywo: ${st.name}`}
+                      className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${on ? "bg-ok" : "bg-line"}`}>
+                      <span className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition-all ${on ? "left-[1.375rem]" : "left-0.5"}`} />
+                    </button>
+                    <span className="font-medium">{st.name}</span>
+                    <span className="text-sm text-muted">
+                      {l?.error ? <span className="text-bad">{l.error}</span>
+                        : on ? (missing.length ? `włączone częściowo – brak: ${missing.map((m) => m.toLowerCase()).join(", ")} (stany wymagają uprawnień read_inventory)` : "włączone: produkty, zamówienia, zwroty, stany")
+                        : "wyłączone"}
+                    </span>
+                    {on && missing.length > 0 && !l?.error && <button type="submit" name="live" value="1" className="btn-secondary px-2.5 py-1 text-xs">Włącz brakujące</button>}
+                  </form>
+                );
+              })}
             </div>
           </section>
           )}
@@ -207,8 +245,22 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
                 Wysyłaj fakturę (PDF) automatycznie na e-mail nabywcy – po przyjęciu w KSeF, a bez KSeF zaraz po wystawieniu
               </label>
               <SubmitButton className="btn-secondary">Zapisz</SubmitButton>
-              {!mailConfigured() && <span className="text-warn">Najpierw ustaw SMTP w Vercel (SMTP_HOST, SMTP_USER, SMTP_PASS).</span>}
+              {!mailConfigured() && <span className="text-warn">Najpierw ustaw SMTP w Vercel (instrukcja niżej).</span>}
             </form>
+            <div className="mt-4 space-y-2 border-t border-line pt-4 text-sm">
+              <h3 className="font-medium">Wysyłka e-maili (SMTP) {mailConfigured() ? <Pill tone="green">ustawiona</Pill> : <Pill tone="red">brak</Pill>}</h3>
+              <p className="text-muted">
+                W Vercel → projekt → Settings → Environment Variables dodaj: <code className="rounded bg-panel px-1">SMTP_HOST</code>, <code className="rounded bg-panel px-1">SMTP_PORT</code> (465),
+                {" "}<code className="rounded bg-panel px-1">SMTP_USER</code> (adres skrzynki), <code className="rounded bg-panel px-1">SMTP_PASS</code> (hasło skrzynki / hasło aplikacji),
+                {" "}opcjonalnie <code className="rounded bg-panel px-1">SMTP_FROM</code> (np. „Telefoniki &lt;faktury@telefoniki.pl&gt;”), potem Deployments → Redeploy. Hasło wpisuj tylko w Vercel.
+              </p>
+              {mailConfigured() && (
+                <form action={sendTestMailAction} className="flex flex-wrap gap-2">
+                  <input className="input w-64" type="email" name="to" placeholder="adres testowy (puste = e-mail firmy)" aria-label="Adres testowy" />
+                  <SubmitButton className="btn-secondary" pendingText="Wysyłam…">Wyślij testowy e-mail</SubmitButton>
+                </form>
+              )}
+            </div>
           </section>
           )}
 
@@ -269,7 +321,28 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
                   ))}
                 </div>
               ))}
-            <p className="text-xs text-muted">Aplikacja sklepu w Shopify potrzebuje uprawnień read_locations, read_inventory i – dla „Magazyn aplikacji” – write_inventory.</p>
+            {stock.last && !stock.last.ok && <Notice tone="error">{stock.last.message}</Notice>}
+            <div className="rounded-md border border-line p-3 text-sm">
+              <h3 className="mb-1 font-medium">Dostęp aplikacji do stanów w Shopify</h3>
+              <p className="text-muted">Jeśli widzisz „Access denied” albo brak lokalizacji: w <b>dev.shopify.com</b> (Dev Dashboard) → aplikacja sklepu → <b>Versions → Create version</b>, w polu <b>Scopes</b> dopisz
+                {" "}<code className="rounded bg-panel px-1">read_locations,read_inventory,write_inventory</code> (zostaw obecne), kliknij <b>Release</b>, a potem w panelu sklepu
+                (Ustawienia → Aplikacje → ta aplikacja) zaakceptuj nowe uprawnienia. Osobno dla Telefoniki i Sneakers Depot. Po akceptacji kliknij „Sprawdź stany teraz”.</p>
+            </div>
+            {stock.purge && (
+              <form action={purgeNonShopify} className="space-y-2 border-t border-line pt-4">
+                <h3 className="font-medium">Produkty spoza Shopify</h3>
+                <p className="text-sm text-muted">
+                  Rozmiary bez wariantu w żadnym sklepie Shopify (np. tylko z Base): <b>{stock.purge.units}</b> sztuk do usunięcia, <b>{stock.purge.variants}</b> rozmiarów.
+                  {stock.purge.kept > 0 && <> Zostanie <b>{stock.purge.kept}</b> sztuk z historią (umowa, komis, dostawa, sprzedaż) – tych automat nie rusza.</>}
+                </p>
+                {stock.purge.units + stock.purge.variants > 0 && (
+                  <>
+                    <label className="flex items-center gap-2 text-sm"><input type="checkbox" name="confirm" value="1" /> Rozumiem – usuń te sztuki i produkty z magazynu aplikacji (Shopify i Base bez zmian).</label>
+                    <SubmitButton className="btn-danger" pendingText="Usuwam…">Usuń produkty spoza Shopify</SubmitButton>
+                  </>
+                )}
+              </form>
+            )}
           </section>
           )}
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { createInvoiceAction, lookupNipAction, searchCustomersAction, type CustomerHit, type InvoiceFormState } from "./actions";
+import { createInvoiceAction, lookupNipAction, searchCustomersAction, searchInvoiceItemsAction, type CustomerHit, type InvoiceFormState, type InvoiceItemHit } from "./actions";
 import type { InvoiceDraft } from "@/lib/invoices/service";
 
 type Row = { name: string; quantity: string; unit: string; price: string; vat: "23" | "margin"; unit_id?: string | null; sale_id?: string | null; pos_item_id?: string | null; checkVat?: boolean };
@@ -70,6 +70,25 @@ export function InvoiceForm({ draft, ksefReady }: { draft: InvoiceDraft; ksefRea
     unit_id: i.unit_id, sale_id: i.sale_id, pos_item_id: i.pos_item_id, checkVat: i.checkVat,
   })) : [{ name: "", quantity: "1", unit: "szt.", price: "", vat: "margin" }]);
 
+  // Pozycje z magazynu / katalogu.
+  const [itemQ, setItemQ] = useState("");
+  const [itemHits, setItemHits] = useState<InvoiceItemHit[]>([]);
+  const [, startItems] = useTransition();
+  useEffect(() => {
+    if (itemQ.trim().length < 2) return setItemHits([]);
+    const t = setTimeout(() => startItems(async () => setItemHits(await searchInvoiceItemsAction(itemQ))), 300);
+    return () => clearTimeout(t);
+  }, [itemQ]);
+  function addItem(h: InvoiceItemHit) {
+    const row: Row = { name: h.name, quantity: "1", unit: "szt.", price: h.price !== null ? h.price.toFixed(2) : "", vat: h.vat, unit_id: h.unit_id, checkVat: h.checkVat };
+    setRows((rs) => {
+      if (h.unit_id && rs.some((r) => r.unit_id === h.unit_id)) return rs;
+      const blank = rs.length === 1 && !rs[0].name && !rs[0].price;
+      return blank ? [row] : [...rs, row];
+    });
+    setItemQ("");
+    setItemHits([]);
+  }
   const totals = useMemo(() => {
     const g23 = rows.filter((r) => r.vat === "23").reduce((s, r) => s + num(r.price) * num(r.quantity), 0);
     const margin = rows.filter((r) => r.vat === "margin").reduce((s, r) => s + num(r.price) * num(r.quantity), 0);
@@ -143,7 +162,24 @@ export function InvoiceForm({ draft, ksefReady }: { draft: InvoiceDraft; ksefRea
       </section>
 
       <section className="card overflow-x-auto p-4">
-        <h2 className="h2 mb-3">Pozycje</h2>
+        <div className="mb-3 flex flex-wrap items-center gap-3">
+          <h2 className="h2">Pozycje</h2>
+          <div className="relative w-full sm:ml-auto sm:w-96">
+            <input className="input" value={itemQ} onChange={(e) => setItemQ(e.target.value)} placeholder="Dodaj z magazynu / katalogu: nazwa, kod S…, IMEI, SKU" aria-label="Szukaj pozycji w magazynie i katalogu" />
+            {itemHits.length > 0 && (
+              <ul className="absolute right-0 z-30 mt-1 max-h-80 w-full overflow-auto rounded-md border border-line bg-white py-1 text-sm shadow-lg">
+                {itemHits.map((h) => (
+                  <li key={h.key}>
+                    <button type="button" className="flex w-full items-baseline justify-between gap-2 px-3 py-1.5 text-left hover:bg-panel" onClick={() => addItem(h)}>
+                      <span><span className="font-medium">{h.name}</span><span className="block text-xs text-muted">{h.detail}</span></span>
+                      <span className="whitespace-nowrap tabular-nums">{h.price !== null ? pl(h.price) : "–"}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
         <table className="table">
           <thead><tr><th>Nazwa</th><th className="w-20">Ilość</th><th className="w-20">J.m.</th><th className="w-32">Cena brutto</th><th className="w-36">VAT</th><th className="w-28 text-right">Wartość</th><th /></tr></thead>
           <tbody>
