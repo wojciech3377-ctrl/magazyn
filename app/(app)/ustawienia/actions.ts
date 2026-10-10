@@ -232,14 +232,20 @@ export async function saveShopifyLocation(formData: FormData) {
   await done("Lokalizacja Shopify zapisana.");
 }
 
-export async function runStockNow() {
+export async function runStockNow(formData: FormData) {
   await requireAdmin();
   const db = createAdminClient();
+  const force = formData.get("force") === "1";
+  if (force && formData.get("confirm") !== "1") return done("Zaznacz potwierdzenie – stan aplikacji zostanie wyrównany do Shopify.", "blad");
   try {
     const { syncStock } = await import("@/lib/sync/shopify-stock");
-    const r = await syncStock(db);
+    const r = await syncStock(db, { force });
     await db.from("sync_log").insert({ job: "stock", ok: true, message: JSON.stringify(r) });
-    await done(`Stany sprawdzone: ${JSON.stringify(r.result)}`);
+    const parts = Object.entries(r.result as Record<string, unknown>).map(([store, x]) => {
+      const v = x as { created?: number; removed?: number; waiting?: number; kept?: number } | string;
+      return typeof v === "string" ? `${store}: ${v}` : `${store}: +${v.created ?? 0} / −${v.removed ?? 0}${v.waiting ? `, czeka ${v.waiting}` : ""}${v.kept ? `, z historią zostaje ${v.kept}` : ""}`;
+    });
+    await done(`Stany sprawdzone. ${parts.join(" · ")}`);
   } catch (e) {
     unstable_rethrow(e);
     await db.from("sync_log").insert({ job: "stock", ok: false, message: errorMessage(e) });
@@ -262,4 +268,46 @@ export async function purgeNonShopify(formData: FormData) {
   if (error) return done(error.message, "blad");
   const r = data as { units: number; kept: number; variants: number; products: number };
   await done(`Usunięto ${r.units} sztuk, ${r.variants} rozmiarów i ${r.products} produktów spoza Shopify.${r.kept ? ` Zostało ${r.kept} sztuk z historią (umowa, komis, sprzedaż) – przejrzyj je ręcznie.` : ""}`);
+}
+
+/** Wysyłka e-maili: serwer, login i nadawca w ustawieniach, hasło w Supabase Vault; zapis sprawdza logowanie. */
+export async function saveSmtp(formData: FormData) {
+  await requireAdmin();
+  const db = createAdminClient();
+  const f = (k: string) => String(formData.get(k) ?? "").trim();
+  const host = f("host").toLowerCase();
+  const port = Number(f("port") || 465);
+  const user = f("user");
+  const password = String(formData.get("password") ?? "");
+  const fromEmail = f("from_email");
+  if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(host)) return done("Podaj serwer SMTP, np. ssl0.ovh.net.", "blad");
+  if (![465, 587, 25, 2525].includes(port)) return done("Port SMTP: 465 (SSL) albo 587.", "blad");
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(user)) return done("Login to pełny adres skrzynki.", "blad");
+  if (fromEmail && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(fromEmail)) return done("Zły adres nadawcy.", "blad");
+  const { data: hasPass } = await db.rpc("smtp_password_exists");
+  if (!password && !hasPass) return done("Wpisz hasło skrzynki.", "blad");
+
+  // Najpierw sprawdzenie logowania – zapisujemy tylko działające ustawienia.
+  let pass = password;
+  if (!pass) {
+    const { data } = await db.rpc("smtp_password_get");
+    pass = (data as string | null) ?? "";
+  }
+  try {
+    const nodemailer = (await import("nodemailer")).default;
+    await nodemailer.createTransport({ host, port, secure: port === 465, auth: { user, pass } }).verify();
+  } catch (e) {
+    return done(`Serwer poczty odrzucił logowanie: ${errorMessage(e)}. Sprawdź login (pełny adres) i hasło skrzynki.`, "blad");
+  }
+  if (password) {
+    const { error } = await db.rpc("smtp_password_set", { p_password: password });
+    if (error) return done(`Nie udało się zapisać hasła w sejfie: ${error.message}`, "blad");
+  }
+  const { error } = await db.from("app_settings").upsert({
+    key: "smtp", value: { host, port, user, from_email: fromEmail || null, from_name: f("from_name") || null }, updated_at: new Date().toISOString(),
+  });
+  if (error) return done(error.message, "blad");
+  const { clearMailCache } = await import("@/lib/mail");
+  clearMailCache();
+  await done(`Wysyłka e-maili ustawiona – maile wychodzą z ${fromEmail || user}.`);
 }

@@ -130,7 +130,7 @@ export async function sendSigningEmail(formData: FormData) {
   let msg = "";
   if (!to || !/^[^@\s<>"]+@[^@\s<>"]+\.[^@\s<>"]+$/.test(to)) msg = "blad=" + encodeURIComponent("Wpisz poprawny e-mail sprzedającego.");
   else if (contract?.status !== "sent" || !link) msg = "blad=" + encodeURIComponent("Ta umowa nie czeka na podpis.");
-  else if (!mailConfigured()) msg = "blad=" + encodeURIComponent("Wysyłka e-maili nie jest ustawiona (SMTP w Vercel). Skopiuj link i wyślij go sam.");
+  else if (!(await mailConfigured())) msg = "blad=" + encodeURIComponent("Wysyłka e-maili nie jest ustawiona (Ustawienia → Faktury i KSeF). Skopiuj link i wyślij go sam.");
   else {
     try {
       const company = await getCompany(supabase);

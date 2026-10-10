@@ -16,7 +16,7 @@ async function logError(db: SupabaseClient, job: string, id: string, e: unknown)
 export async function notifyAwaitingApproval(contractId: string) {
   const db = createAdminClient();
   try {
-    if (!mailConfigured()) return;
+    if (!(await mailConfigured())) return;
     const { data: c } = await db.from("contracts").select("*").eq("id", contractId).single();
     const company = await getCompany(db);
     await sendMail(company.email, `Umowa kupna nr ${c.number} czeka na zatwierdzenie`,
@@ -52,7 +52,7 @@ export async function deliverAcceptedContract(contractId: string): Promise<{ ema
     const pdf = await ensureContractPdf(contractId);
     if (!pdf) return { emailed: false, error: "Umowa nie jest zatwierdzona." };
     const { data: c } = await db.from("contracts").select("number, seller_email").eq("id", contractId).single();
-    if (!c?.seller_email || !mailConfigured()) return { emailed: false };
+    if (!c?.seller_email || !(await mailConfigured())) return { emailed: false };
     const company = await getCompany(db);
     await sendMail(c.seller_email, `Umowa kupna nr ${c.number} – ${company.name}`,
       `<p>Dziękujemy! W załączniku umowa kupna nr ${c.number} podpisana przez obie strony.</p><p>${escapeHtml(company.name)}</p>`,

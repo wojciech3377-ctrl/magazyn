@@ -91,7 +91,7 @@ function groupByShopLocation(mapped: Loc[]) {
  * Shopify jest główny: stan „dostępne” = stan w aplikacji. Brakujące sztuki dochodzą (nowy produkt od razu,
  * inne po potwierdzeniu przy kolejnym odczycie), nadmiarowe sztuki bez historii znikają po 30 min – patrz reconcile_stock.
  */
-export async function reconcileFromShopify(db: SupabaseClient) {
+export async function reconcileFromShopify(db: SupabaseClient, opts: { force?: boolean } = {}) {
   const { stores, locs } = await storesAndLocations(db);
   const results: Record<string, unknown> = {};
   for (const s of stores) {
@@ -112,9 +112,11 @@ export async function reconcileFromShopify(db: SupabaseClient) {
       }
     }
     const { data, error } = await db.rpc("reconcile_stock", {
-      p_rows: [...best.values()], p_limit: 300, p_source: `Shopify ${s.name}`, p_scope: mapped.map((l) => l.id), p_confirm_minutes: 10,
+      // Ręczne zatwierdzenie (po obejrzeniu porównania): bez limitu i bez czekania na potwierdzenie.
+      p_rows: [...best.values()], p_limit: opts.force ? 100000 : 300, p_source: `Shopify ${s.name}`, p_scope: mapped.map((l) => l.id),
+      p_confirm_minutes: opts.force ? 0 : 10,
       // Stan tylko ze Shopify: nadmiarowe sztuki bez historii znikają, gdy różnica utrzyma się 30 min.
-      p_remove: true, p_surplus_minutes: 30,
+      p_remove: true, p_surplus_minutes: opts.force ? 0 : 30,
     });
     if (error) throw error;
     results[s.name] = data;
@@ -216,10 +218,10 @@ export async function pushStockToShopify(db: SupabaseClient, maxChanges = 500) {
 }
 
 /** Zadanie cykliczne: według głównego źródła. */
-export async function syncStock(db: SupabaseClient) {
+export async function syncStock(db: SupabaseClient, opts: { force?: boolean } = {}) {
   const mapped = await autoMapLocations(db).catch(() => []);
   const master = await getStockMaster(db);
-  const result = master === "app" ? await pushStockToShopify(db) : await reconcileFromShopify(db);
+  const result = master === "app" ? await pushStockToShopify(db) : await reconcileFromShopify(db, opts);
   return { master, ...(mapped.length ? { mapped } : {}), result };
 }
 

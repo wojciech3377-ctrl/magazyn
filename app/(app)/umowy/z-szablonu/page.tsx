@@ -54,7 +54,7 @@ export default async function TemplateContractPage({ searchParams }: { searchPar
         locations={(locations ?? []).map((l) => ({ id: l.id, store_id: l.store_id, label: `${storeName.get(l.store_id)} · ${l.name}` }))}
         defaultLocation={defaultLocation}
         paymentDays={company.payment_days ?? 7}
-        mailReady={mailConfigured()}
+        mailReady={await mailConfigured()}
       />
     </>
   );

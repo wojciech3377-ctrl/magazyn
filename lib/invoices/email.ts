@@ -16,7 +16,7 @@ export async function emailInvoice(db: SupabaseClient, invoiceId: string, toOver
   const seller = inv.seller as InvoiceForPdf["seller"];
   const to = (toOverride ?? buyer.email ?? "").trim();
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) throw new Error("Brak poprawnego adresu e-mail nabywcy.");
-  if (!mailConfigured()) throw new Error("Wysyłka e-maili nie jest skonfigurowana (SMTP w Vercel).");
+  if (!(await mailConfigured())) throw new Error("Wysyłka e-maili nie jest ustawiona (Ustawienia → Faktury i KSeF → Wysyłka e-maili).");
   if (inv.status === "cancelled" || inv.status === "rejected") throw new Error("Nie wysyłamy faktury unieważnionej ani odrzuconej przez KSeF.");
   const { data: items } = await db.from("invoice_items").select("*").eq("invoice_id", invoiceId).order("position");
   try {
@@ -48,7 +48,7 @@ export async function invoiceAutoEmail(db: SupabaseClient) {
  * a nabywca podał e-mail. Błędy tylko zapisuje (widać je na stronie faktury).
  */
 export async function maybeAutoEmail(db: SupabaseClient, invoiceId: string, opts: { force?: boolean } = {}) {
-  if (!mailConfigured() || !(await invoiceAutoEmail(db))) return null;
+  if (!(await mailConfigured()) || !(await invoiceAutoEmail(db))) return null;
   const { data: inv } = await db.from("invoices").select("id, status, emailed_at, buyer").eq("id", invoiceId).maybeSingle();
   if (!inv || inv.emailed_at || !(inv.buyer as { email?: string | null }).email) return null;
   if (!(inv.status === "accepted" || (opts.force && inv.status === "issued"))) return null;

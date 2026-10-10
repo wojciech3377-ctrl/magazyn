@@ -6,9 +6,9 @@ import { SubmitButton } from "@/components/SubmitButton";
 import { getInventories, getInventoryWarehouses, getOrderSources } from "@/lib/integrations/base";
 import { listWebhooks, shopifyCredentials, WEBHOOK_TOPICS } from "@/lib/integrations/shopify";
 import { getBuyerSignature, getCompany } from "@/lib/contracts/settings";
-import { mailConfigured } from "@/lib/mail";
+import { getSmtpSettings, mailConfig } from "@/lib/mail";
 import { ContractSettings } from "./ContractSettings";
-import { addExclusion, createUser, deleteExclusion, disconnectFurgonetka, importInitialStock, purgeExcluded, purgeNonShopify, registerWebhooks, runStockNow, saveInvoiceSettings, saveLocation, saveSender, saveShopifyLocation, saveStockMaster, saveStore, saveUser } from "./actions";
+import { addExclusion, createUser, deleteExclusion, disconnectFurgonetka, importInitialStock, purgeExcluded, purgeNonShopify, registerWebhooks, runStockNow, saveSmtp, saveInvoiceSettings, saveLocation, saveSender, saveShopifyLocation, saveStockMaster, saveStore, saveUser } from "./actions";
 import { compareStock, getStockMaster, planPushToShopify, shopifyLocations, type ShopifyLocation } from "@/lib/sync/shopify-stock";
 import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/furgonetka";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -90,6 +90,9 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
   }
   const { data: invoiceSettings } = isAdmin && tab === "faktury" ? await supabase.from("app_settings").select("value").eq("key", "invoices").maybeSingle() : { data: null };
 
+  const mail = isAdmin ? await mailConfig() : null;
+  const smtp = isAdmin && tab === "faktury" ? await getSmtpSettings() : {};
+  const smtpHasPassword = isAdmin && tab === "faktury" ? !!(await createAdminClient().rpc("smtp_password_exists")).data : false;
   const envStatus = [
     ["Supabase (klucz serwera)", !!process.env.SUPABASE_SERVICE_ROLE_KEY],
     ["Base API", hasBase],
@@ -98,7 +101,7 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
       return [`Shopify ${s.name}`, !!(c.clientId && c.clientSecret)] as [string, boolean];
     }),
     ["Zadanie cykliczne (CRON_SECRET)", !!process.env.CRON_SECRET],
-    ["E-mail (SMTP)", mailConfigured()],
+    ["E-mail (SMTP)", !!mail],
     ["Furgonetka (klucze aplikacji)", furgonetkaConfigured()],
     [`KSeF (${ksefEnv()})`, ksefConfigured()],
   ] as [string, boolean][];
@@ -246,16 +249,30 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
                 Wysyłaj fakturę (PDF) automatycznie na e-mail nabywcy – po przyjęciu w KSeF, a bez KSeF zaraz po wystawieniu
               </label>
               <SubmitButton className="btn-secondary">Zapisz</SubmitButton>
-              {!mailConfigured() && <span className="text-warn">Najpierw ustaw SMTP w Vercel (instrukcja niżej).</span>}
+              {!mail && <span className="text-warn">Najpierw ustaw wysyłkę e-maili niżej.</span>}
             </form>
-            <div className="mt-4 space-y-2 border-t border-line pt-4 text-sm">
-              <h3 className="font-medium">Wysyłka e-maili (SMTP) {mailConfigured() ? <Pill tone="green">ustawiona</Pill> : <Pill tone="red">brak</Pill>}</h3>
-              <p className="text-muted">
-                W Vercel → projekt → Settings → Environment Variables dodaj: <code className="rounded bg-panel px-1">SMTP_HOST</code>, <code className="rounded bg-panel px-1">SMTP_PORT</code> (465),
-                {" "}<code className="rounded bg-panel px-1">SMTP_USER</code> (adres skrzynki), <code className="rounded bg-panel px-1">SMTP_PASS</code> (hasło skrzynki / hasło aplikacji),
-                {" "}opcjonalnie <code className="rounded bg-panel px-1">SMTP_FROM</code> (np. „Telefoniki &lt;faktury@telefoniki.pl&gt;”), potem Deployments → Redeploy. Hasło wpisuj tylko w Vercel.
-              </p>
-              {mailConfigured() && (
+            <div className="mt-4 space-y-3 border-t border-line pt-4 text-sm">
+              <h3 className="font-medium">
+                Wysyłka e-maili {mail ? <Pill tone="green">działa z: {mail.from}</Pill> : <Pill tone="red">nie ustawiona</Pill>}
+              </h3>
+              <p className="text-muted">Skrzynka, z której wychodzą faktury i umowy. Dla OVH: serwer <b>ssl0.ovh.net</b>, port <b>465</b>, login = pełny adres skrzynki, hasło skrzynki.
+                Adres nadawcy musi być tą skrzynką albo jej aliasem w OVH. Hasło trafia do zaszyfrowanego sejfu (Supabase Vault) – nie jest nigdzie wyświetlane.</p>
+              <form action={saveSmtp} className="grid gap-3 md:grid-cols-3">
+                <div><label className="label" htmlFor="smtp-host">Serwer SMTP</label><input id="smtp-host" className="input" name="host" defaultValue={smtp.host ?? "ssl0.ovh.net"} required /></div>
+                <div><label className="label" htmlFor="smtp-port">Port</label><input id="smtp-port" className="input" name="port" inputMode="numeric" defaultValue={smtp.port ?? 465} /></div>
+                <div><label className="label" htmlFor="smtp-user">Login (adres skrzynki)</label><input id="smtp-user" className="input" type="email" name="user" defaultValue={smtp.user ?? ""} required /></div>
+                <div>
+                  <label className="label" htmlFor="smtp-pass">Hasło skrzynki</label>
+                  <input id="smtp-pass" className="input" type="password" name="password" autoComplete="new-password" placeholder={smtpHasPassword ? "zapisane – wpisz, żeby zmienić" : "hasło do skrzynki"} />
+                </div>
+                <div><label className="label" htmlFor="smtp-from">Adres nadawcy (puste = login)</label><input id="smtp-from" className="input" type="email" name="from_email" defaultValue={smtp.from_email ?? ""} /></div>
+                <div><label className="label" htmlFor="smtp-name">Nazwa nadawcy</label><input id="smtp-name" className="input" name="from_name" defaultValue={smtp.from_name ?? ""} placeholder="np. Sneakers Depot" /></div>
+                <div className="flex items-end gap-2 md:col-span-3">
+                  <SubmitButton pendingText="Zapisuję…">Zapisz i sprawdź połączenie</SubmitButton>
+                  {mail?.source === "env" && <span className="text-xs text-muted">Teraz działa z ustawień w Vercel (SMTP_*). Po zapisaniu tutaj – z tych ustawień.</span>}
+                </div>
+              </form>
+              {mail && (
                 <form action={sendTestMailAction} className="flex flex-wrap gap-2">
                   <input className="input w-64" type="email" name="to" placeholder="adres testowy (puste = e-mail firmy)" aria-label="Adres testowy" />
                   <SubmitButton className="btn-secondary" pendingText="Wysyłam…">Wyślij testowy e-mail</SubmitButton>
@@ -351,6 +368,15 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
                 </div>
               ))}
             {stock.last && !stock.last.ok && <Notice tone="error">{stock.last.message}</Notice>}
+            {stock.last && !stock.last.ok && /za dużo na automat/.test(stock.last.message ?? "") && (
+              <form action={runStockNow} className="space-y-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm">
+                <input type="hidden" name="force" value="1" />
+                <p>Różnica jest większa niż bezpieczny limit automatu. Jeśli to zamierzone (np. usunięte albo „niekończące się” produkty w Shopify), obejrzyj porównanie i wyrównaj stan jednorazowo:
+                  brakujące sztuki dojdą, a nadmiarowe sztuki bez historii znikną (z umową, komisem, dostawą lub sprzedażą zostają).</p>
+                <label className="flex items-center gap-2"><input type="checkbox" name="confirm" value="1" /> Obejrzałem porównanie – wyrównaj stan aplikacji do Shopify</label>
+                <SubmitButton className="btn-danger" pendingText="Wyrównuję…">Wyrównaj do Shopify teraz</SubmitButton>
+              </form>
+            )}
             <div className="rounded-md border border-line p-3 text-sm">
               <h3 className="mb-1 font-medium">Dostęp aplikacji do stanów w Shopify</h3>
               <p className="text-muted">Jeśli widzisz „Access denied” albo brak lokalizacji: w <b>dev.shopify.com</b> (Dev Dashboard) → aplikacja sklepu → <b>Versions → Create version</b>, w polu <b>Scopes</b> dopisz

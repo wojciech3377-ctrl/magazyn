@@ -70,7 +70,7 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
             : inv.email_error
               ? <span className="text-sm text-bad">nie wysłano: {inv.email_error}</span>
               : <span className="text-sm text-muted">{buyer.email ? (inv.status === "sending" ? "pójdzie automatycznie po przyjęciu w KSeF" : "jeszcze nie wysłana") : "nabywca nie podał e-maila"}</span>}
-          {mailConfigured() && inv.status !== "cancelled" && inv.status !== "rejected" && (
+          {(await mailConfigured()) && inv.status !== "cancelled" && inv.status !== "rejected" && (
             <form action={emailInvoiceAction} className="ml-auto flex flex-wrap gap-2">
               <input type="hidden" name="id" value={inv.id} />
               <input className="input w-64" type="email" name="to" defaultValue={buyer.email ?? ""} placeholder="adres e-mail" aria-label="Adres e-mail" required />

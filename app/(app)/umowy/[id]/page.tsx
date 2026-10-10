@@ -157,6 +157,7 @@ type TemplateContract = {
 
 async function TemplateSection({ c, canSeePrices }: { c: TemplateContract; canSeePrices: boolean }) {
   const { supabase } = await requireProfile();
+  const mailOk = await mailConfigured();
   const link = c.sign_token ? `${await appUrl()}/podpis/${c.sign_token}` : "";
   const items = c.items ?? [];
   const needsAssign = c.status === "accepted" && c.source === "general" && !c.units_created_at
@@ -266,9 +267,9 @@ async function TemplateSection({ c, canSeePrices }: { c: TemplateContract; canSe
             <form action={sendSigningEmail} className="flex gap-2">
               <input type="hidden" name="id" value={c.id} />
               <input className="input" type="email" name="email" defaultValue={c.seller_email ?? ""} placeholder="e-mail sprzedającego" aria-label="E-mail sprzedającego" />
-              <SubmitButton className="btn-secondary whitespace-nowrap" pendingText="Wysyłam…" disabled={!mailConfigured()}>E-mail</SubmitButton>
+              <SubmitButton className="btn-secondary whitespace-nowrap" pendingText="Wysyłam…" disabled={!mailOk}>E-mail</SubmitButton>
             </form>
-            {!mailConfigured() && <p className="text-xs text-muted">Wysyłka e-maili z aplikacji wymaga ustawienia SMTP w Vercel.</p>}
+            {!mailOk && <p className="text-xs text-muted">Wysyłka e-maili z aplikacji wymaga ustawienia w Ustawienia → Faktury i KSeF.</p>}
             <form action={cancelContract}>
               <input type="hidden" name="id" value={c.id} />
               <SubmitButton className="text-sm text-bad underline" pendingText="…">Anuluj umowę</SubmitButton>

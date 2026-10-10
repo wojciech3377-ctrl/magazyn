@@ -62,7 +62,15 @@ export async function upsertShopifyProducts(db: SupabaseClient, store: Store, al
       },
     }))
     .filter((p) => p.variants.nodes.length > 0);
-  if (!products.length) return { products: 0, variants: 0, created: 0 };
+  if (!products.length) {
+    const untrackedOnly = allProducts.flatMap((p) => p.variants.nodes.filter((v) => v.inventoryItem?.tracked === false).map((v) => v.id));
+    for (let i = 0; i < untrackedOnly.length; i += 100) {
+      const { error } = await db.from("variant_store_links").update({ shopify_variant_id: null, shopify_inventory_item_id: null, price: null, inventory_tracked: false, updated_at: new Date().toISOString() })
+        .eq("store_id", store.id).in("shopify_variant_id", untrackedOnly.slice(i, i + 100));
+      if (error) throw error;
+    }
+    return { products: 0, variants: 0, created: 0 };
+  }
   const gids = products.map((p) => p.id);
 
   const { data: existingLinks, error: e1 } = await db
@@ -161,6 +169,15 @@ export async function upsertShopifyProducts(db: SupabaseClient, store: Store, al
     if (error) throw error;
   }
 
+  // Rozmiary bez śledzenia stanu w Shopify („sprzedawaj zawsze”, np. sznurówki): nie są towarem na sztuki →
+  // powiązanie ze Shopify znika, sztuki bez historii usuwa purge_non_shopify, reszta dostaje „brak w Shopify”.
+  const untracked = allProducts.flatMap((p) => p.variants.nodes.filter((v) => v.inventoryItem?.tracked === false).map((v) => v.id));
+  for (let i = 0; i < untracked.length; i += 100) {
+    const { error } = await db.from("variant_store_links").update({ shopify_variant_id: null, shopify_inventory_item_id: null, price: null, inventory_tracked: false, updated_at: new Date().toISOString() })
+      .eq("store_id", store.id).in("shopify_variant_id", untracked.slice(i, i + 100));
+    if (error) throw error;
+  }
+
   // Rozmiary usunięte z produktu w Shopify: powiązanie ze Shopify znika (SKU z Base zostaje) → „brak w Shopify”.
   const liveGids = new Set(allProducts.flatMap((p) => p.variants.nodes.map((v) => v.id)));
   const complete = new Set(allProducts.filter((p) => p.variants.nodes.length < 250).map((p) => productIdByGid.get(p.id)).filter(Boolean));
@@ -221,4 +238,46 @@ export async function syncSingleProduct(db: SupabaseClient, store: Store, produc
   const product = await getProduct(store.shopify_domain!, store.code, productGid);
   if (!product) return { products: 0, variants: 0, created: 0 };
   return upsertShopifyProducts(db, store, [product]);
+}
+
+/**
+ * Produkty usunięte w Shopify (bez webhooka – np. przed włączeniem „na żywo”): sprawdza, które produkty
+ * z katalogu jeszcze istnieją, a przy usuniętych zdejmuje powiązanie ze Shopify (SKU z Base zostaje).
+ */
+export async function detachDeletedShopifyProducts(db: SupabaseClient) {
+  const { data: stores } = await db.from("stores").select("*").not("shopify_domain", "is", null);
+  const out: Record<string, number> = {};
+  for (const store of (stores ?? []) as Store[]) {
+    const gids: string[] = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await db.from("product_store_links").select("shopify_product_id").eq("store_id", store.id).not("shopify_product_id", "is", null).range(from, from + 999);
+      if (error) throw error;
+      gids.push(...(data ?? []).map((r) => r.shopify_product_id as string));
+      if ((data ?? []).length < 1000) break;
+    }
+    const missing: string[] = [];
+    for (let i = 0; i < gids.length; i += 250) {
+      const part = gids.slice(i, i + 250);
+      const data = await shopifyGraphql<{ nodes: ({ id: string } | null)[] }>(store.shopify_domain!, store.code, `query($ids: [ID!]!) { nodes(ids: $ids) { id } }`, { ids: part });
+      data.nodes.forEach((n, j) => { if (!n) missing.push(part[j]); });
+    }
+    for (let i = 0; i < missing.length; i += 100) {
+      const chunk = missing.slice(i, i + 100);
+      const { data: links } = await db.from("product_store_links").select("product_id").eq("store_id", store.id).in("shopify_product_id", chunk);
+      const productIds = (links ?? []).map((l) => l.product_id as string);
+      if (productIds.length) {
+        const variants = await selectIn<{ id: string }>(productIds, (c) => db.from("variants").select("id").in("product_id", c));
+        const ids = variants.map((v) => v.id);
+        for (let k = 0; k < ids.length; k += 200) {
+          const { error } = await db.from("variant_store_links").update({ shopify_variant_id: null, shopify_inventory_item_id: null, price: null, updated_at: new Date().toISOString() })
+            .eq("store_id", store.id).in("variant_id", ids.slice(k, k + 200));
+          if (error) throw error;
+        }
+      }
+      const { error } = await db.from("product_store_links").delete().eq("store_id", store.id).in("shopify_product_id", chunk);
+      if (error) throw error;
+    }
+    out[store.name] = missing.length;
+  }
+  return out;
 }

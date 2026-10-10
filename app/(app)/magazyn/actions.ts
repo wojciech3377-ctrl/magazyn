@@ -217,6 +217,7 @@ export async function runAutoCatalogNow() {
     ok = false;
     msg = errorMessage(e);
     await db.from("sync_log").insert({ job: "auto-catalog", ok: false, message: msg });
+    if (/za dużo na automat/.test(msg)) msg += " Jeśli to zamierzone, wyrównaj stan w Ustawienia → Stany magazynowe („Wyrównaj do Shopify teraz”).";
   }
   revalidatePath("/magazyn");
   redirect(`/magazyn?${ok ? "ok" : "blad"}=${encodeURIComponent(msg)}`);
