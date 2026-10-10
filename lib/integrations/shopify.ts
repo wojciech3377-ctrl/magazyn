@@ -338,3 +338,14 @@ export async function refundShopifyLines(
   if (err) throw new Error(`Shopify: ${err}`);
   return { refunded: Number(data.refundCreate.refund?.totalRefundedSet.shopMoney.amount ?? 0), suggested: amount, moneyBack: transactions.length > 0 };
 }
+
+/** Produkty zmienione od podanej chwili (rosnąco po dacie zmiany), po 50 – nowe i zmienione ceny. */
+export async function productsUpdatedSince(domain: string, storeCode: string, sinceIso: string, after: string | null) {
+  const data = await shopifyGraphql<{ products: { nodes: (ShopifyProduct & { updatedAt: string })[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } } }>(
+    domain,
+    storeCode,
+    `query($q: String!, $after: String) { products(first: 50, after: $after, query: $q, sortKey: UPDATED_AT) { nodes { updatedAt ${PRODUCT_FIELDS} } pageInfo { hasNextPage endCursor } } }`,
+    { q: `updated_at:>='${sinceIso}'`, after },
+  );
+  return data.products;
+}

@@ -27,6 +27,15 @@ export async function baseCatalogChunk(db: SupabaseClient, inventoryId: number) 
   const ids = state.ids.slice(state.offset, state.offset + CHUNK);
   if (!ids.length) return { done: true, processed: state.offset, total: state.ids.length };
 
+  await upsertBaseProducts(db, inventoryId, ids);
+  const now = new Date().toISOString();
+  state.offset += ids.length;
+  await db.from("sync_state").update({ value: state, updated_at: now }).eq("key", stateKey(inventoryId));
+  return { done: state.offset >= state.ids.length, processed: state.offset, total: state.ids.length };
+}
+
+/** Pobranie z Base danych produktów (z wariantami i powiązaniami ze sklepem) do tabeli base_products. */
+export async function upsertBaseProducts(db: SupabaseClient, inventoryId: number, ids: number[]) {
   const data = await getInventoryProductsData(inventoryId, ids);
   const rows: Record<string, unknown>[] = [];
   const variantIds: number[] = [];
@@ -80,7 +89,4 @@ export async function baseCatalogChunk(db: SupabaseClient, inventoryId: number) 
     if (e) throw e;
   }
 
-  state.offset += ids.length;
-  await db.from("sync_state").update({ value: state, updated_at: now }).eq("key", stateKey(inventoryId));
-  return { done: state.offset >= state.ids.length, processed: state.offset, total: state.ids.length };
 }

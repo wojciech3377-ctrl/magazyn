@@ -85,3 +85,21 @@ exception when others then
   raise notice 'OK: %', sqlerrm;
 end $$;
 rollback;
+-- Widok sztuk i automatyczne sztuki ze stanów Base.
+begin;
+insert into auth.users (id, email) values ('00000000-0000-0000-0000-000000000001', 'szef@example.com');
+insert into public.locations (id, store_id, name) select '60000000-0000-0000-0000-000000000001', id, 'Sklep' from public.stores where code = 'sneakers-depot';
+insert into public.products (id, title) values ('10000000-0000-0000-0000-000000000008', 'Jordan 4');
+insert into public.variants (id, product_id, option) values ('20000000-0000-0000-0000-000000000008', '10000000-0000-0000-0000-000000000008', '43');
+insert into public.variant_store_links (variant_id, store_id, shopify_variant_id, price)
+select '20000000-0000-0000-0000-000000000008', id, 'gid://shopify/ProductVariant/1', 899 from public.stores where code = 'sneakers-depot';
+insert into public.units (variant_id, location_id) values ('20000000-0000-0000-0000-000000000008', '60000000-0000-0000-0000-000000000001');
+select public.reconcile_base_stock('[{"variant_id":"20000000-0000-0000-0000-000000000008","location_id":"60000000-0000-0000-0000-000000000001","qty":3}]') as before_import;
+insert into public.sync_state (key, value) values ('initial_stock_imported', '{}');
+select public.reconcile_base_stock('[{"variant_id":"20000000-0000-0000-0000-000000000008","location_id":"60000000-0000-0000-0000-000000000001","qty":3}]') as first;
+select public.reconcile_base_stock('[{"variant_id":"20000000-0000-0000-0000-000000000008","location_id":"60000000-0000-0000-0000-000000000001","qty":3}]') as again;
+select public.reconcile_base_stock('[{"variant_id":"20000000-0000-0000-0000-000000000008","location_id":"60000000-0000-0000-0000-000000000001","qty":1}]') as fewer;
+set local role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000001', true);
+select title, option, shop_price, store_name, count(*) from public.units_list group by 1, 2, 3, 4;
+rollback;

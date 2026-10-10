@@ -7,6 +7,7 @@ import { backfillContractNumbers } from "@/lib/contracts/docnumber";
 import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/furgonetka";
 import { errorMessage } from "@/lib/errors";
 import { pollKsef } from "@/lib/invoices/service";
+import { runAutoCatalog } from "@/lib/sync/auto-catalog";
 import { ksefConfigured } from "@/lib/ksef/client";
 
 export const dynamic = "force-dynamic";
@@ -46,6 +47,14 @@ export async function GET(req: NextRequest) {
   } catch (e) {
     await db.from("sync_log").insert({ job: "contract-numbers", ok: false, message: errorMessage(e) });
   }
+  // Nowe produkty ze Shopify / Base i nowe stany → sztuki (co 15 min; dziennik tylko, gdy coś się działo).
+  try {
+    const r = await runAutoCatalog(db);
+    if (r) await db.from("sync_log").insert({ job: "auto-catalog", ok: true, message: JSON.stringify(r) });
+  } catch (e) {
+    await db.from("sync_log").insert({ job: "auto-catalog", ok: false, message: errorMessage(e) });
+  }
+
   // Statusy faktur w KSeF (tylko gdy jakieś czekają).
   if (ksefConfigured()) {
     const { count } = await db.from("invoices").select("id", { count: "exact", head: true }).eq("status", "sending");

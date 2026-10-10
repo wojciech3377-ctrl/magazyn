@@ -1,12 +1,12 @@
 import Link from "next/link";
 import { requireProfile } from "@/lib/auth";
-import { queryUnits, type UnitFilters, type UnitRow } from "@/lib/queries/units";
+import { queryUnits, UNIT_SORTS, type UnitFilters, type UnitRow } from "@/lib/queries/units";
 import { money, dateOnly, OWNER_TYPE, PURCHASE_FORM, UNIT_STATUS } from "@/lib/labels";
 import { Notice, PageHeader, Pagination, Pill, StatusBadge, Thumb } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
 import { ConfirmSubmit } from "@/components/ConfirmSubmit";
 import { SelectAll } from "@/components/SelectAll";
-import { bulkAction } from "./actions";
+import { bulkAction, runAutoCatalogNow } from "./actions";
 
 const PER_PAGE = 100;
 
@@ -23,20 +23,39 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
   const page = Math.max(1, Number(sp.strona ?? 1));
   const filters: UnitFilters = {
     q: sp.q, sklep: sp.sklep, lokalizacja: sp.lokalizacja, status: sp.status, umowa: sp.umowa, wlasciciel: sp.wlasciciel, komisant: sp.komisant,
+    forma: sp.forma, rozmiar: sp.rozmiar, cena_od: sp.cena_od, cena_do: sp.cena_do, zakup_od: sp.zakup_od, zakup_do: sp.zakup_do,
+    od: sp.od, do: sp.do, imei: sp.imei, sort: sp.sort, kier: sp.kier,
   };
+  const more = ["komisant", "forma", "rozmiar", "cena_od", "cena_do", "zakup_od", "zakup_do", "od", "do", "imei"].some((k) => sp[k]);
 
-  const [{ rows, count }, { data: stores }, { data: locations }, { data: contracts }, { count: noContract }] = await Promise.all([
+  const [{ rows, count }, { data: stores }, { data: locations }, { data: contracts }, { count: noContract }, { data: consignors }] = await Promise.all([
     queryUnits(supabase, filters, [(page - 1) * PER_PAGE, page * PER_PAGE - 1]),
     supabase.from("stores").select("id, name").order("name"),
     supabase.from("locations").select("id, name, store_id").eq("active", true).order("name"),
     supabase.from("contracts").select("id, type, counterparty, contract_date").order("created_at", { ascending: false }).limit(200),
     supabase.from("units").select("id", { count: "exact", head: true }).is("contract_id", null).in("status", ["in_stock", "in_transit", "reserved"]),
+    supabase.from("consignors").select("id, name").order("name"),
   ]);
 
   const filterParams = Object.fromEntries(Object.entries(filters).filter(([, v]) => v)) as Record<string, string>;
   const qs = new URLSearchParams(filterParams).toString();
   const returnTo = `/magazyn${qs ? `?${qs}` : ""}`;
   const storeName = new Map((stores ?? []).map((s) => [s.id, s.name]));
+  const activeSort = UNIT_SORTS[sp.sort ?? ""] ? sp.sort! : "przyjeta";
+  const activeAsc = sp.kier === "asc" ? true : sp.kier === "desc" ? false : UNIT_SORTS[activeSort].asc;
+  /** Nagłówek kolumny: klik sortuje, drugi klik odwraca kierunek. */
+  const SortTh = ({ k, children, right }: { k: string; children: React.ReactNode; right?: boolean }) => {
+    const on = activeSort === k;
+    const params = new URLSearchParams({ ...filterParams, sort: k, kier: on ? (activeAsc ? "desc" : "asc") : (UNIT_SORTS[k].asc ? "asc" : "desc") });
+    params.delete("strona");
+    return (
+      <th className={right ? "text-right" : ""} aria-sort={on ? (activeAsc ? "ascending" : "descending") : undefined}>
+        <Link href={`/magazyn?${params}`} className={`inline-flex items-center gap-1 hover:text-ink ${on ? "text-ink" : ""}`}>
+          {children}<span className="text-[10px]">{on ? (activeAsc ? "▲" : "▼") : "↕"}</span>
+        </Link>
+      </th>
+    );
+  };
 
   return (
     <>
@@ -45,6 +64,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
         sub={<>{count} szt. w widoku{noContract ? <> · <Link className="text-accent underline" href="/magazyn?umowa=brak">{noContract} na stanie bez umowy</Link></> : null}</>}
         actions={
           <>
+            {profile.role === "admin" && <form action={runAutoCatalogNow}><SubmitButton className="btn-secondary" pendingText="Sprawdzam…">Sprawdź nowe produkty i stany</SubmitButton></form>}
             <Link className="btn-secondary" href={`/api/eksport/sztuki${qs ? `?${qs}` : ""}`}>Eksport CSV</Link>
             <Link className="btn" href="/dostawa">Przyjmij dostawę</Link>
           </>
@@ -54,33 +74,66 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
       {sp.ok && <div className="mb-4"><Notice tone="ok">{sp.ok}</Notice></div>}
       {sp.blad && <div className="mb-4"><Notice tone="error">{sp.blad}</Notice></div>}
 
-      <form className="mb-4 grid grid-cols-2 gap-2 md:grid-cols-4 lg:grid-cols-7" method="get">
-        <input className="input col-span-2" name="q" defaultValue={sp.q} placeholder="Szukaj: nazwa, SKU, EAN, kod sztuki, IMEI" />
-        <select className="input" name="sklep" defaultValue={sp.sklep ?? ""}>
-          <option value="">Wszystkie sklepy</option>
-          {stores?.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-        </select>
-        <select className="input" name="lokalizacja" defaultValue={sp.lokalizacja ?? ""}>
-          <option value="">Wszystkie lokalizacje</option>
-          {locations?.map((l) => <option key={l.id} value={l.id}>{storeName.get(l.store_id)} · {l.name}</option>)}
-        </select>
-        <select className="input" name="status" defaultValue={sp.status ?? ""}>
-          <option value="">Dostępne (na stanie, w drodze, rezerwacje)</option>
-          {Object.entries(UNIT_STATUS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-          <option value="wszystkie">wszystkie statusy</option>
-        </select>
-        <select className="input" name="umowa" defaultValue={sp.umowa ?? ""}>
-          <option value="">Umowa: wszystkie</option>
-          <option value="brak">bez umowy</option>
-          <option value="jest">z umową</option>
-        </select>
-        <div className="flex gap-2">
+      <form className="mb-4 space-y-2" method="get">
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-4 lg:grid-cols-7">
+          <input className="input col-span-2" name="q" defaultValue={sp.q} placeholder="Szukaj: nazwa, SKU, EAN, kod sztuki, IMEI" />
+          <select className="input" name="sklep" defaultValue={sp.sklep ?? ""}>
+            <option value="">Wszystkie sklepy</option>
+            {stores?.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+          <select className="input" name="lokalizacja" defaultValue={sp.lokalizacja ?? ""}>
+            <option value="">Wszystkie lokalizacje</option>
+            {locations?.map((l) => <option key={l.id} value={l.id}>{storeName.get(l.store_id)} · {l.name}</option>)}
+          </select>
+          <select className="input" name="status" defaultValue={sp.status ?? ""}>
+            <option value="">Dostępne (na stanie, w drodze, rezerwacje)</option>
+            {Object.entries(UNIT_STATUS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            <option value="wszystkie">wszystkie statusy</option>
+          </select>
+          <select className="input" name="umowa" defaultValue={sp.umowa ?? ""}>
+            <option value="">Umowa: wszystkie</option>
+            <option value="brak">bez umowy</option>
+            <option value="jest">z umową</option>
+          </select>
           <select className="input" name="wlasciciel" defaultValue={sp.wlasciciel ?? ""}>
             <option value="">Własne i komis</option>
             <option value="own">własne</option>
             <option value="consignment">komis</option>
           </select>
+        </div>
+        <details className="rounded-md border border-line px-3 py-2" open={more}>
+          <summary className="cursor-pointer text-sm font-medium">Więcej filtrów</summary>
+          <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4 lg:grid-cols-6">
+            <select className="input" name="komisant" defaultValue={sp.komisant ?? ""} aria-label="Komisant">
+              <option value="">Komisant: każdy</option>
+              {consignors?.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <select className="input" name="forma" defaultValue={sp.forma ?? ""} aria-label="Forma sprzedaży">
+              <option value="">Forma: każda</option>
+              {Object.entries(PURCHASE_FORM).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            </select>
+            <input className="input" name="rozmiar" defaultValue={sp.rozmiar} placeholder="Rozmiar, np. 42" aria-label="Rozmiar" />
+            <select className="input" name="imei" defaultValue={sp.imei ?? ""} aria-label="IMEI / numer seryjny">
+              <option value="">IMEI: wszystkie</option>
+              <option value="jest">z IMEI / nr seryjnym</option>
+              <option value="brak">bez IMEI</option>
+            </select>
+            <div className="flex items-center gap-1"><input className="input" name="cena_od" inputMode="decimal" defaultValue={sp.cena_od} placeholder="Cena sklep od" aria-label="Cena w sklepie od" /><input className="input" name="cena_do" inputMode="decimal" defaultValue={sp.cena_do} placeholder="do" aria-label="Cena w sklepie do" /></div>
+            {profile.can_see_prices && <div className="flex items-center gap-1"><input className="input" name="zakup_od" inputMode="decimal" defaultValue={sp.zakup_od} placeholder="Zakup od" aria-label="Cena zakupu od" /><input className="input" name="zakup_do" inputMode="decimal" defaultValue={sp.zakup_do} placeholder="do" aria-label="Cena zakupu do" /></div>}
+            <label className="text-xs text-muted">Przyjęta od<input className="input mt-0.5" type="date" name="od" defaultValue={sp.od} /></label>
+            <label className="text-xs text-muted">Przyjęta do<input className="input mt-0.5" type="date" name="do" defaultValue={sp.do} /></label>
+          </div>
+        </details>
+        <div className="flex flex-wrap items-center gap-2">
+          <select className="input w-56" name="sort" defaultValue={activeSort} aria-label="Sortuj według">
+            {Object.entries(UNIT_SORTS).map(([k, v]) => <option key={k} value={k}>Sortuj: {v.label}</option>)}
+          </select>
+          <select className="input w-40" name="kier" defaultValue={activeAsc ? "asc" : "desc"} aria-label="Kierunek">
+            <option value="desc">malejąco</option>
+            <option value="asc">rosnąco</option>
+          </select>
           <button className="btn">Filtruj</button>
+          {Object.keys(filterParams).length > 0 && <Link className="text-sm text-muted underline" href="/magazyn">Wyczyść filtry</Link>}
         </div>
       </form>
 
@@ -92,15 +145,15 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
             <thead>
               <tr>
                 <th className="w-8"><SelectAll /></th>
-                <th>Produkt</th>
-                <th>Rozmiar</th>
-                <th>Kod</th>
-                <th>Lokalizacja</th>
-                <th>Status</th>
-                <th>Komisant</th>
-                <th className="text-right">Cena w sklepie</th>
-                {profile.can_see_prices && <th className="text-right">Cena zakupu</th>}
-                <th>Przyjęta</th>
+                <SortTh k="nazwa">Produkt</SortTh>
+                <SortTh k="rozmiar">Rozmiar</SortTh>
+                <SortTh k="kod">Kod</SortTh>
+                <SortTh k="lokalizacja">Lokalizacja</SortTh>
+                <SortTh k="status">Status</SortTh>
+                <SortTh k="komisant">Komisant</SortTh>
+                <SortTh k="cena" right>Cena w sklepie</SortTh>
+                {profile.can_see_prices && <SortTh k="zakup" right>Cena zakupu</SortTh>}
+                <SortTh k="przyjeta">Przyjęta</SortTh>
                 <th className="text-right">Umowa</th>
               </tr>
             </thead>

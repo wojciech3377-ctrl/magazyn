@@ -171,3 +171,17 @@ export async function getReceiptForOrder(orderId: number): Promise<BaseReceipt |
     throw e;
   }
 }
+
+/** Najnowsze produkty katalogu (ID malejąco, 1000 na stronę). */
+export async function listNewestProductIds(inventoryId: number) {
+  const r = await baseCall<{ products: Record<string, { id: number }> }>("getInventoryProductsList", { inventory_id: inventoryId, page: 1, sort: "id DESC" });
+  return Object.keys(r.products ?? {}).map(Number);
+}
+
+export type BaseStockEntry = { product_id?: number; stock?: Record<string, number>; variants?: Record<string, Record<string, number>> };
+
+/** Stany całego katalogu (1000 produktów na stronę, z wariantami). */
+export async function getInventoryStockPage(inventoryId: number, page: number) {
+  const r = await baseCall<{ products: Record<string, BaseStockEntry> }>("getInventoryProductsStock", { inventory_id: inventoryId, page });
+  return r.products ?? {};
+}

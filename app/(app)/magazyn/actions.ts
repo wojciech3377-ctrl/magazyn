@@ -1,5 +1,7 @@
 "use server";
 
+import { createAdminClient } from "@/lib/supabase/admin";
+import { runAutoCatalog } from "@/lib/sync/auto-catalog";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireAdmin, requireProfile } from "@/lib/auth";
@@ -192,4 +194,25 @@ export async function deleteUnit(formData: FormData) {
   const results = COUNTED.includes(u!.status) ? await adjustBaseStock(supabase, [{ variantId: u!.variant_id, locationId: u!.location_id, delta: -1 }]) : [];
   revalidatePath("/magazyn");
   back("/magazyn", `Sztuka usunięta.${baseSummary(results)}`, results.some((r) => !r.ok) ? "error" : "ok");
+}
+
+/** Ręczne uruchomienie automatu: nowe produkty ze Shopify / Base i nowe stany z Base → sztuki. */
+export async function runAutoCatalogNow() {
+  await requireAdmin();
+  const db = createAdminClient();
+  let msg: string;
+  let ok = true;
+  try {
+    const r = await runAutoCatalog(db, true);
+    const created = (r?.stock.results as { created?: number }[] | undefined)?.reduce((n, x) => n + (x?.created ?? 0), 0) ?? 0;
+    const products = Object.values(r?.shopify ?? {}).reduce((n, x) => n + x, 0);
+    msg = `Sprawdzono: ${products} produktów ze Shopify, ${r?.base.added ?? 0} nowych w Base, dodano ${created} sztuk ze stanów Base.`;
+    await db.from("sync_log").insert({ job: "auto-catalog", ok: true, message: JSON.stringify(r) });
+  } catch (e) {
+    ok = false;
+    msg = errorMessage(e);
+    await db.from("sync_log").insert({ job: "auto-catalog", ok: false, message: msg });
+  }
+  revalidatePath("/magazyn");
+  redirect(`/magazyn?${ok ? "ok" : "blad"}=${encodeURIComponent(msg)}`);
 }
