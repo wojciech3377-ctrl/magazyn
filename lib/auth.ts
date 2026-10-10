@@ -20,8 +20,14 @@ export const requireProfile = cache(async () => {
   const { data: auth } = await supabase.auth.getClaims();
   const userId = auth?.claims?.sub;
   if (!userId) redirect("/login");
-  const { data: profile } = await supabase.from("profiles").select("*").eq("id", userId).single();
-  if (!profile || !profile.active) redirect("/login?blad=konto");
+  const { data: profile } = await supabase.from("profiles").select("*").eq("id", userId).maybeSingle();
+  if (!profile) {
+    // Konto komisanta nie ma profilu pracownika → jego panel.
+    const { createAdminClient } = await import("@/lib/supabase/admin");
+    const { data: consignor } = await createAdminClient().from("consignors").select("id").eq("user_id", userId).maybeSingle();
+    redirect(consignor ? "/komis" : "/login?blad=konto");
+  }
+  if (!profile.active) redirect("/login?blad=konto");
   return { supabase, profile: profile as Profile };
 });
 

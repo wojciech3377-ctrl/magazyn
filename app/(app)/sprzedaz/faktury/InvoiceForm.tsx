@@ -108,6 +108,7 @@ export function InvoiceForm({ draft, ksefReady }: { draft: InvoiceDraft; ksefRea
       <input type="hidden" name="paid" value={paid ? "1" : "0"} />
       {draft.orderId && <input type="hidden" name="order_id" value={draft.orderId} />}
       {draft.posOrderId && <input type="hidden" name="pos_order_id" value={draft.posOrderId} />}
+      {draft.consignorShipmentId && <input type="hidden" name="consignor_shipment_id" value={draft.consignorShipmentId} />}
 
       <section className="card p-4">
         <div className="mb-3 flex flex-wrap items-center gap-2">

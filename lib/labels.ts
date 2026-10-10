@@ -7,6 +7,7 @@ export const UNIT_STATUS: Record<string, string> = {
   returned: "zwrot",
   removed: "wycofana (brak w Shopify)",
   consignor_returned: "oddana komisantowi",
+  consignor_hold: "odłożona do wysyłki do komisanta",
 };
 
 export const UNIT_STATUS_TONE: Record<string, string> = {
@@ -18,6 +19,7 @@ export const UNIT_STATUS_TONE: Record<string, string> = {
   returned: "bg-rose-50 text-rose-800 ring-rose-200",
   removed: "bg-slate-100 text-slate-500 ring-slate-200",
   consignor_returned: "bg-violet-50 text-violet-800 ring-violet-200",
+  consignor_hold: "bg-violet-50 text-violet-800 ring-violet-200",
 };
 
 /** Forma sprzedaży sztuki (kolumna purchase_form). */

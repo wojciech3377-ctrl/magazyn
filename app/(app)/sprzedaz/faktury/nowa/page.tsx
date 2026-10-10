@@ -2,7 +2,7 @@ import Link from "next/link";
 import { requireProfile } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { PageHeader, Notice } from "@/components/ui";
-import { draftFromInvoice, draftFromOrder, draftFromPos, todayPl, type InvoiceDraft } from "@/lib/invoices/service";
+import { draftFromConsignorShipment, draftFromInvoice, draftFromOrder, draftFromPos, todayPl, type InvoiceDraft } from "@/lib/invoices/service";
 import { ksefConfigured } from "@/lib/ksef/client";
 import { InvoiceForm } from "../InvoiceForm";
 
@@ -17,6 +17,7 @@ export default async function NewInvoicePage({ searchParams }: { searchParams: P
   if (sp.zamowienie && UUID.test(sp.zamowienie)) draft = await draftFromOrder(db, sp.zamowienie);
   else if (sp.kasa && UUID.test(sp.kasa)) draft = await draftFromPos(db, sp.kasa);
   else if (sp.podobna && UUID.test(sp.podobna)) draft = await draftFromInvoice(db, sp.podobna);
+  else if (sp.komis_wysylka && UUID.test(sp.komis_wysylka)) draft = await draftFromConsignorShipment(db, sp.komis_wysylka);
   const existing = draft && (draft.orderId || draft.posOrderId)
     ? (await (draft.orderId ? db.from("invoices").select("id, number").eq("order_id", draft.orderId) : db.from("invoices").select("id, number").eq("pos_order_id", draft.posOrderId!)).not("status", "in", "(rejected,cancelled)").limit(1).maybeSingle()).data
     : null;

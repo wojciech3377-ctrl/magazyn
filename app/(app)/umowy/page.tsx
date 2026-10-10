@@ -131,6 +131,7 @@ export default async function UmowyPage({ searchParams }: { searchParams: Promis
                 <td><Link className="font-medium text-accent hover:underline" href={`/umowy/${c.id}`}>{c.counterparty}</Link></td>
                 <td><StatePill c={c} /></td>
                 <td>
+                  {tab === "bez-rzeczy" && <Link className="btn-secondary mb-1 inline-block px-2.5 py-1 text-xs" href={`/umowy/${c.id}/przypisz`}>Przypisz</Link>}
                   {c.status === "accepted" && !c.paid_at && c.template && (
                     <form action={markPaid}>
                       <input type="hidden" name="id" value={c.id} />

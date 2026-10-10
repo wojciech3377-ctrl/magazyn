@@ -87,6 +87,8 @@ export async function createInvoiceAction(_: InvoiceFormState, fd: FormData): Pr
     return { error: errorMessage(e) };
   }
   if (fd.get("save_customer") === "1") await saveCustomer(db, draft.buyer, profile.id);
+  const shipmentId = s(fd, "consignor_shipment_id");
+  if (/^[0-9a-f-]{36}$/i.test(shipmentId)) await db.from("consignor_shipments").update({ invoice_id: id }).eq("id", shipmentId).is("invoice_id", null);
   let stockNote = "";
   if (manualUnits.length) {
     const { data: sold } = await db.from("units").update({ status: "sold", sold_at: new Date().toISOString() })

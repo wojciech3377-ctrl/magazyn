@@ -251,3 +251,55 @@ export async function updateContractMeta(formData: FormData) {
   revalidatePath(`/umowy/${id}`);
   redirect(`/umowy/${id}?${error ? "blad" : "ok"}=${encodeURIComponent(error ? error.message : "Zapisano.")}`);
 }
+
+/** Umowa bez rzeczy → sztuka z magazynu (albo sprzedana sztuka) bez umowy. */
+export async function assignContractToUnit(formData: FormData) {
+  const { supabase } = await requireProfile();
+  const contractId = String(formData.get("contract_id") ?? "");
+  const unitId = String(formData.get("unit_id") ?? "");
+  const back = `/umowy/${contractId}/przypisz`;
+  const { data: c } = await supabase.from("contracts").select("id, amount, status").eq("id", contractId).maybeSingle();
+  if (!c || ["cancelled", "rejected", "sent"].includes(c.status as string)) redirect(`${back}?blad=${encodeURIComponent("Ta umowa jest anulowana, czeka na podpis albo nie istnieje.")}`);
+  const { count: already } = await supabase.from("units").select("id", { count: "exact", head: true }).eq("contract_id", contractId);
+  const patch: Record<string, unknown> = { contract_id: contractId };
+  const { data: u } = await supabase.from("units").select("id, code, purchase_price, owner_type, status").eq("id", unitId).maybeSingle();
+  if (!u || u.owner_type !== "own" || !["in_stock", "reserved", "in_transit", "sold", "shipped"].includes(u.status as string)) redirect(`${back}?blad=${encodeURIComponent("Tej sztuki nie można powiązać z umową (komis, wycofana albo oddana).")}`);
+  // Pierwsza rzecz do umowy: cena zakupu = kwota umowy (jeśli sztuka jej nie ma).
+  if (!already && u!.purchase_price === null && c!.amount !== null && u!.owner_type === "own") patch.purchase_price = c!.amount;
+  const { data: updated, error } = await supabase.from("units").update(patch).eq("id", unitId).is("contract_id", null).select("id");
+  if (error || !updated?.length) redirect(`${back}?blad=${encodeURIComponent(error?.message ?? "Ta sztuka ma już umowę (1 umowa na przedmiot).")}`);
+  await supabase.from("unit_events").insert({ unit_id: unitId, type: "contract", data: { contract_id: contractId, note: "umowa przypisana z listy umów bez rzeczy" } });
+  revalidatePath("/umowy");
+  revalidatePath("/magazyn");
+  redirect(`/umowy/${contractId}?ok=${encodeURIComponent(`Umowa przypisana do sztuki ${u!.code}.`)}`);
+}
+
+/** Umowa bez rzeczy → sprzedana pozycja zamówienia (linia sprzedaży powstaje w razie potrzeby). */
+export async function assignContractToPiece(formData: FormData) {
+  const { supabase } = await requireProfile();
+  const contractId = String(formData.get("contract_id") ?? "");
+  const back = `/umowy/${contractId}/przypisz?zrodlo=sprzedaz`;
+  const fail = (m: string) => redirect(`${back}&blad=${encodeURIComponent(m)}`);
+  const { parsePieceRef } = await import("@/lib/orders/pieces");
+  const ref = parsePieceRef(String(formData.get("ref") ?? ""));
+  if (!ref) return fail("Nie rozpoznałem pozycji zamówienia.");
+  const { data: c } = await supabase.from("contracts").select("id, amount, status").eq("id", contractId).maybeSingle();
+  if (!c || ["cancelled", "rejected", "sent"].includes(c.status as string)) return fail("Ta umowa jest anulowana, czeka na podpis albo nie istnieje.");
+  const { data: saleId, error } = await supabase.rpc("ensure_order_line_sale", { p_order_id: ref.orderId, p_line_id: ref.lineId, p_index: ref.n });
+  if (error || !saleId) return fail(error?.message ?? "Nie udało się przygotować sprzedaży.");
+  const { data: sale } = await supabase.from("sales").select("id, unit:units(id, contract_id)").eq("id", saleId as string).single();
+  const unit = sale?.unit as unknown as { id: string; contract_id: string | null } | null;
+  if (unit) {
+    if (unit.contract_id) return fail("Ten przedmiot ma już umowę (1 umowa na przedmiot).");
+    const { data: upd, error: e } = await supabase.from("units").update({ contract_id: contractId }).eq("id", unit.id).is("contract_id", null).select("id");
+    if (e) return fail(e.message);
+    if (!upd?.length) return fail("Ten przedmiot ma już umowę (1 umowa na przedmiot).");
+    await supabase.from("unit_events").insert({ unit_id: unit.id, type: "contract", data: { contract_id: contractId, sale_id: saleId } });
+  } else {
+    const { error: e } = await supabase.rpc("attach_sale_unit", { p_sale_id: saleId, p_contract_id: contractId, p_purchase_price: c.amount ?? null, p_variant_id: null });
+    if (e) return fail(e.message);
+  }
+  revalidatePath("/umowy");
+  revalidatePath("/sprzedaz");
+  redirect(`/umowy/${contractId}?ok=${encodeURIComponent("Umowa przypisana do sprzedanego przedmiotu.")}`);
+}

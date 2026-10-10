@@ -206,3 +206,23 @@ set local role authenticated;
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000001', true);
 select count(*) as unused_contracts from public.contracts_unused;
 rollback;
+-- Komisant: konto bez profilu pracownika, rzeczy z dokumentem sprzedaży.
+begin;
+insert into auth.users (id, email) values ('00000000-0000-0000-0000-000000000001', 'szef@example.com');
+insert into auth.users (id, email, raw_user_meta_data) values ('00000000-0000-0000-0000-000000000099', 'komis@example.com', '{"kind":"consignor"}');
+select count(*) as consignor_profiles from public.profiles where id = '00000000-0000-0000-0000-000000000099';
+insert into public.consignors (id, name, user_id) values ('80000000-0000-0000-0000-000000000002', 'K', '00000000-0000-0000-0000-000000000099');
+insert into public.locations (id, store_id, name) select '60000000-0000-0000-0000-000000000007', id, 'Sklep' from public.stores where code = 'sneakers-depot';
+insert into public.products (id, title) values ('10000000-0000-0000-0000-000000000001', 'Jordan');
+insert into public.variants (id, product_id, option) values ('20000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', '42');
+insert into public.units (id, variant_id, location_id, owner_type, consignor_id, payout_amount, status) values
+  ('90000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000007', 'consignment', '80000000-0000-0000-0000-000000000002', 500, 'sold'),
+  ('90000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000007', 'consignment', '80000000-0000-0000-0000-000000000002', 300, 'in_stock');
+insert into public.pos_orders (id, store_id, total) select '91000000-0000-0000-0000-000000000001', id, 500 from public.stores where code = 'sneakers-depot';
+insert into public.pos_order_items (order_id, unit_id, price) values ('91000000-0000-0000-0000-000000000001', '90000000-0000-0000-0000-000000000001', 500);
+update public.units set status = 'consignor_hold' where id = '90000000-0000-0000-0000-000000000002';
+select code, status, has_document from public.consignor_units('80000000-0000-0000-0000-000000000002') order by status;
+set local role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000099', true);
+select count(*) as consignor_sees_units from public.units;
+rollback;

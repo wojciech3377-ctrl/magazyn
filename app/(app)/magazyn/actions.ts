@@ -81,16 +81,28 @@ export async function bulkAction(formData: FormData) {
   if (action === "consignor_return") {
     // Wysyłka do komisanta: rzecz komisowa wychodzi z magazynu (stan w Shopify −1), historia zostaje w karcie sztuki.
     const { data: cons } = await supabase.from("units").select("id, status, owner_type, variant_id, location_id, consignor_id").in("id", ids);
+    // Rzeczy ze zleceniem wysyłki od komisanta obsługuje się w Komisanci (stan w Shopify już zdjęty).
+    const { data: openReq } = await supabase.from("consignor_shipments").select("unit_ids").eq("status", "requested");
+    const requested = new Set((openReq ?? []).flatMap((r) => r.unit_ids as string[]));
+    if (ids.some((x) => requested.has(x))) back(returnTo, "Część zaznaczonych rzeczy ma zlecenie wysyłki od komisanta – oznacz je jako wysłane w Komisanci.", "error");
     const ok = (cons ?? []).filter((u) => u.owner_type === "consignment" && ["in_stock", "reserved", "returned"].includes(u.status as string));
     if (!ok.length) back(returnTo, "Zaznacz rzeczy komisowe, które są na stanie.", "error");
-    const { error: e } = await supabase.from("units").update({ status: "consignor_returned" }).in("id", ok.map((u) => u.id));
-    if (e) back(returnTo, e.message, "error");
-    await supabase.from("unit_events").insert(ok.map((u) => ({ unit_id: u.id, type: "consignor_returned", data: { consignor_id: u.consignor_id, note: "wysyłka do komisanta" } })));
-    const counted = ok.filter((u) => COUNTED.includes(u.status as string));
+    // Zmiana tylko, gdy status się w międzyczasie nie zmienił (np. komisant właśnie zlecił wysyłkę).
+    const changed: typeof ok = [];
+    for (const st of ["in_stock", "reserved", "returned"]) {
+      const group = ok.filter((u) => u.status === st);
+      if (!group.length) continue;
+      const { data: upd, error: e } = await supabase.from("units").update({ status: "consignor_returned" }).in("id", group.map((u) => u.id)).eq("status", st).select("id");
+      if (e) back(returnTo, e.message, "error");
+      const done = new Set((upd ?? []).map((u) => u.id as string));
+      changed.push(...group.filter((u) => done.has(u.id as string)));
+    }
+    await supabase.from("unit_events").insert(changed.map((u) => ({ unit_id: u.id, type: "consignor_returned", data: { consignor_id: u.consignor_id, note: "wysyłka do komisanta" } })));
+    const counted = changed.filter((u) => COUNTED.includes(u.status as string));
     const results = await adjustStock(supabase, counted.map((u) => ({ variantId: u.variant_id as string, locationId: u.location_id as string, delta: -1 })));
     revalidatePath("/magazyn");
     const skipped = ids.length - ok.length;
-    back(returnTo, `Oddano komisantowi ${ok.length} szt.${skipped ? ` Pominięto ${skipped} (nie komis albo nie na stanie).` : ""}${baseSummary(results)}`, results.some((r) => !r.ok) ? "error" : "ok");
+    back(returnTo, `Oddano komisantowi ${changed.length} szt.${skipped || ok.length > changed.length ? ` Pominięto ${skipped + ok.length - changed.length} (nie komis albo nie na stanie).` : ""}${baseSummary(results)}`, results.some((r) => !r.ok) ? "error" : "ok");
   }
 
   if (action === "delete") {

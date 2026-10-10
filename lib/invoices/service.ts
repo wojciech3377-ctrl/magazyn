@@ -11,6 +11,7 @@ import { KSEF_COUNTRIES } from "./countries";
 export type PaymentMethod = "cash" | "card" | "transfer" | "mobile";
 export type DraftItem = InvoiceItemInput & { unit_id?: string | null; sale_id?: string | null; pos_item_id?: string | null; checkVat?: boolean };
 export type InvoiceDraft = {
+  consignorShipmentId?: string | null; // faktura za wysyłkę rzeczy do komisanta
   buyer: InvoiceParty;
   issueDate: string;
   saleDate: string;
@@ -132,6 +133,29 @@ function validate(company: Awaited<ReturnType<typeof getCompany>>, d: InvoiceDra
   if (d.issueDate > todayPl()) throw new Error("Data wystawienia nie może być z przyszłości.");
   if (d.saleDate > todayPl()) throw new Error("Data sprzedaży nie może być z przyszłości.");
   if (!d.items.length || d.items.some((i) => !i.name.trim() || !(i.unit_price_gross > 0) || !(i.quantity > 0))) throw new Error("Każda pozycja musi mieć nazwę, ilość i cenę.");
+}
+
+/** Faktura za wysyłkę rzeczy do komisanta na wskazany przez niego adres. */
+export async function draftFromConsignorShipment(db: SupabaseClient, shipmentId: string): Promise<InvoiceDraft | null> {
+  const { data: sh } = await db.from("consignor_shipments").select("id, shipping_fee, address, consignor:consignors(name, email, address_street, address_postcode, address_city, address_country)").eq("id", shipmentId).maybeSingle();
+  if (!sh) return null;
+  const c = sh.consignor as unknown as { name: string; email: string | null; address_street: string | null; address_postcode: string | null; address_city: string | null; address_country: string | null } | null;
+  const a = sh.address as { street?: string; postcode?: string; city?: string; country?: string } | null;
+  const fee = Number(sh.shipping_fee ?? 0);
+  // Adres nabywcy w całości: z konta komisanta, a gdy go nie ma – z adresu wysyłki.
+  const own = c?.address_street && c.address_city;
+  return {
+    consignorShipmentId: sh.id as string,
+    buyer: {
+      name: c?.name ?? "", nip: null, company: false, email: c?.email ?? null,
+      country: (own ? c?.address_country : a?.country) || "PL",
+      address1: (own ? c?.address_street : a?.street) ?? null,
+      address2: (own ? [c?.address_postcode, c?.address_city] : [a?.postcode, a?.city]).filter(Boolean).join(" ") || null,
+    },
+    issueDate: todayPl(), saleDate: todayPl(), paymentMethod: "transfer", paid: false, paidAt: null, dueDate: todayPl(),
+    items: [{ name: "Wysyłka rzeczy z komisu na wskazany adres", quantity: 1, unit: "usł.", unit_price_gross: fee, total_gross: fee, vat: "23" }],
+    orderId: null, posOrderId: null, notes: null,
+  };
 }
 
 /** „Wystaw podobną”: nabywca, pozycje i płatność z istniejącej faktury, daty dzisiejsze, bez powiązań ze sprzedażą. */

@@ -8,12 +8,18 @@ export async function signIn(_: unknown, formData: FormData) {
   const password = String(formData.get("password") ?? "");
   const next = String(formData.get("next") ?? "/magazyn");
   const supabase = await createClient();
-  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  const { data: signed, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) {
     // Konkretny powód ułatwia ustawienie konta i kluczy (np. błędny klucz Supabase w Vercel).
     if (error.code === "invalid_credentials") return { error: "Nieprawidłowy e-mail lub hasło." };
     if (error.code === "email_not_confirmed") return { error: "Konto nie jest potwierdzone. W Supabase → Authentication → Users potwierdź je albo dodaj ponownie z „Auto Confirm User”." };
     return { error: `Logowanie nie działa: ${error.message}${error.code ? ` (${error.code})` : ""}. Sprawdź adres i klucz Supabase w Vercel.` };
+  }
+  // Komisant trafia do swojego panelu.
+  if (signed?.user) {
+    const { createAdminClient } = await import("@/lib/supabase/admin");
+    const { data: consignor } = await createAdminClient().from("consignors").select("id").eq("user_id", signed.user.id).maybeSingle();
+    if (consignor) redirect("/komis");
   }
   redirect(safeNext(next));
 }

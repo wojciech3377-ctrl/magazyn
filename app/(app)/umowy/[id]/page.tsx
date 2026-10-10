@@ -40,6 +40,7 @@ export default async function ContractPage({ params, searchParams }: { params: P
         actions={
           <>
             {c.template && profile.can_see_prices && <a className="btn-secondary" href={`/api/umowy/${c.id}/pdf`} target="_blank" rel="noreferrer">{c.status === "signed" ? "PDF umowy" : "Podgląd PDF"}</a>}
+            {!["cancelled", "rejected", "sent"].includes(c.status) && <Link className={units?.length ? "btn-secondary" : "btn"} href={`/umowy/${c.id}/przypisz`}>Przypisz do rzeczy / sprzedaży</Link>}
             <Link className="btn-secondary" href="/umowy">Wróć do listy</Link>
           </>
         }
