@@ -205,12 +205,13 @@ export async function runAutoCatalogNow() {
   try {
     const r = await runAutoCatalog(db, true);
     const sum = (vals: unknown[], key: "created" | "changed" | "removed" | "waiting") => vals.reduce<number>((n, x) => n + (typeof x === "object" && x && key in x ? Number((x as Record<string, unknown>)[key]) || 0 : 0), 0);
-    const products = Object.values(r?.shopify ?? {}).reduce((n, x) => n + x, 0);
+    const pendingShops = r?.shopify.__pending ?? 0;
+    const products = Object.entries(r?.shopify ?? {}).filter(([k]) => k !== "__pending").reduce((n, [, x]) => n + x, 0);
     const stockVals = Object.values(r?.stock.result ?? {});
     const stockMsg = r?.stock.master === "app"
       ? `zmieniono ${sum(stockVals, "changed")} stanów w Shopify (główny: magazyn aplikacji)`
       : `ze stanów Shopify: dodano ${sum(stockVals, "created")}, usunięto ${sum(stockVals, "removed")} sztuk (czeka na potwierdzenie: ${sum(stockVals, "waiting")})`;
-    msg = `Sprawdzono: ${products} produktów ze Shopify, ${r?.base.added ?? 0} nowych w Base, ${stockMsg}.`;
+    msg = `Sprawdzono: ${products} produktów ze Shopify${pendingShops ? " (katalog jest duży – reszta dojdzie przy kolejnym kliknięciu albo odczycie co 15 min)" : " – cały katalog"}, ${r?.base.added ?? 0} nowych w Base, ${stockMsg}.`;
     await db.from("sync_log").insert({ job: "auto-catalog", ok: true, message: JSON.stringify(r) });
   } catch (e) {
     ok = false;

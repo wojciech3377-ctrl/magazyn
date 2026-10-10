@@ -8,6 +8,9 @@ import { ConfirmSubmit } from "@/components/ConfirmSubmit";
 import { SelectAll } from "@/components/SelectAll";
 import { bulkAction, runAutoCatalogNow } from "./actions";
 
+// Przycisk „Sprawdź nowe produkty i stany” czyta cały katalog Shopify – potrzebuje dłuższego czasu.
+export const maxDuration = 300;
+
 const PER_PAGE = 100;
 
 /** Cena w sklepie, z którego jest lokalizacja sztuki (albo z dowolnego sklepu). */

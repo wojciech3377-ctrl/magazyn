@@ -16,21 +16,29 @@ import { syncStock } from "./shopify-stock";
 
 type ShopState = { since: string; after: string | null; high: string };
 
-export async function syncShopifyProductsIncremental(db: SupabaseClient, maxPages = 6) {
+/**
+ * Produkty ze Shopify zmienione od ostatniego razu (po 50 na stronę) – do limitu stron albo czasu;
+ * reszta przy następnym odczycie (kursor w sync_state). `pending` = sklepy, w których zostało więcej.
+ */
+export async function syncShopifyProductsIncremental(db: SupabaseClient, maxPages = 20, deadline = Date.now() + 90_000) {
   const { data: stores } = await db.from("stores").select("*").not("shopify_domain", "is", null);
   const out: Record<string, number> = {};
+  const pending: string[] = [];
   for (const store of (stores ?? []) as Store[]) {
     const key = `shopify_products:${store.id}`;
     const { data: st } = await db.from("sync_state").select("value").eq("key", key).maybeSingle();
     const state: ShopState = (st?.value as ShopState) ?? { since: "2000-01-01T00:00:00Z", after: null, high: "2000-01-01T00:00:00Z" };
     let count = 0;
+    let more = false;
     for (let page = 0; page < maxPages; page++) {
+      if (Date.now() > deadline) { more = true; break; }
       const r = await productsUpdatedSince(store.shopify_domain!, store.code, state.since, state.after);
       if (r.nodes.length) await upsertShopifyProducts(db, store, r.nodes);
       count += r.nodes.length;
       for (const p of r.nodes) if (p.updatedAt > state.high) state.high = p.updatedAt;
       if (r.pageInfo.hasNextPage) {
         state.after = r.pageInfo.endCursor;
+        more = page === maxPages - 1;
       } else {
         state.since = state.high;
         state.after = null;
@@ -39,8 +47,9 @@ export async function syncShopifyProductsIncremental(db: SupabaseClient, maxPage
     }
     await db.from("sync_state").upsert({ key, value: state, updated_at: new Date().toISOString() });
     out[store.name] = count;
+    if (more) pending.push(store.name);
   }
-  return out;
+  return Object.assign(out, pending.length ? { __pending: pending.length } : {}) as Record<string, number>;
 }
 
 /** Nowe produkty w Base (najnowsze ID, których nie ma w base_products) i powiązanie ich rozmiarów. */
@@ -132,7 +141,8 @@ export async function runAutoCatalog(db: SupabaseClient, force = false) {
   const last = (st?.value as { at?: string } | null)?.at;
   if (!force && last && Date.now() - Date.parse(last) < 14 * 60_000) return null;
   await db.from("sync_state").upsert({ key: "auto_catalog", value: { at: new Date().toISOString() }, updated_at: new Date().toISOString() });
-  const shopify = await syncShopifyProductsIncremental(db);
+  // Ręcznie (przycisk) – cały katalog do ~4 min; z automatu – do 1,5 min, reszta przy kolejnym odczycie.
+  const shopify = await syncShopifyProductsIncremental(db, force ? 200 : 20, Date.now() + (force ? 210_000 : 90_000));
   const base = await syncNewBaseProducts(db);
   // Stany wyłącznie ze Shopify (albo z aplikacji do Shopify) – Base nie wpływa na liczbę sztuk.
   const stock = await syncStock(db);
