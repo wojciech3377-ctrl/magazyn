@@ -1,4 +1,6 @@
-import { consignorBalance, consignorUnits, consignmentFee, defaultAddress, requireConsignor, SHIPMENT_METHOD, SHIPMENT_STATUS, type ConsignorShipment } from "@/lib/consignment";
+import Link from "next/link";
+import { consignorBalance, consignorContracts, consignorUnits, consignmentFee, defaultAddress, requireConsignor, SHIPMENT_METHOD, SHIPMENT_STATUS, type ConsignorContract, type ConsignorShipment } from "@/lib/consignment";
+import { SoldList, type SoldRow } from "./SoldList";
 import { dateOnly, dateTime, money } from "@/lib/labels";
 import { Pill } from "@/components/ui";
 import { ShipRequestForm } from "./ShipRequestForm";
@@ -18,7 +20,19 @@ const STATUS: Record<string, { text: string; tone: "green" | "blue" | "amber" | 
   removed: { text: "wycofana", tone: "slate" },
 };
 
-export default async function KomisPage() {
+function docOf(c: ConsignorContract | undefined): SoldRow["doc"] {
+  if (!c || c.status === "cancelled" || c.status === "rejected") return { kind: "none" };
+  if (c.status === "sent") {
+    const live = c.source === "consignor" && c.sign_token && (!c.sign_expires_at || new Date(c.sign_expires_at) > new Date());
+    return live ? { kind: "sign", href: `/podpis/${c.sign_token}` } : c.source === "consignor" ? { kind: "none" } : { kind: "sign", href: null };
+  }
+  if (c.status === "signed" && c.template) return { kind: "approve" };
+  return { kind: "done", label: c.type === "invoice" ? `faktura ${c.doc_number ?? ""}`.trim() : `umowa${c.number ? ` nr ${c.number}` : ""}` };
+}
+
+export default async function KomisPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
+  const sp = await searchParams;
+  const tab = sp.zakladka === "sprzedane" ? "sprzedane" : "aktywne";
   const { db, consignor } = await requireConsignor();
   const units = await consignorUnits(db, consignor.id);
   const [bal, fee, { data: shipments }] = await Promise.all([
@@ -28,6 +42,12 @@ export default async function KomisPage() {
   ]);
   const onStock = units.filter((u) => ["in_stock", "in_transit", "reserved", "consignor_hold"].includes(u.status));
   const sold = units.filter((u) => ["sold", "shipped"].includes(u.status));
+  const contracts = await consignorContracts(db, consignor.id, sold.map((u) => u.id));
+  const soldRows: SoldRow[] = sold.map((u) => ({
+    id: u.id, code: u.code, title: u.title, option: u.option, price: u.payout_amount, soldAt: dateOnly(u.sold_at), hasDocument: u.has_document,
+    doc: docOf(contracts.get(u.id)),
+  }));
+  const missing = soldRows.filter((r) => r.doc.kind === "none").length;
   const codeOf = new Map(units.map((u) => [u.id, `${u.title} ${u.option}`]));
   const addr = defaultAddress(consignor);
 
@@ -50,6 +70,20 @@ export default async function KomisPage() {
         ))}
       </div>
 
+      <nav className="mb-5 flex gap-1 border-b border-line text-sm" aria-label="Zakładki">
+        <Link href="/komis" className={`-mb-px border-b-2 px-3 py-2 ${tab === "aktywne" ? "border-accent font-medium text-ink" : "border-transparent text-muted hover:text-ink"}`}>Aktywne <span className="ml-1 rounded bg-panel px-1.5 py-0.5 text-xs tabular-nums">{onStock.length}</span></Link>
+        <Link href="/komis?zakladka=sprzedane" className={`-mb-px border-b-2 px-3 py-2 ${tab === "sprzedane" ? "border-accent font-medium text-ink" : "border-transparent text-muted hover:text-ink"}`}>
+          Sprzedane <span className={`ml-1 rounded px-1.5 py-0.5 text-xs tabular-nums ${missing ? "bg-bad text-white" : "bg-panel"}`}>{missing ? `${missing} bez umowy` : sold.length}</span>
+        </Link>
+      </nav>
+
+      {tab === "aktywne" && missing > 0 && (
+        <div className="mb-5 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm">
+          Masz sprzedane rzeczy bez umowy ({missing}). <Link className="font-medium text-accent underline" href="/komis?zakladka=sprzedane">Dołącz umowę albo fakturę</Link>
+        </div>
+      )}
+
+      {tab === "aktywne" && <>
       <section className="mb-6">
         <h2 className="h2 mb-2">Twoje rzeczy na stanie</h2>
         <ShipRequestForm
@@ -80,24 +114,12 @@ export default async function KomisPage() {
         </div>
       </section>
 
+      </>}
+
+      {tab === "sprzedane" && <>
       <section className="mb-6">
         <h2 className="h2 mb-2">Sprzedane</h2>
-        <div className="card overflow-x-auto">
-          <table className="table">
-            <thead><tr><th>Rzecz</th><th>Data sprzedaży</th><th className="text-right">Twoja kwota</th><th>Rozliczenie</th></tr></thead>
-            <tbody>
-              {!sold.length && <tr><td colSpan={4} className="py-6 text-center text-muted">Jeszcze nic nie sprzedaliśmy.</td></tr>}
-              {sold.map((u) => (
-                <tr key={u.id}>
-                  <td>{u.title} · <b>{u.option}</b> <span className="font-mono text-xs text-muted">{u.code}</span></td>
-                  <td className="text-sm text-muted">{dateOnly(u.sold_at)}</td>
-                  <td className="text-right tabular-nums">{money(u.payout_amount)}</td>
-                  <td>{u.has_document ? <Pill tone="green">do wypłaty</Pill> : <Pill tone="amber">czeka na paragon / fakturę</Pill>}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <SoldList rows={soldRows} />
       </section>
 
       {bal.payouts.length > 0 && (
@@ -115,6 +137,7 @@ export default async function KomisPage() {
           </div>
         </section>
       )}
+      </>}
     </>
   );
 }

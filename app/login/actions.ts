@@ -19,7 +19,7 @@ export async function signIn(_: unknown, formData: FormData) {
   if (signed?.user) {
     const { createAdminClient } = await import("@/lib/supabase/admin");
     const { data: consignor } = await createAdminClient().from("consignors").select("id").eq("user_id", signed.user.id).maybeSingle();
-    if (consignor) redirect("/komis");
+    if (consignor) redirect(safeNext(next).startsWith("/komis") ? safeNext(next) : "/komis");
   }
   redirect(safeNext(next));
 }

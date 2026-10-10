@@ -11,6 +11,7 @@ import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/f
 import { classifyShipment, guessService, paymentLabel, type Fulfillment, type OrderStatus } from "@/lib/orders/status";
 import type { LineItem } from "@/lib/sync/shop-orders";
 import { OrderStatusPill, SALE_SELECT, SaleContract, UnitCell, type SaleUnit } from "../SaleBits";
+import type { ContractLite } from "@/lib/contracts/stage";
 import { SwapForm } from "../SwapForm";
 import { LabelForm } from "./LabelForm";
 import { OrderOps } from "./OrderOps";
@@ -41,9 +42,9 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
   ]);
   const saleIds = (sales ?? []).map((s) => s.id);
   const { data: pendingContracts } = saleIds.length
-    ? await supabase.from("contracts").select("id, status, sale_id").in("sale_id", saleIds).not("status", "in", "(cancelled,rejected)")
+    ? await supabase.from("contracts").select("id, status, template, paid_at, source, number, doc_number, counterparty, amount, type, sale_id").in("sale_id", saleIds).not("status", "in", "(cancelled,rejected)")
     : { data: [] };
-  const pendingBySale = new Map((pendingContracts ?? []).map((c) => [c.sale_id as string, c]));
+  const pendingBySale = new Map((pendingContracts ?? []).map((c) => [c.sale_id as string, c as unknown as ContractLite]));
   const furgonetkaReady = furgonetkaConfigured() && !!(await furgonetkaConnection(createAdminClient()));
   const { data: invoice } = await supabase.from("invoices").select("id, number").eq("order_id", id).not("status", "in", "(rejected,cancelled)").limit(1).maybeSingle();
 

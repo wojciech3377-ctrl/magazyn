@@ -9,6 +9,7 @@ import { errorMessage } from "@/lib/errors";
 import { pollKsef } from "@/lib/invoices/service";
 import { runAutoCatalog } from "@/lib/sync/auto-catalog";
 import { ksefConfigured } from "@/lib/ksef/client";
+import { notifyConsignorSales } from "@/lib/consignment-notify";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -53,6 +54,14 @@ export async function GET(req: NextRequest) {
     if (r) await db.from("sync_log").insert({ job: "auto-catalog", ok: true, message: JSON.stringify(r) });
   } catch (e) {
     await db.from("sync_log").insert({ job: "auto-catalog", ok: false, message: errorMessage(e) });
+  }
+
+  // Komis: e-mail do komisanta o sprzedanych rzeczach (umowa / faktura w panelu).
+  try {
+    const r = await notifyConsignorSales(db);
+    if (r.sent || "errors" in r) await db.from("sync_log").insert({ job: "consignor-mail", ok: !("errors" in r), message: JSON.stringify(r) });
+  } catch (e) {
+    await db.from("sync_log").insert({ job: "consignor-mail", ok: false, message: errorMessage(e) });
   }
 
   // Statusy faktur w KSeF (tylko gdy jakieś czekają).

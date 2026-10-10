@@ -10,7 +10,8 @@ import { WtbButton } from "@/components/WtbButton";
 import { ReceiptButton } from "@/components/ReceiptButton";
 import { SelectAllNamed } from "@/components/SelectAll";
 import { Invoices, Jpk } from "./Jpk";
-import { OrderStatusPill, SALE_SELECT, SaleContract, UnitCell, type SaleUnit } from "./SaleBits";
+import { ContractInProgress, OrderStatusPill, SALE_SELECT, SaleContract, UnitCell, type SaleUnit } from "./SaleBits";
+import { CONTRACT_LITE_FIELDS, contractStage, type ContractLite } from "@/lib/contracts/stage";
 import { classifyShipment, ORDER_STATUS, paymentLabel, type Fulfillment, type OrderStatus } from "@/lib/orders/status";
 import type { LineItem } from "@/lib/sync/shop-orders";
 
@@ -71,11 +72,11 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
   const ids = (orders ?? []).map((o) => o.id);
   const [{ data: sales }, { data: shipments }] = ids.length
     ? await Promise.all([
-        supabase.from("sales").select("id, order_id, status, variant_id, shopify_line_id, shopify_line_index, unit:units(id, code, contract_id)").in("order_id", ids),
+        supabase.from("sales").select(`id, order_id, status, variant_id, shopify_line_id, shopify_line_index, unit:units(id, code, contract_id, owner_type, contract:contracts(${CONTRACT_LITE_FIELDS}))`).in("order_id", ids),
         supabase.from("shipments").select("order_id, service, tracking_number, tracking_url, state, state_description").in("order_id", ids).order("created_at", { ascending: false }),
       ])
     : [{ data: [] }, { data: [] }];
-  type ListSale = { id: string; status: string; variant_id: string | null; shopify_line_id: string | null; shopify_line_index: number | null; unit: { id: string; code: string; contract_id: string | null } | null };
+  type ListSale = { id: string; status: string; variant_id: string | null; shopify_line_id: string | null; shopify_line_index: number | null; unit: { id: string; code: string; contract_id: string | null; owner_type: string; contract: ContractLite | null } | null };
   const gids = [...new Set((orders ?? []).flatMap((o) => ((o.line_items ?? []) as LineItem[]).map((l) => l.shopify_variant_id).filter((x): x is string => !!x)))];
   const { data: vLinks } = gids.length ? await supabase.from("variant_store_links").select("variant_id, shopify_variant_id").in("shopify_variant_id", gids) : { data: [] };
   const variantOf = new Map((vLinks ?? []).map((l) => [l.shopify_variant_id as string, l.variant_id as string]));
@@ -83,9 +84,9 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
   for (const s of sales ?? []) salesBy.set(s.order_id as string, [...(salesBy.get(s.order_id as string) ?? []), s as unknown as ListSale]);
   const listSaleIds = (sales ?? []).map((s) => s.id as string);
   const { data: saleContracts } = listSaleIds.length
-    ? await supabase.from("contracts").select("sale_id").in("sale_id", listSaleIds).not("status", "in", "(cancelled,rejected)")
+    ? await supabase.from("contracts").select(`${CONTRACT_LITE_FIELDS}, sale_id`).in("sale_id", listSaleIds).not("status", "in", "(cancelled,rejected)")
     : { data: [] };
-  const saleHasContract = new Set((saleContracts ?? []).map((c) => c.sale_id as string));
+  const saleContract = new Map((saleContracts ?? []).map((c) => [c.sale_id as string, c as unknown as ContractLite]));
   const shipBy = new Map<string, { service: string | null; tracking_number: string | null; tracking_url: string | null; state: string | null; state_description: string | null }>();
   for (const s of shipments ?? []) if (!shipBy.has(s.order_id as string) && classifyShipment(s) !== null) shipBy.set(s.order_id as string, s);
 
@@ -186,7 +187,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
                   </td>
                   <td>
                     <div className="flex flex-col items-start gap-1.5">
-                      <ContractAction pieces={matchPieces(o.id, (o.line_items ?? []) as LineItem[], oSales, (g) => variantOf.get(g))} saleHasContract={saleHasContract} cancelled={status === "cancelled"} back={`/sprzedaz${tab ? `?status=${tab}` : ""}`} />
+                      <ContractAction pieces={matchPieces(o.id, (o.line_items ?? []) as LineItem[], oSales, (g) => variantOf.get(g))} saleContract={saleContract} cancelled={status === "cancelled"} back={`/sprzedaz${tab ? `?status=${tab}` : ""}`} />
                       {status === "new" && <Link className="btn-secondary relative z-10 whitespace-nowrap px-2.5 py-1 text-xs" href={`/sprzedaz/${o.id}#etykieta`}>Utwórz etykietę</Link>}
                       {status !== "cancelled" && status !== "returned" && <ReceiptButton orderId={o.id} receiptId={o.receipt_id as number | null} compact />}
                     </div>
@@ -270,9 +271,9 @@ async function SaleLines({ sp, page }: { sp: Record<string, string | undefined>;
   ]);
   const saleIds = (sales ?? []).map((x) => x.id);
   const { data: pendingContracts } = saleIds.length
-    ? await supabase.from("contracts").select("id, status, sale_id").in("sale_id", saleIds).not("status", "in", "(cancelled,rejected)")
+    ? await supabase.from("contracts").select("id, status, template, paid_at, source, number, doc_number, counterparty, amount, type, sale_id").in("sale_id", saleIds).not("status", "in", "(cancelled,rejected)")
     : { data: [] };
-  const pendingBySale = new Map((pendingContracts ?? []).map((c) => [c.sale_id as string, c]));
+  const pendingBySale = new Map((pendingContracts ?? []).map((c) => [c.sale_id as string, c as unknown as ContractLite]));
 
   return (
     <>
@@ -337,7 +338,7 @@ async function PosList({ page, q }: { page: number; q: string }) {
   const { supabase } = await requireProfile();
   let query = supabase
     .from("pos_orders")
-    .select("id, code, total, payment_method, customer, created_at, base_sync_status, store:stores(name), items:pos_order_items(price, unit:units(code, identifier, variant:variants(option, product:products(title))))", { count: "exact" })
+    .select("id, code, total, payment_method, customer, created_at, base_sync_status, store:stores(name), items:pos_order_items(price, status, unit:units(id, code, identifier, owner_type, contract_id, variant:variants(option, product:products(title))))", { count: "exact" })
     .order("created_at", { ascending: false })
     .range((page - 1) * PER_PAGE, page * PER_PAGE - 1);
   const text = q.replace(/[%,()*\\]/g, " ").trim();
@@ -351,7 +352,7 @@ async function PosList({ page, q }: { page: number; q: string }) {
     query = query.or([`code.ilike.%${text}%`, `customer.ilike.%${text}%`, ...(orderIds.length ? [`id.in.(${orderIds.slice(0, 150).join(",")})`] : [])].join(","));
   }
   const { data, count } = await query;
-  type PosItem = { price: number; unit: { code: string; identifier: string | null; variant: { option: string; product: { title: string } } | null } | null };
+  type PosItem = { price: number; status: string; unit: { id: string; code: string; identifier: string | null; owner_type: string; contract_id: string | null; variant: { option: string; product: { title: string } } | null } | null };
   return (
     <>
       <PageHeader title="Sprzedaż" sub="Sprzedaż stacjonarna z kasy." actions={<Link className="btn" href="/kasa">Nowa sprzedaż</Link>} />
@@ -374,7 +375,10 @@ async function PosList({ page, q }: { page: number; q: string }) {
                 <td className="min-w-64 max-w-96">
                   <ul className="space-y-0.5 text-sm">
                     {((o.items ?? []) as unknown as PosItem[]).map((i, k) => (
-                      <li key={k} className="line-clamp-1">{i.unit?.variant ? <>{i.unit.variant.product.title} · <b>{i.unit.variant.option}</b></> : "–"} <span className="font-mono text-xs text-muted">{i.unit?.code}</span></li>
+                      <li key={k}>
+                        <span className="line-clamp-1">{i.unit?.variant ? <>{i.unit.variant.product.title} · <b>{i.unit.variant.option}</b></> : "–"} <span className="font-mono text-xs text-muted">{i.unit?.code}</span></span>
+                        {i.unit?.owner_type === "consignment" && !i.unit.contract_id && i.status !== "returned" && <span className="block text-xs font-medium text-warn">czeka na umowę od komisanta</span>}
+                      </li>
                     ))}
                   </ul>
                 </td>
@@ -393,35 +397,43 @@ async function PosList({ page, q }: { page: number; q: string }) {
 }
 
 /**
- * „Dołącz umowę” dla każdego sprzedanego przedmiotu bez umowy – także już wysłanego (1 umowa na przedmiot):
- * sztuki z magazynu bez umowy oraz pozycje bez sztuki (umowa utworzy dla nich sprzedaną sztukę).
+ * Umowa przy zamówieniu, osobno dla każdego sprzedanego przedmiotu (1 umowa na przedmiot):
+ * gotowa → „umowa ✓”; link wysłany / do zatwierdzenia / do opłacenia → „Umowa w toku” z podglądem;
+ * rzecz komisanta bez umowy → „czeka na umowę od komisanta”; w pozostałych przypadkach „Dołącz umowę”
+ * (wybór: gotowa umowa, umowa do podpisu albo skan).
  */
-function ContractAction({ pieces, saleHasContract, cancelled, back }: {
-  pieces: Piece<{ id: string; status: string; variant_id: string | null; unit: { id: string; contract_id: string | null } | null }>[];
-  saleHasContract: Set<string>;
+function ContractAction({ pieces, saleContract, cancelled, back }: {
+  pieces: Piece<{ id: string; status: string; variant_id: string | null; unit: { id: string; contract_id: string | null; owner_type: string; contract: ContractLite | null } | null }>[];
+  saleContract: Map<string, ContractLite>;
   cancelled: boolean;
   back: string;
 }) {
-  // Każda sztuka bez umowy (także bez linii sprzedaży i bez sztuki z magazynu) – maks. 1 umowa na sztukę.
   const live = pieces.filter((p) => p.sale?.status !== "cancelled");
-  const hasContract = (p: (typeof pieces)[number]) => !!p.sale && (!!p.sale.unit?.contract_id || saleHasContract.has(p.sale.id));
-  const unitsWithout = live.filter((p) => p.sale?.unit && !hasContract(p)).map((p) => p.sale!.unit!.id);
-  const noUnit = cancelled ? [] : live.filter((p) => !p.sale?.unit && !hasContract(p));
+  const rows = live.map((p) => {
+    const c = p.sale?.unit?.contract ?? (p.sale ? saleContract.get(p.sale.id) : undefined) ?? null;
+    const stage = c ? contractStage(c) : null;
+    return { p, c, stage: stage === "dead" ? null : stage, consignment: p.sale?.unit?.owner_type === "consignment" };
+  }).filter((r) => r.stage || r.consignment || r.p.sale?.unit || !cancelled);
+  if (!rows.length) return null;
+  if (rows.every((r) => r.stage === "done")) return <span className="whitespace-nowrap text-xs text-ok">umowa ✓</span>;
+  const many = rows.length > 1;
   const btn = "btn-secondary relative z-10 whitespace-nowrap px-2.5 py-1 text-xs";
-  if (!unitsWithout.length && !noUnit.length) {
-    return live.some(hasContract) ? <span className="whitespace-nowrap text-xs text-ok">umowa ✓</span> : null;
-  }
   return (
     <>
-      {unitsWithout.length > 0 && <Link className={btn} href={`/umowy/z-szablonu?ids=${unitsWithout.join(",")}`}>Dołącz umowę{unitsWithout.length > 1 ? ` (${unitsWithout.length})` : ""}</Link>}
-      {noUnit.map((p) => (
-        <form key={p.ref} action={attachContractForPiece} className="relative z-10">
-          <input type="hidden" name="back" value={back} />
-          <button className={btn} name="umowa_dla" value={p.ref} title={`${p.line.title} ${p.line.variant_title ?? ""}`}>
-            Dołącz umowę{noUnit.length > 1 || unitsWithout.length ? ` · ${p.line.variant_title ?? p.line.title.slice(0, 14)}` : ""}
-          </button>
-        </form>
-      ))}
+      {rows.map(({ p, c, stage, consignment }) => {
+        const tag = many ? <span className="block max-w-40 truncate text-[11px] text-muted">{p.line.variant_title ?? p.line.title}</span> : null;
+        if (c && stage === "done") return <span key={p.ref} className="relative z-10">{tag}<Link className="whitespace-nowrap text-xs text-ok hover:underline" href={`/umowy/${c.id}`}>umowa ✓</Link></span>;
+        if (c && stage) return <span key={p.ref} className="relative z-10">{tag}<ContractInProgress c={c} stage={stage} /></span>;
+        if (consignment) return <span key={p.ref} className="relative z-10 block max-w-44 text-xs font-medium text-warn">{tag}czeka na umowę od komisanta</span>;
+        return (
+          <form key={p.ref} action={attachContractForPiece} className="relative z-10">
+            <input type="hidden" name="back" value={back} />
+            <button className={btn} name="umowa_dla" value={p.ref} title={`${p.line.title} ${p.line.variant_title ?? ""}`}>
+              Dołącz umowę{many ? ` · ${p.line.variant_title ?? p.line.title.slice(0, 14)}` : ""}
+            </button>
+          </form>
+        );
+      })}
     </>
   );
 }

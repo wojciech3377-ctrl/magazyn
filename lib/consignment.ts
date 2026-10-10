@@ -82,3 +82,20 @@ export function labelFileType(buf: Buffer): { ext: string; type: string } | null
   if (buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return { ext: "png", type: "image/png" };
   return null;
 }
+
+export type ConsignorContract = {
+  id: string; status: string; type: string; template: string | null; source: string | null; paid_at: string | null;
+  sign_token: string | null; sign_expires_at: string | null; doc_number: string | null; number: number | null;
+};
+
+/** Umowy / faktury przypięte do sprzedanych rzeczy komisanta (unit id → umowa). */
+export async function consignorContracts(db: SupabaseClient, consignorId: string, unitIds: string[]) {
+  const out = new Map<string, ConsignorContract>();
+  for (let i = 0; i < unitIds.length; i += 200) {
+    const { data } = await db.from("units")
+      .select("id, contract:contracts(id, status, type, template, source, paid_at, sign_token, sign_expires_at, doc_number, number)")
+      .in("id", unitIds.slice(i, i + 200)).eq("consignor_id", consignorId).not("contract_id", "is", null);
+    for (const u of data ?? []) if (u.contract) out.set(u.id as string, u.contract as unknown as ConsignorContract);
+  }
+  return out;
+}

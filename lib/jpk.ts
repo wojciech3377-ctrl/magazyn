@@ -2,6 +2,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { LineItem } from "@/lib/sync/shop-orders";
 import { matchPieces } from "@/lib/orders/pieces";
+import { contractStage, type ContractStage } from "@/lib/contracts/stage";
 
 /**
  * JPK: wszystkie sprzedaże – zamówienia ze sklepów (pozycje z Shopify) i sprzedaż stacjonarna – z dokumentem
@@ -36,12 +37,14 @@ export type JpkLine = {
   baseOrderId: number | null;  // zamówienie w Base (pobranie paragonu z Base)
   pieceRef: string | null;     // <zamówienie>|<pozycja>|<sztuka> – „Dołącz umowę” także bez linii sprzedaży
   pendingContractId: string | null; // umowa w toku (czeka na podpis) do sprzedaży bez sztuki
+  contractStage: ContractStage | null; // etap umowy sztuki (w toku / gotowa)
+  consignorWait: boolean;      // rzecz komisanta bez umowy – czeka na umowę / fakturę od komisanta
 };
 
-type Contract = { id: string; number: number | null; doc_number: string | null; contract_date: string | null; currency: string | null; template: string | null };
+type Contract = { id: string; number: number | null; doc_number: string | null; contract_date: string | null; currency: string | null; template: string | null; status: string; paid_at: string | null; source: string | null };
 type Unit = { id: string; code: string; owner_type: string; purchase_form: string; purchase_price: number | null; payout_amount: number | null; contract: Contract | null } | null;
 
-const UNIT_FIELDS = "id, code, owner_type, purchase_form, purchase_price, payout_amount, contract:contracts(id, number, doc_number, contract_date, currency, template)";
+const UNIT_FIELDS = "id, code, owner_type, purchase_form, purchase_price, payout_amount, contract:contracts(id, number, doc_number, contract_date, currency, template, status, paid_at, source)";
 
 /** Numer umowy: odczytany z dokumentu (skan) albo numer umowy z szablonu. */
 export function contractLabel(c: Pick<Contract, "number" | "doc_number" | "template"> | null) {
@@ -67,6 +70,8 @@ function unitPart(u: Unit) {
     contractDate: u?.contract?.contract_date ?? null,
     purchasePrice: price === null || price === undefined ? null : Number(price),
     currency: u?.contract?.currency ?? null,
+    contractStage: u?.contract ? contractStage(u.contract) : null,
+    consignorWait: !!u && u.owner_type === "consignment" && !u.contract,
   };
 }
 
