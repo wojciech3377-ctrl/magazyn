@@ -65,7 +65,7 @@ export async function upsertShopifyProducts(db: SupabaseClient, store: Store, al
   if (!products.length) {
     const untrackedOnly = allProducts.flatMap((p) => p.variants.nodes.filter((v) => v.inventoryItem?.tracked === false).map((v) => v.id));
     for (let i = 0; i < untrackedOnly.length; i += 100) {
-      const { error } = await db.from("variant_store_links").update({ shopify_variant_id: null, shopify_inventory_item_id: null, price: null, inventory_tracked: false, updated_at: new Date().toISOString() })
+      const { error } = await db.from("variant_store_links").delete()
         .eq("store_id", store.id).in("shopify_variant_id", untrackedOnly.slice(i, i + 100));
       if (error) throw error;
     }
@@ -170,15 +170,15 @@ export async function upsertShopifyProducts(db: SupabaseClient, store: Store, al
   }
 
   // Rozmiary bez śledzenia stanu w Shopify („sprzedawaj zawsze”, np. sznurówki): nie są towarem na sztuki →
-  // powiązanie ze Shopify znika, sztuki bez historii usuwa purge_non_shopify, reszta dostaje „brak w Shopify”.
+  // powiązanie ze Shopify jest usuwane, sztuki bez historii usuwa purge_non_shopify, reszta dostaje „brak w Shopify”.
   const untracked = allProducts.flatMap((p) => p.variants.nodes.filter((v) => v.inventoryItem?.tracked === false).map((v) => v.id));
   for (let i = 0; i < untracked.length; i += 100) {
-    const { error } = await db.from("variant_store_links").update({ shopify_variant_id: null, shopify_inventory_item_id: null, price: null, inventory_tracked: false, updated_at: new Date().toISOString() })
+    const { error } = await db.from("variant_store_links").delete()
       .eq("store_id", store.id).in("shopify_variant_id", untracked.slice(i, i + 100));
     if (error) throw error;
   }
 
-  // Rozmiary usunięte z produktu w Shopify: powiązanie ze Shopify znika (SKU z Base zostaje) → „brak w Shopify”.
+  // Rozmiary usunięte z produktu w Shopify: powiązanie ze Shopify (z SKU z Base) jest usuwane → „brak w Shopify”.
   const liveGids = new Set(allProducts.flatMap((p) => p.variants.nodes.map((v) => v.id)));
   const complete = new Set(allProducts.filter((p) => p.variants.nodes.length < 250).map((p) => productIdByGid.get(p.id)).filter(Boolean));
   const checkVariants = existingVariants.filter((v) => complete.has(v.product_id)).map((v) => v.id);
@@ -186,7 +186,7 @@ export async function upsertShopifyProducts(db: SupabaseClient, store: Store, al
     db.from("variant_store_links").select("variant_id, shopify_variant_id").eq("store_id", store.id).in("variant_id", chunk).not("shopify_variant_id", "is", null));
   const gone = stale.filter((l) => !liveGids.has(l.shopify_variant_id)).map((l) => l.shopify_variant_id);
   for (let i = 0; i < gone.length; i += 100) {
-    const { error } = await db.from("variant_store_links").update({ shopify_variant_id: null, shopify_inventory_item_id: null, price: null, updated_at: new Date().toISOString() })
+    const { error } = await db.from("variant_store_links").delete()
       .eq("store_id", store.id).in("shopify_variant_id", gone.slice(i, i + 100));
     if (error) throw error;
   }
@@ -242,7 +242,7 @@ export async function syncSingleProduct(db: SupabaseClient, store: Store, produc
 
 /**
  * Produkty usunięte w Shopify (bez webhooka – np. przed włączeniem „na żywo”): sprawdza, które produkty
- * z katalogu jeszcze istnieją, a przy usuniętych zdejmuje powiązanie ze Shopify (SKU z Base zostaje).
+ * z katalogu jeszcze istnieją, a przy usuniętych usuwa powiązania ze Shopify (tak jak webhook products/delete).
  */
 export async function detachDeletedShopifyProducts(db: SupabaseClient) {
   const { data: stores } = await db.from("stores").select("*").not("shopify_domain", "is", null);
@@ -269,7 +269,7 @@ export async function detachDeletedShopifyProducts(db: SupabaseClient) {
         const variants = await selectIn<{ id: string }>(productIds, (c) => db.from("variants").select("id").in("product_id", c));
         const ids = variants.map((v) => v.id);
         for (let k = 0; k < ids.length; k += 200) {
-          const { error } = await db.from("variant_store_links").update({ shopify_variant_id: null, shopify_inventory_item_id: null, price: null, updated_at: new Date().toISOString() })
+          const { error } = await db.from("variant_store_links").delete()
             .eq("store_id", store.id).in("variant_id", ids.slice(k, k + 200));
           if (error) throw error;
         }
