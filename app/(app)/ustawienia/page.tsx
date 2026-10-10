@@ -8,7 +8,8 @@ import { shopifyCredentials } from "@/lib/integrations/shopify";
 import { getBuyerSignature, getCompany } from "@/lib/contracts/settings";
 import { mailConfigured } from "@/lib/mail";
 import { ContractSettings } from "./ContractSettings";
-import { addExclusion, createUser, deleteExclusion, disconnectFurgonetka, importInitialStock, purgeExcluded, registerWebhooks, saveLocation, saveSender, saveStore, saveUser } from "./actions";
+import { addExclusion, createUser, deleteExclusion, disconnectFurgonetka, importInitialStock, purgeExcluded, registerWebhooks, runStockNow, saveInvoiceSettings, saveLocation, saveSender, saveShopifyLocation, saveStockMaster, saveStore, saveUser } from "./actions";
+import { getStockMaster, planPushToShopify, shopifyLocations, type ShopifyLocation } from "@/lib/sync/shopify-stock";
 import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/furgonetka";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getSender } from "@/lib/orders/sender";
@@ -31,6 +32,7 @@ const SETTINGS_TABS = [
   { key: "faktury", label: "Faktury i KSeF" },
   { key: "wysylka", label: "Wysyłka" },
   { key: "sklepy", label: "Sklepy i lokalizacje" },
+  { key: "stany", label: "Stany magazynowe" },
   { key: "wykluczenia", label: "Wykluczenia" },
   { key: "uzytkownicy", label: "Użytkownicy" },
   { key: "start", label: "Start: stany z Base" },
@@ -64,6 +66,19 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
   const shopSources = Object.entries(sources.data?.shop ?? {});
   const preview = isAdmin && !imported ? (await supabase.rpc("preview_initial_stock")).data as { units: number; variants: number } | null : null;
   const storeName = new Map((stores ?? []).map((s) => [s.id, s.name]));
+  // Stany: główne źródło, lokalizacje Shopify i (na żądanie) podgląd różnic.
+  const stock = isAdmin && tab === "stany"
+    ? await (async () => {
+        const db = createAdminClient();
+        const master = await getStockMaster(db);
+        const shopLocs = new Map<string, { data: ShopifyLocation[] | null; error: string | null }>();
+        for (const st of (stores ?? []).filter((x) => x.shopify_domain)) shopLocs.set(st.id, await safe(() => shopifyLocations(st.shopify_domain as string, st.code as string)));
+        const plan = sp.podglad === "1" ? await safe(() => planPushToShopify(db)) : null;
+        const { data: last } = await db.from("sync_log").select("job, ok, message, created_at").in("job", ["stock", "auto-catalog"]).order("created_at", { ascending: false }).limit(1).maybeSingle();
+        return { master, shopLocs, plan, last };
+      })()
+    : null;
+  const { data: invoiceSettings } = isAdmin && tab === "faktury" ? await supabase.from("app_settings").select("value").eq("key", "invoices").maybeSingle() : { data: null };
 
   const envStatus = [
     ["Supabase (klucz serwera)", !!process.env.SUPABASE_SERVICE_ROLE_KEY],
@@ -139,7 +154,7 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
                   <div><label className="label">Sklep w katalogu Base (wykrywany automatycznie)</label><input className="input" name="base_storage_id" defaultValue={s.base_storage_id ?? ""} placeholder="shop_1234" /></div>
                   <div className="flex flex-wrap gap-2">
                     <SubmitButton>Zapisz</SubmitButton>
-                    <SubmitButton className="btn-secondary" formAction={registerWebhooks} pendingText="Rejestruję…">Włącz automatyczne nowe produkty</SubmitButton>
+                    <SubmitButton className="btn-secondary" formAction={registerWebhooks} pendingText="Rejestruję…">Włącz na żywo: produkty, zamówienia, stany</SubmitButton>
                   </div>
                 </form>
               ))}
@@ -186,6 +201,75 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
             {ksefConfigured()
               ? <form action={testKsefAction}><SubmitButton className="btn-secondary" pendingText="Łączę…">Sprawdź połączenie z KSeF</SubmitButton></form>
               : <Notice>Brak KSEF_TOKEN / KSEF_NIP w ustawieniach serwera.</Notice>}
+            <form action={saveInvoiceSettings} className="mt-4 flex flex-wrap items-center gap-3 border-t border-line pt-4 text-sm">
+              <label className="flex items-center gap-2">
+                <input type="checkbox" name="auto_email" value="1" defaultChecked={(invoiceSettings?.value as { auto_email?: boolean } | null)?.auto_email !== false} />
+                Wysyłaj fakturę (PDF) automatycznie na e-mail nabywcy – po przyjęciu w KSeF, a bez KSeF zaraz po wystawieniu
+              </label>
+              <SubmitButton className="btn-secondary">Zapisz</SubmitButton>
+              {!mailConfigured() && <span className="text-warn">Najpierw ustaw SMTP w Vercel (SMTP_HOST, SMTP_USER, SMTP_PASS).</span>}
+            </form>
+          </section>
+          )}
+
+          {tab === "stany" && stock && (
+          <section className="card space-y-5 p-4">
+            <div>
+              <h2 className="h2 mb-1">Główny magazyn</h2>
+              <p className="mb-3 text-sm text-muted">Skąd brać stan magazynowy. Teraz: Shopify – nowe stany w sklepie tworzą sztuki w Magazynie (na żywo przez webhooki, co 15 min dla pewności). Docelowo: aplikacja – liczba sztuk na stanie w lokalizacji trafia do Shopify.</p>
+              <form action={saveStockMaster} className="space-y-3">
+                <div className="inline-flex rounded-full border border-line bg-panel p-1" role="radiogroup" aria-label="Główny magazyn">
+                  {(["shopify", "app"] as const).map((m) => (
+                    <label key={m} className={`cursor-pointer rounded-full px-4 py-1.5 text-sm transition-colors has-[:checked]:bg-ink has-[:checked]:text-white ${stock.master === m ? "" : "text-muted"}`}>
+                      <input type="radio" name="master" value={m} defaultChecked={stock.master === m} className="sr-only" />
+                      {m === "shopify" ? "Shopify" : "Magazyn aplikacji"}
+                    </label>
+                  ))}
+                </div>
+                <label className="flex items-start gap-2 text-sm"><input type="checkbox" name="confirm" value="1" className="mt-0.5" /> Przy przełączeniu na „Magazyn aplikacji”: rozumiem, że stany w Shopify zostaną nadpisane liczbą sztuk na stanie w aplikacji (najpierw obejrzyj różnice poniżej).</label>
+                <SubmitButton>Zapisz</SubmitButton>
+              </form>
+            </div>
+            <div>
+              <h3 className="mb-2 font-medium">Lokalizacje Shopify</h3>
+              <p className="mb-3 text-sm text-muted">Każda lokalizacja aplikacji wskazuje lokalizację (magazyn) w Shopify swojego sklepu. Sklep z jedną lokalizacją łączy się sam.</p>
+              <div className="space-y-2">
+                {locations?.filter((l) => l.active).map((l) => {
+                  const opts = stock.shopLocs.get(l.store_id);
+                  return (
+                    <form key={l.id} action={saveShopifyLocation} className="grid items-center gap-2 md:grid-cols-[1fr_1fr_auto]">
+                      <input type="hidden" name="id" value={l.id} />
+                      <span className="text-sm">{storeName.get(l.store_id)} · <b>{l.name}</b></span>
+                      {opts?.data ? (
+                        <select className="input" name="shopify_location_id" defaultValue={l.shopify_location_id ?? ""} aria-label={`Lokalizacja Shopify dla ${l.name}`}>
+                          <option value="">– bez Shopify –</option>
+                          {opts.data.map((o) => <option key={o.id} value={o.id}>{o.name}{o.isActive ? "" : " (nieaktywna)"}</option>)}
+                        </select>
+                      ) : <span className="text-sm text-bad">{opts?.error ?? "sklep bez domeny Shopify"}</span>}
+                      <SubmitButton className="btn-secondary">Zapisz</SubmitButton>
+                    </form>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 border-t border-line pt-4">
+              <form action={runStockNow}><SubmitButton className="btn-secondary" pendingText="Sprawdzam…">Sprawdź stany teraz</SubmitButton></form>
+              <Link className="btn-secondary" href="/ustawienia?zakladka=stany&podglad=1">Pokaż różnice: aplikacja → Shopify</Link>
+              {stock.last && <span className="text-xs text-muted">Ostatnio: {dateTime(stock.last.created_at)} {stock.last.ok ? "" : "(błąd)"}</span>}
+            </div>
+            {stock.plan && (stock.plan.error
+              ? <Notice tone="error">{stock.plan.error}</Notice>
+              : (
+                <div className="space-y-2 text-sm">
+                  {stock.plan.data?.map((p) => (
+                    <div key={p.store.id}>
+                      <b>{p.store.name}:</b> {p.note ?? `${p.changes.length} pozycji w Shopify zmieniłoby stan`}
+                      {p.changes.length > 0 && <span className="text-muted"> (np. {p.changes.slice(0, 3).map((c) => `${c.changeFromQuantity} → ${c.quantity}`).join(", ")})</span>}
+                    </div>
+                  ))}
+                </div>
+              ))}
+            <p className="text-xs text-muted">Aplikacja sklepu w Shopify potrzebuje uprawnień read_locations, read_inventory i – dla „Magazyn aplikacji” – write_inventory.</p>
           </section>
           )}
 

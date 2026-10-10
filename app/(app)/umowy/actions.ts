@@ -51,7 +51,7 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
     await fillContractNumber(supabase, id);
     const saleId = String(formData.get("sale_id") ?? "");
     if (saleId) {
-      const { error: attachErr } = await supabase.rpc("attach_sale_unit", { p_sale_id: saleId, p_contract_id: id, p_purchase_price: parseAmount(formData.get("amount")) });
+      const { error: attachErr } = await supabase.rpc("attach_sale_unit", { p_sale_id: saleId, p_contract_id: id, p_purchase_price: parseAmount(formData.get("amount")), p_variant_id: String(formData.get("variant_id") ?? "") || null });
       if (attachErr) note = `?blad=${encodeURIComponent(`Umowa zapisana, ale nie przypięta do sprzedaży: ${attachErr.message}`)}`;
     }
     const r = await attachByCodes(supabase, id, String(formData.get("units") ?? ""));

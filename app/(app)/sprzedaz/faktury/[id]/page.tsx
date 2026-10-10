@@ -5,7 +5,8 @@ import { dateOnly, dateTime, money } from "@/lib/labels";
 import { Field, Notice, PageHeader, Pill } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
 import { ksefConfigured } from "@/lib/ksef/client";
-import { checkKsefAction, sendToKsefAction, voidInvoiceAction } from "../actions";
+import { checkKsefAction, emailInvoiceAction, sendToKsefAction, voidInvoiceAction } from "../actions";
+import { mailConfigured } from "@/lib/mail";
 import { KSEF_TRANSIENT } from "@/lib/invoices/service";
 import { KSEF_STATUS } from "@/lib/invoices/labels";
 
@@ -32,6 +33,7 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
           <>
             <a className="btn" href={`/api/faktury/${inv.id}/pdf`} target="_blank" rel="noreferrer">PDF</a>
             <a className="btn-secondary" href={`/api/faktury/${inv.id}/xml`}>XML</a>
+            <Link className="btn-secondary" href={`/sprzedaz/faktury/nowa?podobna=${inv.id}`}>Wystaw podobną</Link>
             <Link className="btn-secondary" href="/sprzedaz?widok=faktury">Wróć</Link>
           </>
         }
@@ -58,6 +60,24 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
           </div>
         </div>
         {inv.ksef_status && inv.status !== "accepted" && <p className={`mt-2 text-sm ${inv.status === "rejected" ? "text-bad" : "text-muted"}`}>{inv.ksef_status}</p>}
+      </section>
+
+      <section className="card mb-5 p-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <h2 className="h2">E-mail</h2>
+          {inv.emailed_at && !inv.email_error
+            ? <span className="text-sm text-ok">wysłana na {inv.emailed_to} · {dateTime(inv.emailed_at)}</span>
+            : inv.email_error
+              ? <span className="text-sm text-bad">nie wysłano: {inv.email_error}</span>
+              : <span className="text-sm text-muted">{buyer.email ? (inv.status === "sending" ? "pójdzie automatycznie po przyjęciu w KSeF" : "jeszcze nie wysłana") : "nabywca nie podał e-maila"}</span>}
+          {mailConfigured() && inv.status !== "cancelled" && inv.status !== "rejected" && (
+            <form action={emailInvoiceAction} className="ml-auto flex flex-wrap gap-2">
+              <input type="hidden" name="id" value={inv.id} />
+              <input className="input w-64" type="email" name="to" defaultValue={buyer.email ?? ""} placeholder="adres e-mail" aria-label="Adres e-mail" required />
+              <SubmitButton className="btn-secondary" pendingText="Wysyłam…">{inv.emailed_at ? "Wyślij ponownie" : "Wyślij e-mailem"}</SubmitButton>
+            </form>
+          )}
+        </div>
       </section>
 
       <div className="grid gap-5 lg:grid-cols-3">

@@ -9,6 +9,7 @@ import { issueInvoice, refreshKsefStatus, sendInvoiceToKsef, type DraftItem, typ
 import { nipValid, onlyDigits } from "@/lib/invoices/xml";
 import { ksefCheck, ksefConfigured } from "@/lib/ksef/client";
 import { lookupNip } from "@/lib/invoices/nip-lookup";
+import { emailInvoice, maybeAutoEmail } from "@/lib/invoices/email";
 
 export type InvoiceFormState = { error?: string } | null;
 
@@ -75,8 +76,10 @@ export async function createInvoiceAction(_: InvoiceFormState, fd: FormData): Pr
   } catch (e) {
     return { error: errorMessage(e) };
   }
+  if (fd.get("save_customer") === "1") await saveCustomer(db, draft.buyer, profile.id);
   let msg = "Faktura wystawiona.";
-  if (fd.get("send_ksef") === "1" && ksefConfigured()) {
+  const toKsef = fd.get("send_ksef") === "1" && ksefConfigured();
+  if (toKsef) {
     try {
       const r = await sendInvoiceToKsef(db, id);
       msg = r.status === "accepted" ? `Faktura wystawiona i przyjęta w KSeF (${r.ksefNumber}).` : r.status === "rejected" ? "Faktura wystawiona, ale KSeF ją odrzucił – szczegóły poniżej." : "Faktura wystawiona i wysłana do KSeF – numer KSeF pojawi się za chwilę.";
@@ -84,6 +87,10 @@ export async function createInvoiceAction(_: InvoiceFormState, fd: FormData): Pr
       msg = `Faktura wystawiona, ale wysyłka do KSeF nie udała się: ${errorMessage(e)}`;
     }
   }
+  // E-mail do nabywcy: od razu (bez KSeF) albo po przyjęciu w KSeF (także później, z zadania cyklicznego).
+  const mailed = await maybeAutoEmail(db, id, { force: !toKsef });
+  if (mailed) msg += ` Wysłana e-mailem na ${mailed}.`;
+  else if (draft.buyer.email && toKsef) msg += " E-mail do nabywcy pójdzie po przyjęciu w KSeF.";
   revalidatePath("/sprzedaz");
   redirect(`/sprzedaz/faktury/${id}?ok=${encodeURIComponent(msg)}`);
 }
@@ -160,4 +167,49 @@ export async function lookupNipAction(raw: string): Promise<NipLookupResult> {
   } catch (e) {
     return { ok: false, error: errorMessage(e) };
   }
+}
+
+/** Zapis nabywcy do listy (po NIP; osoba prywatna – po nazwie i e-mailu). */
+async function saveCustomer(db: ReturnType<typeof createAdminClient>, b: InvoiceDraft["buyer"], userId: string) {
+  const row = { name: b.name, company: !!b.company, nip: b.nip || null, address1: b.address1, address2: b.address2, country: b.country ?? "PL", email: b.email, updated_at: new Date().toISOString() };
+  // Osobne zapytania – filtry Supabase zmieniają obiekt zapytania.
+  const find = () => db.from("customers").select("id");
+  const { data: existing } = await (row.nip
+    ? find().eq("nip", row.nip)
+    : row.email ? find().is("nip", null).eq("name", row.name).eq("email", row.email) : find().is("nip", null).eq("name", row.name).is("email", null)
+  ).limit(1).maybeSingle();
+  if (existing) await db.from("customers").update(row).eq("id", existing.id);
+  else await db.from("customers").insert({ ...row, created_by: userId });
+}
+
+export type CustomerHit = { id: string; name: string; company: boolean; nip: string | null; address1: string | null; address2: string | null; country: string; email: string | null };
+
+/** Zapisani nabywcy: wyszukiwanie po nazwie, NIP albo e-mailu. */
+export async function searchCustomersAction(q: string): Promise<CustomerHit[]> {
+  const { supabase } = await requireProfile();
+  const text = q.trim().replace(/[,()*%\\]/g, " ").trim();
+  let query = supabase.from("customers").select("id, name, company, nip, address1, address2, country, email").order("updated_at", { ascending: false }).limit(8);
+  if (text) query = query.or(`name.ilike.%${text}%,nip.ilike.%${onlyDigits(text) || text}%,email.ilike.%${text}%`);
+  const { data } = await query;
+  return (data ?? []) as CustomerHit[];
+}
+
+export async function deleteCustomerAction(id: string) {
+  const { supabase } = await requireProfile();
+  await supabase.from("customers").delete().eq("id", id);
+}
+
+/** Ręczna wysyłka faktury e-mailem (na adres nabywcy albo inny podany). */
+export async function emailInvoiceAction(fd: FormData) {
+  await requireProfile();
+  const id = s(fd, "id");
+  let q: string;
+  try {
+    const to = await emailInvoice(createAdminClient(), id, s(fd, "to") || null);
+    q = `ok=${encodeURIComponent(`Faktura wysłana na ${to}.`)}`;
+  } catch (e) {
+    q = `blad=${encodeURIComponent(errorMessage(e))}`;
+  }
+  revalidatePath(`/sprzedaz/faktury/${id}`);
+  redirect(`/sprzedaz/faktury/${id}?${q}`);
 }

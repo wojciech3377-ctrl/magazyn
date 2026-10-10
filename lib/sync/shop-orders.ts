@@ -2,7 +2,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { ordersUpdatedSince, type ShopifyOrder } from "@/lib/integrations/shopify";
 import { getPackage, listPackages, type FurgonetkaPackage } from "@/lib/integrations/furgonetka";
-import { computeOrderStatus, detectCod, detectPickupPoint, type Fulfillment, type ShipmentLike } from "@/lib/orders/status";
+import { computeOrderStatus, detectCod, detectPickupPoint, type Fulfillment, type OrderForStatus, type ShipmentLike } from "@/lib/orders/status";
 import { isExcluded, loadExclusions, type Exclusions } from "@/lib/services";
 import { errorMessage } from "@/lib/errors";
 
@@ -41,9 +41,26 @@ function toRow(storeId: string, o: ShopifyOrder, ex: Exclusions) {
     createdAt: f.createdAt,
     trackingInfo: f.trackingInfo,
   }));
+  // Zwroty pieniędzy: zakończone (SUCCESS) i w toku (PENDING), oraz ile sztuk każdej pozycji zwrócono.
+  let refunded = 0;
+  let pending = 0;
+  const refundedLines: Record<string, number> = {};
+  for (const r of o.refunds ?? []) {
+    for (const t of r.transactions.nodes) {
+      if (t.kind !== "REFUND") continue;
+      const amount = Number(t.amountSet.shopMoney.amount);
+      if (t.status === "SUCCESS") refunded += amount;
+      else if (t.status === "PENDING") pending += amount;
+    }
+    for (const li of r.refundLineItems.nodes) if (li.lineItem) refundedLines[li.lineItem.id] = (refundedLines[li.lineItem.id] ?? 0) + li.quantity;
+  }
   return {
     row: {
       store_id: storeId,
+      return_status: o.returnStatus ?? null,
+      refunded_amount: Math.round(refunded * 100) / 100,
+      refund_pending: Math.round(pending * 100) / 100,
+      refunded_lines: refundedLines,
       shopify_order_id: o.id,
       shopify_legacy_id: o.legacyResourceId,
       name: o.name,
@@ -80,10 +97,22 @@ export async function saveShopifyOrders(db: SupabaseClient, storeId: string, ord
   const exclusions = ex ?? (await loadExclusions(db));
   const rows = orders.map((o) => toRow(storeId, o, exclusions)).filter((r) => !r.onlyServices).map((r) => r.row);
   if (!rows.length) return [] as string[];
-  const { data, error } = await db.from("orders").upsert(rows, { onConflict: "shopify_order_id" }).select("id");
+  // Anulowane w Shopify poza aplikacją (wcześniej nieanulowane u nas) → sprzedane sztuki wracają na stan.
+  const { data: before } = await db.from("orders").select("shopify_order_id, cancelled_at").in("shopify_order_id", rows.map((r) => r.shopify_order_id));
+  const wasOpen = new Set((before ?? []).filter((o) => !o.cancelled_at).map((o) => o.shopify_order_id as string));
+  const { data, error } = await db.from("orders").upsert(rows, { onConflict: "shopify_order_id" }).select("id, shopify_order_id, cancelled_at");
   if (error) throw error;
   const ids = (data ?? []).map((r) => r.id as string);
+  for (const o of data ?? []) {
+    if (o.cancelled_at && wasOpen.has(o.shopify_order_id as string)) {
+      const { error: relErr } = await db.rpc("release_order_sales", { p_order_id: o.id });
+      if (relErr) throw relErr;
+    }
+  }
   await refreshOrderStatus(db, ids);
+  // Nowe zamówienia: linie sprzedaży i sztuki z magazynu od razu ze Shopify (Base potem je tylko przejmuje).
+  const { error: salesErr } = await db.rpc("register_shopify_sales", { p_order_ids: ids });
+  if (salesErr) throw salesErr;
   return ids;
 }
 
@@ -130,13 +159,13 @@ export async function refreshOrderStatus(db: SupabaseClient, orderIds: string[])
   for (let i = 0; i < orderIds.length; i += 200) {
     const ids = orderIds.slice(i, i + 200);
     const [{ data: orders }, { data: ships }] = await Promise.all([
-      db.from("orders").select("id, status, status_detail, cancelled_at, closed_at, fulfillments, shipping_method, financial_status").in("id", ids),
+      db.from("orders").select("id, status, status_detail, cancelled_at, closed_at, fulfillments, shipping_method, financial_status, return_status, refunded_amount, refund_pending, refunded_lines, line_items, total").in("id", ids),
       db.from("shipments").select("order_id, state, state_description, state_at, tracking_number").in("order_id", ids),
     ]);
     const byOrder = new Map<string, ShipmentLike[]>();
     for (const s of ships ?? []) byOrder.set(s.order_id as string, [...(byOrder.get(s.order_id as string) ?? []), s as ShipmentLike]);
     for (const o of orders ?? []) {
-      const next = computeOrderStatus(o as { cancelled_at: string | null; closed_at: string | null; fulfillments: Fulfillment[]; shipping_method: string | null; financial_status: string | null }, byOrder.get(o.id) ?? []);
+      const next = computeOrderStatus(o as unknown as OrderForStatus, byOrder.get(o.id) ?? []);
       if (next.status !== o.status || next.detail !== o.status_detail) {
         await db.from("orders").update({
           status: next.status,

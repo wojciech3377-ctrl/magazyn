@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { requireProfile } from "@/lib/auth";
 import { loadJpkLines, sortBy, type DocKind, type JpkSort } from "@/lib/jpk";
-import { fetchMissingReceipts } from "./actions";
+import { attachContractForPiece, fetchMissingReceipts } from "./actions";
 import { SubmitButton } from "@/components/SubmitButton";
 import { dateOnly, money } from "@/lib/labels";
 import { monthLabel, monthRange, previousMonthKey, warsawMidnight } from "@/lib/month";
@@ -111,6 +111,8 @@ export async function Jpk({ sp }: { sp: Record<string, string | undefined> }) {
       {error && <div className="mb-4"><Notice tone="error">{error}</Notice></div>}
       {kind === "none" && <div className="mb-4"><Notice>Sprzedaże ({range.label}), do których nie ma jeszcze paragonu ani faktury.</Notice></div>}
 
+      {/* „Dołącz umowę” w wierszach: przyciski z atrybutem form wysyłają ten formularz. */}
+      <form id="jpk-umowa" action={attachContractForPiece}><input type="hidden" name="back" value={`/sprzedaz?${qs}`} /></form>
       <form id="jpk" action="/api/jpk" method="post">
         <input type="hidden" name="okres" value={custom ? `${fromDay}_${toDay}` : month.key} />
         <div className="sticky top-0 z-20 mb-2 flex flex-wrap items-center gap-3 border-b border-line bg-white/95 py-2 text-sm backdrop-blur">
@@ -148,9 +150,9 @@ export async function Jpk({ sp }: { sp: Record<string, string | undefined> }) {
                     {prices && <td className="text-right tabular-nums">{l.purchasePrice !== null ? `${l.purchasePrice.toFixed(2)}${foreign ? ` ${l.currency}` : ""}` : "–"}</td>}
                     <td className="whitespace-nowrap">
                       {l.contractId ? <Link className="text-accent hover:underline" href={`/umowy/${l.contractId}`}>{l.contractNumber ?? "bez numeru"}</Link>
+                        : l.pendingContractId ? <Link className="text-xs text-warn hover:underline" href={`/umowy/${l.pendingContractId}`}>umowa w toku</Link>
                         : l.unitId ? <Link className="btn-secondary px-2 py-0.5 text-xs" href={`/umowy/z-szablonu?ids=${l.unitId}`}>Dołącz umowę</Link>
-                        : l.saleId && l.variantLinked ? <Link className="btn-secondary px-2 py-0.5 text-xs" href={`/umowy/z-szablonu?sprzedaz=${l.saleId}`}>Dołącz umowę</Link>
-                        : l.source === "shop" && !l.variantLinked ? <Link className="text-xs text-warn hover:underline" href="/katalog" title="Produkt nie jest powiązany z katalogiem – powiąż, żeby dołączyć umowę">bez powiązania</Link>
+                        : l.pieceRef && !l.saleNote ? <button form="jpk-umowa" name="umowa_dla" value={l.pieceRef} className="btn-secondary px-2 py-0.5 text-xs" title={l.variantLinked ? undefined : "Produkt nie jest powiązany z katalogiem – wybierzesz go przy umowie"}>Dołącz umowę</button>
                         : <span className="text-muted">–</span>}
                     </td>
                     <td className="whitespace-nowrap text-xs">

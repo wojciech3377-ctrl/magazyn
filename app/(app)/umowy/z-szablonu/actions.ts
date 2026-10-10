@@ -42,6 +42,12 @@ export async function createLinkContract(_: unknown, formData: FormData): Promis
     notes: String(formData.get("notes") ?? "").trim() || null,
   }).select("id").single();
   if (error) return { error: error.message };
+  // Pozycja zamówienia bez powiązania z katalogiem: rozmiar z umowy staje się rozmiarem sprzedaży.
+  const saleId = String(formData.get("sale_id") ?? "");
+  const firstVariant = items.find((i) => i.variant_id)?.variant_id;
+  if (saleId && firstVariant) {
+    await supabase.from("sales").update({ variant_id: firstVariant, status: "no_unit" }).eq("id", saleId).is("variant_id", null).is("unit_id", null);
+  }
 
   // Sztuki już na stanie od razu wskazują umowę (czeka na podpis).
   const unitIds = items.map((i) => i.unit_id).filter(Boolean) as string[];

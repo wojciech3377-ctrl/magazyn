@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { matchPieces, type PieceSale } from "@/lib/orders/pieces";
+import { attachContractForPiece } from "../actions";
 import { notFound } from "next/navigation";
 import { requireProfile } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -17,6 +19,10 @@ import { ReceiptButton } from "@/components/ReceiptButton";
 import { refreshOrder } from "./actions";
 
 type Address = { name: string | null; company: string | null; address1: string | null; address2: string | null; city: string | null; zip: string | null; countryCodeV2: string | null; phone: string | null } | null;
+
+const RETURN_STATUS: Record<string, string> = {
+  RETURNED: "zwrócony", IN_PROGRESS: "w toku", RETURN_REQUESTED: "klient prosi o zwrot", RETURN_FAILED: "nieudany", INSPECTION_COMPLETE: "sprawdzony",
+};
 
 function shopifyAdminUrl(domain: string | null, legacyId: string | null) {
   if (!domain || !legacyId) return null;
@@ -46,6 +52,12 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
   const lines = (order.line_items ?? []) as LineItem[];
   const fulfillments = (order.fulfillments ?? []) as Fulfillment[];
   const pay = paymentLabel(order);
+  const refundedLines = (order.refunded_lines ?? {}) as Record<string, number>;
+  // Sztuki pozycji bez linii sprzedaży – „Dołącz umowę” utworzy linię i połączy ją z magazynem.
+  const gids = [...new Set(lines.map((l) => l.shopify_variant_id).filter((x): x is string => !!x))];
+  const { data: vLinks } = gids.length ? await supabase.from("variant_store_links").select("variant_id, shopify_variant_id").in("shopify_variant_id", gids) : { data: [] };
+  const variantOf = new Map((vLinks ?? []).map((l) => [l.shopify_variant_id as string, l.variant_id as string]));
+  const loosePieces = order.status === "cancelled" ? [] : matchPieces(order.id, lines, (sales ?? []) as unknown as PieceSale[], (g) => variantOf.get(g)).filter((p) => !p.sale);
   const status = order.status as OrderStatus;
   const activeShipments = (shipments ?? []).filter((s) => classifyShipment(s) !== null);
   const shopUrl = shopifyAdminUrl(store?.shopify_domain ?? null, order.shopify_legacy_id);
@@ -129,6 +141,9 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
             <div className="text-muted">{order.payment_gateways?.length ? order.payment_gateways.join(", ") : "–"}</div>
             <div>Razem: <b className="tabular-nums">{money(order.total)}</b>{order.currency && order.currency !== "PLN" ? ` ${order.currency}` : ""}</div>
             {Number(order.outstanding) > 0 && <div>Do zapłaty: <b className="tabular-nums">{money(order.outstanding)}</b></div>}
+            {Number(order.refunded_amount) > 0 && <div>Zwrócono: <b className="tabular-nums">{money(order.refunded_amount)}</b></div>}
+            {Number(order.refund_pending) > 0 && <div className="text-warn">Zwrot w toku: <b className="tabular-nums">{money(order.refund_pending)}</b></div>}
+            {order.return_status && !["NO_RETURN"].includes(order.return_status) && <div className="text-muted">Zwrot towaru w Shopify: {RETURN_STATUS[order.return_status] ?? order.return_status.toLowerCase()}</div>}
           </div>
         </section>
       </div>
@@ -144,7 +159,7 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
                 <td>{l.title}{l.service && <span className="ml-1 text-xs">(usługa)</span>}</td>
                 <td className="font-medium">{l.variant_title ?? "–"}</td>
                 <td className="font-mono text-xs">{l.sku ?? "–"}</td>
-                <td className="text-right tabular-nums">{l.quantity}</td>
+                <td className="text-right tabular-nums">{l.quantity}{refundedLines[l.id] ? <span className="block text-xs text-warn">zwrócono {refundedLines[l.id]}</span> : null}</td>
                 <td className="text-right tabular-nums">{money(l.price)}</td>
                 <td>{!l.service && <WtbButton orderId={order.id} line={i} />}</td>
               </tr>
@@ -155,8 +170,19 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
 
       <section className="card mt-5 overflow-x-auto">
         <h2 className="h2 p-4 pb-0">Sztuki z magazynu</h2>
+        {loosePieces.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 p-4 pb-0 text-sm">
+            <span className="text-muted">Bez sztuki z magazynu:</span>
+            {loosePieces.map((p) => (
+              <form key={p.ref} action={attachContractForPiece}>
+                <input type="hidden" name="back" value={`/sprzedaz/${order.id}`} />
+                <button className="btn-secondary px-2.5 py-1 text-xs" name="umowa_dla" value={p.ref}>Dołącz umowę · {p.line.title.slice(0, 24)} {p.line.variant_title ?? ""}</button>
+              </form>
+            ))}
+          </div>
+        )}
         {!sales?.length ? (
-          <p className="p-4 text-sm text-muted">Linie z magazynu pojawią się po odczycie zamówień z Base (co 5 minut).</p>
+          <p className="p-4 text-sm text-muted">Linie z magazynu pojawią się po odczycie zamówienia (nowe zamówienia ze Shopify od razu, starsze z Base).</p>
         ) : (
           <table className="table">
             <thead><tr><th>Produkt</th><th>Sztuka</th><th>Status</th><th>Umowa</th><th>Zmień sztukę przy pakowaniu</th></tr></thead>
@@ -208,17 +234,18 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
           </>
         )}
       </section>
-      {profile.role === "admin" && (status !== "cancelled" || fulfillments.length > 0) && (
+      {profile.role === "admin" && (status !== "cancelled" || (["PAID", "PARTIALLY_REFUNDED", "PARTIALLY_PAID"].includes(String(order.financial_status ?? "").toUpperCase()) && Number(order.refunded_amount ?? 0) + Number(order.refund_pending ?? 0) < Number(order.total ?? 0))) && (
         <section className="card mt-5 p-4">
-          <h2 className="h2 mb-1">Anulowanie i zwrot</h2>
+          <h2 className="h2 mb-1">Anulowanie i zwroty</h2>
           <p className="mb-3 text-sm text-muted">Zmiana trafia do Shopify (zwrot pieniędzy, e-mail do klienta), a sztuki wracają na stan w magazynie.</p>
           <OrderOps
             orderId={order.id}
-            lines={lines.filter((l) => !l.service).map((l) => ({ id: l.id, title: l.title, variant_title: l.variant_title, quantity: l.quantity }))}
+            lines={lines.filter((l) => !l.service).map((l) => ({ id: l.id, title: l.title, variant_title: l.variant_title, quantity: l.quantity, price: Number(l.price), refunded: refundedLines[l.id] ?? 0 }))}
             paid={["PAID", "PARTIALLY_REFUNDED", "PARTIALLY_PAID"].includes(String(order.financial_status ?? "").toUpperCase())}
+            shippingPrice={Number(order.shipping_price ?? 0)}
             hasLabels={activeShipments.length > 0}
-            canCancel={status !== "cancelled" && status !== "returned"}
-            canReturn={fulfillments.length > 0 && status !== "returned"}
+            canCancel={status !== "returned" && status !== "cancelled"}
+            canRefund={status !== "returned" || Number(order.refund_pending ?? 0) + Number(order.refunded_amount ?? 0) < Number(order.total ?? 0)}
           />
         </section>
       )}

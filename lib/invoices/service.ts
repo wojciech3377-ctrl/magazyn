@@ -1,4 +1,5 @@
 import "server-only";
+import { maybeAutoEmail } from "./email";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getCompany } from "@/lib/contracts/settings";
 import { errorMessage } from "@/lib/errors";
@@ -133,6 +134,21 @@ function validate(company: Awaited<ReturnType<typeof getCompany>>, d: InvoiceDra
   if (!d.items.length || d.items.some((i) => !i.name.trim() || !(i.unit_price_gross > 0) || !(i.quantity > 0))) throw new Error("Każda pozycja musi mieć nazwę, ilość i cenę.");
 }
 
+/** „Wystaw podobną”: nabywca, pozycje i płatność z istniejącej faktury, daty dzisiejsze, bez powiązań ze sprzedażą. */
+export async function draftFromInvoice(db: SupabaseClient, invoiceId: string): Promise<InvoiceDraft | null> {
+  const { data: inv } = await db.from("invoices").select("buyer, payment_method, paid, notes").eq("id", invoiceId).maybeSingle();
+  if (!inv) return null;
+  const { data: items } = await db.from("invoice_items").select("name, quantity, unit, unit_price_gross, total_gross, vat").eq("invoice_id", invoiceId).order("position");
+  const b = inv.buyer as InvoiceDraft["buyer"];
+  return {
+    buyer: { name: b.name ?? "", nip: b.nip ?? null, address1: b.address1 ?? null, address2: b.address2 ?? null, country: b.country ?? "PL", email: b.email ?? null, company: !!b.nip || !!b.company },
+    issueDate: todayPl(), saleDate: todayPl(), paymentMethod: inv.payment_method as PaymentMethod, paid: !!inv.paid,
+    paidAt: inv.paid ? todayPl() : null, dueDate: inv.paid ? null : todayPl(),
+    items: (items ?? []).map((i) => ({ name: i.name, quantity: Number(i.quantity), unit: i.unit, unit_price_gross: Number(i.unit_price_gross), total_gross: Number(i.total_gross), vat: i.vat === "23" ? "23" : "margin" })),
+    orderId: null, posOrderId: null, notes: inv.notes ?? null,
+  };
+}
+
 /** Wystawienie faktury: numer FVM/n/rok, XML FA(3) i skrót do KSeF. */
 export async function issueInvoice(db: SupabaseClient, d: InvoiceDraft, userId: string) {
   const company = await getCompany(db);
@@ -227,6 +243,7 @@ export async function refreshKsefStatus(db: SupabaseClient, invoiceId: string) {
     ...(status === "accepted" ? { ksef_accepted_at: s.acquisitionDate ?? new Date().toISOString() } : {}),
   }).eq("id", invoiceId).eq("status", "sending");
   if (error) throw error;
+  if (status === "accepted") await maybeAutoEmail(db, invoiceId);
   return { status: status as "accepted" | "sending" | "rejected", ksefNumber: status === "accepted" ? s.ksefNumber : null };
 }
 

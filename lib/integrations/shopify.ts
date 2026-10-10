@@ -111,9 +111,12 @@ export async function getProduct(domain: string, storeCode: string, id: string) 
   return data.product;
 }
 
+/** Webhooki „na żywo”: produkty, zamówienia (z anulowaniem i zwrotami) i stany magazynowe. */
+export const WEBHOOK_TOPICS = ["PRODUCTS_CREATE", "PRODUCTS_UPDATE", "PRODUCTS_DELETE", "ORDERS_CREATE", "ORDERS_UPDATED", "REFUNDS_CREATE", "INVENTORY_LEVELS_UPDATE"];
+
 export async function registerProductWebhooks(domain: string, storeCode: string, callbackUrl: string) {
   const results: string[] = [];
-  for (const topic of ["PRODUCTS_CREATE", "PRODUCTS_UPDATE", "PRODUCTS_DELETE"]) {
+  for (const topic of WEBHOOK_TOPICS) {
     const data = await shopifyGraphql<{
       webhookSubscriptionCreate: { userErrors: { message: string }[]; webhookSubscription: { id: string } | null };
     }>(
@@ -127,7 +130,7 @@ export async function registerProductWebhooks(domain: string, storeCode: string,
       { topic, url: callbackUrl },
     );
     const err = data.webhookSubscriptionCreate.userErrors.map((e) => e.message).join("; ");
-    results.push(`${topic}: ${err || "ok"}`);
+    results.push(`${topic}: ${err ? (/taken|already/i.test(err) ? "już włączony" : err) : "ok"}`);
   }
   return results;
 }
@@ -180,6 +183,12 @@ export type ShopifyOrder = {
     id: string; status: string; displayStatus: string | null; createdAt: string; updatedAt: string;
     trackingInfo: { number: string | null; company: string | null; url: string | null }[];
   }[];
+  returnStatus?: string | null;
+  refunds?: {
+    createdAt: string;
+    refundLineItems: { nodes: { quantity: number; lineItem: { id: string } | null }[] };
+    transactions: { nodes: { kind: string; status: string; amountSet: { shopMoney: { amount: string } } }[] };
+  }[];
 };
 
 const ORDER_FIELDS = `
@@ -194,6 +203,8 @@ const ORDER_FIELDS = `
   shippingLine { title code source originalPriceSet { shopMoney { amount } } discountedPriceSet { shopMoney { amount } } }
   lineItems(first: 50) { nodes { id title variantTitle sku quantity image { url } variant { id } originalUnitPriceSet { shopMoney { amount } } discountedUnitPriceAfterAllDiscountsSet { shopMoney { amount } } } }
   fulfillments(first: 10) { id status displayStatus createdAt updatedAt trackingInfo(first: 5) { number company url } }
+  returnStatus
+  refunds(first: 20) { createdAt refundLineItems(first: 50) { nodes { quantity lineItem { id } } } transactions(first: 10) { nodes { kind status amountSet { shopMoney { amount } } } } }
 `;
 
 /** Zamówienia zmienione od podanej chwili (rosnąco po dacie zmiany), po 50 na stronę. */
@@ -291,12 +302,34 @@ export async function refundShopifyLines(
   storeCode: string,
   orderId: string,
   lines: { lineItemId: string; quantity: number }[],
-  opts: { refundMoney: boolean; shipping: boolean; notify: boolean; note?: string },
+  opts: { refundMoney: boolean; shipping: boolean; notify: boolean; note?: string; amount?: number | null; keepGoods?: boolean; key?: string },
 ) {
   const refundLineItems = lines.map((l) => ({ lineItemId: l.lineItemId, quantity: l.quantity, restockType: "NO_RESTOCK" }));
   let transactions: { orderId: string; gateway: string; kind: "REFUND"; amount: string; parentId: string | null }[] = [];
   let amount = 0;
-  if (opts.refundMoney) {
+  if (opts.refundMoney && opts.amount && opts.amount > 0) {
+    // Własna kwota: rozkład na pobrane płatności (najpierw największa możliwa do zwrotu).
+    const t = await shopifyGraphql<{ order: { transactions: { id: string; kind: string; status: string; gateway: string; maximumRefundableV2: { amount: string } | null }[] } | null }>(
+      domain,
+      storeCode,
+      `query Tx($id: ID!) { order(id: $id) { transactions(first: 30) { id kind status gateway maximumRefundableV2 { amount } } } }`,
+      { id: orderId },
+    );
+    const paid = (t.order?.transactions ?? [])
+      .filter((x) => (x.kind === "SALE" || x.kind === "CAPTURE") && x.status === "SUCCESS" && Number(x.maximumRefundableV2?.amount ?? 0) > 0)
+      .sort((a, b) => Number(b.maximumRefundableV2!.amount) - Number(a.maximumRefundableV2!.amount));
+    let left = Math.round(opts.amount * 100) / 100;
+    const max = paid.reduce((s2, x) => s2 + Number(x.maximumRefundableV2!.amount), 0);
+    if (max <= 0) throw new Error("Shopify nie może sam zwrócić pieniędzy za to zamówienie (np. za pobraniem albo przelew ręczny) – odznacz „Zwróć pieniądze” i oddaj je ręcznie.");
+    if (left > max + 0.001) throw new Error(`Do zwrotu zostało najwyżej ${max.toFixed(2)} zł.`);
+    for (const x of paid) {
+      if (left <= 0) break;
+      const part = Math.min(left, Number(x.maximumRefundableV2!.amount));
+      transactions.push({ orderId, gateway: x.gateway, kind: "REFUND", amount: part.toFixed(2), parentId: x.id });
+      left = Math.round((left - part) * 100) / 100;
+    }
+    amount = opts.amount;
+  } else if (opts.refundMoney) {
     const s = await shopifyGraphql<{
       order: { suggestedRefund: { amountSet: { shopMoney: { amount: string } }; suggestedTransactions: { gateway: string | null; amountSet: { shopMoney: { amount: string } }; parentTransaction: { id: string } | null }[] } } | null;
     }>(
@@ -323,12 +356,14 @@ export async function refundShopifyLines(
       refundCreate(input: $input) @idempotent(key: $key) { refund { id totalRefundedSet { shopMoney { amount } } } userErrors { field message } }
     }`,
     {
-      key: crypto.randomUUID(),
+      // Ten sam klucz przy ponownym wysłaniu formularza = Shopify nie zwróci pieniędzy drugi raz.
+      key: opts.key || crypto.randomUUID(),
       input: {
         orderId,
         notify: opts.notify,
         note: opts.note || null,
-        refundLineItems,
+        // Towar zostaje u klienta: same pieniądze (kwota z pozycji policzona wyżej), bez oznaczania pozycji jako zwróconych.
+        refundLineItems: opts.keepGoods ? [] : refundLineItems,
         ...(opts.shipping ? { shipping: { fullRefund: true } } : {}),
         ...(transactions.length ? { transactions } : {}),
       },

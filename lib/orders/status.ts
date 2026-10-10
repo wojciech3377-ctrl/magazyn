@@ -48,15 +48,50 @@ export function isPersonalPickup(method: string | null | undefined) {
   return !!method && PICKUP.test(method);
 }
 
-/** Etap zamówienia z anulowania, przesyłek Furgonetki i realizacji w Shopify. */
-export function computeOrderStatus(
-  o: { cancelled_at: string | null; closed_at?: string | null; fulfillments: Fulfillment[]; shipping_method: string | null; financial_status?: string | null },
-  shipments: ShipmentLike[],
-): { status: OrderStatus; detail: string | null } {
+/** Zwroty pieniędzy i towaru zapisane przy zamówieniu (ze Shopify). */
+export type RefundFields = {
+  financial_status?: string | null;
+  return_status?: string | null;
+  refunded_amount?: number | string | null;
+  refund_pending?: number | string | null;
+  refunded_lines?: Record<string, number> | null;
+  line_items?: { id: string; quantity: number; service?: boolean }[] | null;
+  total?: number | string | null;
+};
+
+/** Stan zwrotu pieniędzy: brak / w toku / częściowy / całość. */
+export function refundState(o: RefundFields): { money: "none" | "pending" | "partial" | "full"; allItems: boolean; refunded: number; pending: number } {
+  const fs = (o.financial_status ?? "").toUpperCase();
+  const refunded = Number(o.refunded_amount ?? 0) || 0;
+  const pending = Number(o.refund_pending ?? 0) || 0;
+  const total = Number(o.total ?? 0) || 0;
+  const goods = (o.line_items ?? []).filter((l) => !l.service);
+  const qty = goods.reduce((s, l) => s + l.quantity, 0);
+  const back = goods.reduce((s, l) => s + Math.min(l.quantity, o.refunded_lines?.[l.id] ?? 0), 0);
+  const allItems = qty > 0 && back >= qty;
+  const money = pending > 0 ? "pending"
+    : fs === "REFUNDED" || (total > 0 && refunded >= total - 0.01) ? "full"
+    : refunded > 0 || fs === "PARTIALLY_REFUNDED" ? "partial" : "none";
+  return { money, allItems, refunded, pending };
+}
+
+export type OrderForStatus = RefundFields & { cancelled_at: string | null; closed_at?: string | null; fulfillments: Fulfillment[]; shipping_method: string | null };
+
+/** Etap zamówienia z anulowania, zwrotów, przesyłek Furgonetki i realizacji w Shopify. */
+export function computeOrderStatus(o: OrderForStatus, shipments: ShipmentLike[]): { status: OrderStatus; detail: string | null } {
   if (o.cancelled_at) return { status: "cancelled", detail: null };
-  if ((o.financial_status ?? "").toUpperCase() === "REFUNDED") return { status: "returned", detail: "pieniądze zwrócone" };
+  const r = refundState(o);
+  const ret = (o.return_status ?? "").toUpperCase();
+  const total = Number(o.total ?? 0) || 0;
+  const wholeMoney = r.money === "full" || (total > 0 && r.refunded + r.pending >= total - 0.01);
+  if (ret === "RETURNED" || ret === "INSPECTION_COMPLETE" || r.allItems || wholeMoney) {
+    const detail = r.pending > 0 ? "zwrot pieniędzy w toku" : r.money === "full" ? "pieniądze zwrócone" : ret === "RETURNED" ? "towar zwrócony" : "zwrot";
+    return { status: "returned", detail };
+  }
+  if (ret === "IN_PROGRESS" || ret === "RETURN_REQUESTED") return { status: "problem", detail: ret === "RETURN_REQUESTED" ? "klient prosi o zwrot" : "zwrot w toku – klient odsyła towar" };
+  if (ret === "RETURN_FAILED") return { status: "problem", detail: "zwrot nieudany" };
   // Zarchiwizowane w Shopify = zamówienie zakończone.
-  if (o.closed_at) return { status: "delivered", detail: "zarchiwizowane w Shopify" };
+  if (o.closed_at) return { status: "delivered", detail: r.money === "partial" ? "zarchiwizowane · częściowy zwrot" : "zarchiwizowane w Shopify" };
 
   const active = shipments
     .map((s) => ({ s, kind: classifyShipment(s) }))
@@ -87,10 +122,12 @@ export function detectCod(gateways: string[], shippingMethod: string | null | un
 }
 
 /** Opis płatności dla listy: opłacone / za pobraniem / nieopłacone / zwrot. */
-export function paymentLabel(o: { financial_status: string | null; cod: boolean; outstanding?: number | string | null }): { text: string; tone: "green" | "amber" | "red" | "slate" | "blue" } {
+export function paymentLabel(o: RefundFields & { financial_status: string | null; cod: boolean; outstanding?: number | string | null }): { text: string; tone: "green" | "amber" | "red" | "slate" | "blue" } {
   const fs = (o.financial_status ?? "").toUpperCase();
-  if (fs === "REFUNDED") return { text: "zwrócone", tone: "slate" };
-  if (fs === "PARTIALLY_REFUNDED") return { text: "częściowy zwrot", tone: "amber" };
+  const r = refundState(o);
+  if (r.money === "pending") return { text: "zwrot w toku", tone: "amber" };
+  if (r.money === "full") return { text: "zwrócone", tone: "slate" };
+  if (r.money === "partial") return { text: "częściowy zwrot", tone: "amber" };
   if (fs === "PAID") return { text: "opłacone", tone: "green" };
   if (o.cod) return { text: "za pobraniem", tone: "blue" };
   if (fs === "PARTIALLY_PAID") return { text: "częściowo opłacone", tone: "amber" };

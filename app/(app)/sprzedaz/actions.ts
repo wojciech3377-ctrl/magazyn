@@ -9,6 +9,7 @@ import { syncFurgonetkaShipments, syncShopifyOrders } from "@/lib/sync/shop-orde
 import { fetchReceiptsForOrders, syncBaseReceipts } from "@/lib/sync/receipts";
 import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/furgonetka";
 import { errorMessage } from "@/lib/errors";
+import { parsePieceRef } from "@/lib/orders/pieces";
 
 /** Zamiana sztuki przy pakowaniu: skan kodu sztuki, IMEI albo numeru seryjnego. */
 export async function swapUnit(_: unknown, formData: FormData): Promise<{ ok?: string; error?: string }> {
@@ -41,6 +42,28 @@ export async function pullOrdersNow() {
     }
   }
   revalidatePath("/sprzedaz");
+}
+
+/**
+ * „Dołącz umowę” do jednej sztuki pozycji zamówienia: linia sprzedaży powstaje w razie potrzeby,
+ * a potem umowa do sztuki z magazynu albo – gdy sztuki nie ma – umowa, która ją utworzy.
+ * Przycisk podaje „<zamówienie>|<pozycja>|<sztuka>” w polu umowa_dla.
+ */
+export async function attachContractForPiece(formData: FormData) {
+  const { supabase } = await requireProfile();
+  const ref = parsePieceRef(String(formData.get("umowa_dla") ?? ""));
+  const back = String(formData.get("back") ?? "/sprzedaz");
+  const fail = (msg: string) => redirect(`${back.startsWith("/sprzedaz") ? back : "/sprzedaz"}${back.includes("?") ? "&" : "?"}blad=${encodeURIComponent(msg)}`);
+  if (!ref) return fail("Nie rozpoznałem pozycji zamówienia.");
+  const { data: saleId, error } = await supabase.rpc("ensure_order_line_sale", { p_order_id: ref.orderId, p_line_id: ref.lineId, p_index: ref.n });
+  if (error || !saleId) return fail(error?.message ?? "Nie udało się przygotować sprzedaży.");
+  const { data: sale } = await supabase.from("sales").select("id, unit:units(id, contract_id)").eq("id", saleId as string).single();
+  const unit = sale?.unit as unknown as { id: string; contract_id: string | null } | null;
+  if (unit?.contract_id) redirect(`/umowy/${unit.contract_id}`);
+  if (unit) redirect(`/umowy/z-szablonu?ids=${unit.id}`);
+  const { data: pending } = await supabase.from("contracts").select("id").eq("sale_id", saleId as string).not("status", "in", "(cancelled,rejected)").limit(1).maybeSingle();
+  if (pending) redirect(`/umowy/${pending.id}`);
+  redirect(`/umowy/z-szablonu?sprzedaz=${saleId}`);
 }
 
 /** JPK: pobranie z Base paragonów, których brakuje w naszym systemie. */

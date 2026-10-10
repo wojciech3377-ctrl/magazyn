@@ -196,7 +196,7 @@ export async function deleteUnit(formData: FormData) {
   back("/magazyn", `Sztuka usunięta.${baseSummary(results)}`, results.some((r) => !r.ok) ? "error" : "ok");
 }
 
-/** Ręczne uruchomienie automatu: nowe produkty ze Shopify / Base i nowe stany z Base → sztuki. */
+/** Ręczne uruchomienie automatu: nowe produkty ze Shopify / Base i stany (Shopify ↔ aplikacja). */
 export async function runAutoCatalogNow() {
   await requireAdmin();
   const db = createAdminClient();
@@ -204,9 +204,13 @@ export async function runAutoCatalogNow() {
   let ok = true;
   try {
     const r = await runAutoCatalog(db, true);
-    const created = (r?.stock.results as { created?: number }[] | undefined)?.reduce((n, x) => n + (x?.created ?? 0), 0) ?? 0;
+    const sum = (vals: unknown[], key: "created" | "changed") => vals.reduce<number>((n, x) => n + (typeof x === "object" && x && key in x ? Number((x as Record<string, unknown>)[key]) || 0 : 0), 0);
     const products = Object.values(r?.shopify ?? {}).reduce((n, x) => n + x, 0);
-    msg = `Sprawdzono: ${products} produktów ze Shopify, ${r?.base.added ?? 0} nowych w Base, dodano ${created} sztuk ze stanów Base.`;
+    const stockVals = Object.values(r?.stock.result ?? {});
+    const stockMsg = r?.stock.master === "app"
+      ? `zmieniono ${sum(stockVals, "changed")} stanów w Shopify (główny: magazyn aplikacji)`
+      : `dodano ${sum(stockVals, "created") + sum((r?.baseStock?.results as unknown[] | undefined) ?? [], "created")} sztuk z nowych stanów${r?.baseStock ? " (Base)" : " w Shopify"}`;
+    msg = `Sprawdzono: ${products} produktów ze Shopify, ${r?.base.added ?? 0} nowych w Base, ${stockMsg}.`;
     await db.from("sync_log").insert({ job: "auto-catalog", ok: true, message: JSON.stringify(r) });
   } catch (e) {
     ok = false;

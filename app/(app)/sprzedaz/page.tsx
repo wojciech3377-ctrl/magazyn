@@ -3,7 +3,8 @@ import { requireProfile } from "@/lib/auth";
 import { dateTime, money, SALE_STATUS } from "@/lib/labels";
 import { Notice, PageHeader, Pagination, Pill } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
-import { pullOrdersNow } from "./actions";
+import { attachContractForPiece, pullOrdersNow } from "./actions";
+import { matchPieces, type Piece } from "@/lib/orders/pieces";
 import { SwapForm } from "./SwapForm";
 import { WtbButton } from "@/components/WtbButton";
 import { ReceiptButton } from "@/components/ReceiptButton";
@@ -35,6 +36,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
       <>
         <PageHeader title="Sprzedaż" sub={sp.widok === "jpk" ? "JPK: wszystkie sprzedaże według daty paragonu lub faktury, z danymi zakupu z umowy." : "Faktury sprzedaży i KSeF."} />
         <Tabs active={sp.widok} />
+        <Flash sp={sp} />
         {sp.widok === "jpk" ? <Jpk sp={sp} /> : <Invoices sp={sp} />}
       </>
     );
@@ -44,7 +46,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
 
   let query = supabase
     .from("orders")
-    .select("id, name, ordered_at, receipt_id, customer_name, shipping_method, pickup_point, financial_status, cod, total, outstanding, currency, status, status_detail, line_items, fulfillments, store:stores(name)", { count: "exact" })
+    .select("id, name, ordered_at, receipt_id, customer_name, shipping_method, pickup_point, financial_status, cod, total, outstanding, currency, status, status_detail, line_items, fulfillments, return_status, refunded_amount, refund_pending, refunded_lines, email, phone, shipping_address, note, store:stores(name)", { count: "exact" })
     .order("ordered_at", { ascending: false })
     .range((page - 1) * PER_PAGE, page * PER_PAGE - 1);
   if (tab) query = query.eq("status", tab);
@@ -69,11 +71,14 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
   const ids = (orders ?? []).map((o) => o.id);
   const [{ data: sales }, { data: shipments }] = ids.length
     ? await Promise.all([
-        supabase.from("sales").select("id, order_id, status, variant_id, unit:units(id, code, contract_id)").in("order_id", ids),
+        supabase.from("sales").select("id, order_id, status, variant_id, shopify_line_id, shopify_line_index, unit:units(id, code, contract_id)").in("order_id", ids),
         supabase.from("shipments").select("order_id, service, tracking_number, tracking_url, state, state_description").in("order_id", ids).order("created_at", { ascending: false }),
       ])
     : [{ data: [] }, { data: [] }];
-  type ListSale = { id: string; status: string; variant_id: string | null; unit: { id: string; code: string; contract_id: string | null } | null };
+  type ListSale = { id: string; status: string; variant_id: string | null; shopify_line_id: string | null; shopify_line_index: number | null; unit: { id: string; code: string; contract_id: string | null } | null };
+  const gids = [...new Set((orders ?? []).flatMap((o) => ((o.line_items ?? []) as LineItem[]).map((l) => l.shopify_variant_id).filter((x): x is string => !!x)))];
+  const { data: vLinks } = gids.length ? await supabase.from("variant_store_links").select("variant_id, shopify_variant_id").in("shopify_variant_id", gids) : { data: [] };
+  const variantOf = new Map((vLinks ?? []).map((l) => [l.shopify_variant_id as string, l.variant_id as string]));
   const salesBy = new Map<string, ListSale[]>();
   for (const s of sales ?? []) salesBy.set(s.order_id as string, [...(salesBy.get(s.order_id as string) ?? []), s as unknown as ListSale]);
   const listSaleIds = (sales ?? []).map((s) => s.id as string);
@@ -94,6 +99,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
         ) : null}
       />
       <Tabs active="orders" />
+      <Flash sp={sp} />
       {lastShop && !lastShop.ok && <div className="mb-4"><Notice tone="error">Odczyt zamówień z Shopify nie udał się: {lastShop.message}</Notice></div>}
       {lastBase && !lastBase.ok && <div className="mb-4"><Notice tone="error">Przypisanie sztuk (Base) nie udało się: {lastBase.message}</Notice></div>}
       {lastShip && !lastShip.ok && <div className="mb-4"><Notice tone="error">Odczyt przesyłek z Furgonetki nie udał się: {lastShip.message}</Notice></div>}
@@ -122,7 +128,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
         <label className="flex items-center gap-2"><SelectAllNamed name="zamowienia" /> zaznacz wszystkie</label>
         <button className="btn-secondary px-3 py-1.5 text-sm">Pobierz umowy zaznaczonych (ZIP)</button>
       </form>
-      <div className="card overflow-x-auto">
+      <div className="card overflow-x-auto lg:overflow-visible">
         <table className="table">
           <thead><tr><th className="w-8" /><th>Data</th><th>Zamówienie</th><th>Produkty</th><th>Wysyłka</th><th>Płatność</th><th>Status</th><th /></tr></thead>
           <tbody>
@@ -138,7 +144,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
               const tracking = ship?.tracking_number ? { number: ship.tracking_number, url: ship.tracking_url } : shopTracking ? { number: shopTracking.number!, url: shopTracking.url } : null;
               const status = o.status as OrderStatus;
               return (
-                <tr key={o.id} className={`relative cursor-pointer transition-colors ${status === "problem" ? "bg-rose-50/60 hover:bg-rose-100/70" : "hover:bg-sky-50"}`}>
+                <tr key={o.id} className={`group relative cursor-pointer transition-colors ${status === "problem" ? "bg-rose-50/60 hover:bg-rose-100/70" : "hover:bg-sky-50"}`}>
                   <td><input type="checkbox" name="zamowienia" value={o.id} form="umowy-paczka" className="relative z-10 h-4 w-4" aria-label={`Zaznacz ${o.name}`} /></td>
                   <td className="whitespace-nowrap text-muted">{dateTime(o.ordered_at)}</td>
                   <td className="whitespace-nowrap">
@@ -146,6 +152,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
                     <Link className="font-medium text-accent after:absolute after:inset-0 after:content-[''] hover:underline" href={`/sprzedaz/${o.id}`}>{o.name}</Link>
                     <span className="block text-xs text-muted">{(o.store as unknown as { name: string } | null)?.name ?? ""}</span>
                     {o.customer_name && <span className="block text-xs">{o.customer_name}</span>}
+                    <OrderPreview o={o as unknown as PreviewOrder} lines={lines} pay={pay} tracking={tracking} />
                   </td>
                   <td className="min-w-64 max-w-96">
                     <ul className="space-y-0.5 text-sm">
@@ -179,7 +186,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
                   </td>
                   <td>
                     <div className="flex flex-col items-start gap-1.5">
-                      <ContractAction sales={oSales} saleHasContract={saleHasContract} />
+                      <ContractAction pieces={matchPieces(o.id, (o.line_items ?? []) as LineItem[], oSales, (g) => variantOf.get(g))} saleHasContract={saleHasContract} cancelled={status === "cancelled"} back={`/sprzedaz${tab ? `?status=${tab}` : ""}`} />
                       {status === "new" && <Link className="btn-secondary relative z-10 whitespace-nowrap px-2.5 py-1 text-xs" href={`/sprzedaz/${o.id}#etykieta`}>Utwórz etykietę</Link>}
                       {status !== "cancelled" && status !== "returned" && <ReceiptButton orderId={o.id} receiptId={o.receipt_id as number | null} compact />}
                     </div>
@@ -193,6 +200,55 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
       <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={{ q: sp.q, status: tab || undefined }} />
     </>
   );
+}
+
+type PreviewOrder = {
+  name: string; email: string | null; phone: string | null; note: string | null; customer_name: string | null; shipping_method: string | null; pickup_point: string | null;
+  total: number | null; currency: string | null; status_detail: string | null;
+  shipping_address: { name?: string | null; company?: string | null; address1?: string | null; address2?: string | null; zip?: string | null; city?: string | null; countryCodeV2?: string | null } | null;
+};
+
+/** Podgląd zamówienia po najechaniu na wiersz (tylko na dużym ekranie). */
+function OrderPreview({ o, lines, pay, tracking }: { o: PreviewOrder; lines: (LineItem & { i: number })[]; pay: { text: string }; tracking: { number: string; url: string | null } | null }) {
+  const a = o.shipping_address;
+  return (
+    <div role="tooltip" className="pointer-events-none invisible absolute left-24 top-full z-40 mt-1 hidden w-[30rem] rounded-lg border border-line bg-white p-3 text-sm opacity-0 shadow-xl transition-opacity delay-300 duration-150 group-hover:visible group-hover:opacity-100 lg:block">
+      <div className="mb-2 flex items-baseline justify-between gap-2">
+        <span className="font-semibold">{o.name}</span>
+        <span className="tabular-nums">{o.currency && o.currency !== "PLN" ? `${Number(o.total).toFixed(2)} ${o.currency}` : money(o.total)} · {pay.text}</span>
+      </div>
+      <ul className="mb-2 space-y-1.5">
+        {lines.map((l) => (
+          <li key={l.id} className="flex items-center gap-2">
+            {l.image ? <img src={`${l.image}${l.image.includes("?") ? "&" : "?"}width=80`} alt="" className="h-10 w-10 flex-none rounded border border-line object-contain" /> : <span className="h-10 w-10 flex-none rounded bg-panel" />}
+            <span className="min-w-0 flex-1"><span className="line-clamp-1">{l.title}</span><span className="text-xs text-muted">{l.variant_title ?? "–"}{l.sku ? ` · ${l.sku}` : ""}</span></span>
+            <span className="whitespace-nowrap tabular-nums">{l.quantity > 1 ? `${l.quantity} × ` : ""}{money(l.price)}</span>
+          </li>
+        ))}
+      </ul>
+      <div className="grid grid-cols-2 gap-3 border-t border-line pt-2 text-xs">
+        <div>
+          <div className="font-medium text-ink">{a?.name ?? o.customer_name ?? "–"}</div>
+          {a?.company && <div>{a.company}</div>}
+          {a && <div className="text-muted">{[a.address1, a.address2].filter(Boolean).join(", ")}<br />{[a.zip, a.city].filter(Boolean).join(" ")}{a.countryCodeV2 && a.countryCodeV2 !== "PL" ? `, ${a.countryCodeV2}` : ""}</div>}
+          {o.phone && <div>{o.phone}</div>}
+          {o.email && <div className="truncate">{o.email}</div>}
+        </div>
+        <div>
+          <div className="font-medium text-ink">{o.shipping_method ?? "bez wysyłki"}</div>
+          {o.pickup_point && <div className="font-mono">{o.pickup_point}</div>}
+          {tracking && <div className="font-mono">{tracking.number}</div>}
+          {o.status_detail && <div className="text-muted">{o.status_detail}</div>}
+        </div>
+      </div>
+      {o.note && <p className="mt-2 rounded bg-panel p-1.5 text-xs"><b>Uwagi klienta:</b> {o.note}</p>}
+    </div>
+  );
+}
+
+function Flash({ sp }: { sp: Record<string, string | undefined> }) {
+  if (!sp.ok && !sp.blad) return null;
+  return <div className="mb-4">{sp.blad ? <Notice tone="error">{sp.blad}</Notice> : <Notice tone="ok">{sp.ok}</Notice>}</div>;
 }
 
 /** Linie sprzedaży z Base: przypisanie sztuk, umowy, zamiana sztuki przy pakowaniu. */
@@ -316,21 +372,32 @@ async function PosList({ page }: { page: number }) {
  * „Dołącz umowę” dla każdego sprzedanego przedmiotu bez umowy – także już wysłanego (1 umowa na przedmiot):
  * sztuki z magazynu bez umowy oraz pozycje bez sztuki (umowa utworzy dla nich sprzedaną sztukę).
  */
-function ContractAction({ sales, saleHasContract }: {
-  sales: { id: string; status: string; variant_id: string | null; unit: { id: string; contract_id: string | null } | null }[];
+function ContractAction({ pieces, saleHasContract, cancelled, back }: {
+  pieces: Piece<{ id: string; status: string; variant_id: string | null; unit: { id: string; contract_id: string | null } | null }>[];
   saleHasContract: Set<string>;
+  cancelled: boolean;
+  back: string;
 }) {
-  const live = sales.filter((s) => s.status !== "cancelled");
-  const unitsWithout = live.filter((s) => s.unit && !s.unit.contract_id && !saleHasContract.has(s.id)).map((s) => s.unit!.id);
-  const noUnit = live.filter((s) => !s.unit && s.variant_id && !saleHasContract.has(s.id));
+  // Każda sztuka bez umowy (także bez linii sprzedaży i bez sztuki z magazynu) – maks. 1 umowa na sztukę.
+  const live = pieces.filter((p) => p.sale?.status !== "cancelled");
+  const hasContract = (p: (typeof pieces)[number]) => !!p.sale && (!!p.sale.unit?.contract_id || saleHasContract.has(p.sale.id));
+  const unitsWithout = live.filter((p) => p.sale?.unit && !hasContract(p)).map((p) => p.sale!.unit!.id);
+  const noUnit = cancelled ? [] : live.filter((p) => !p.sale?.unit && !hasContract(p));
   const btn = "btn-secondary relative z-10 whitespace-nowrap px-2.5 py-1 text-xs";
   if (!unitsWithout.length && !noUnit.length) {
-    return live.some((s) => s.unit?.contract_id || saleHasContract.has(s.id)) ? <span className="whitespace-nowrap text-xs text-ok">umowa ✓</span> : null;
+    return live.some(hasContract) ? <span className="whitespace-nowrap text-xs text-ok">umowa ✓</span> : null;
   }
   return (
     <>
       {unitsWithout.length > 0 && <Link className={btn} href={`/umowy/z-szablonu?ids=${unitsWithout.join(",")}`}>Dołącz umowę{unitsWithout.length > 1 ? ` (${unitsWithout.length})` : ""}</Link>}
-      {noUnit.map((s) => <Link key={s.id} className={btn} href={`/umowy/z-szablonu?sprzedaz=${s.id}`}>Dołącz umowę{noUnit.length > 1 || unitsWithout.length ? " (bez sztuki)" : ""}</Link>)}
+      {noUnit.map((p) => (
+        <form key={p.ref} action={attachContractForPiece} className="relative z-10">
+          <input type="hidden" name="back" value={back} />
+          <button className={btn} name="umowa_dla" value={p.ref} title={`${p.line.title} ${p.line.variant_title ?? ""}`}>
+            Dołącz umowę{noUnit.length > 1 || unitsWithout.length ? ` · ${p.line.variant_title ?? p.line.title.slice(0, 14)}` : ""}
+          </button>
+        </form>
+      ))}
     </>
   );
 }

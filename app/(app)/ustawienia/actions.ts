@@ -201,3 +201,46 @@ export async function disconnectFurgonetka() {
   await disconnect(createAdminClient());
   await done("Furgonetka odłączona.");
 }
+
+/** Główny magazyn: Shopify (stany ze sklepu → sztuki) albo aplikacja (sztuki → stany w Shopify). */
+export async function saveStockMaster(formData: FormData) {
+  const { supabase } = await requireAdmin();
+  const master = String(formData.get("master")) === "app" ? "app" : "shopify";
+  if (master === "app" && formData.get("confirm") !== "1") return done("Zaznacz potwierdzenie – stany w Shopify zostaną nadpisane stanem z aplikacji.", "blad");
+  const { error } = await supabase.from("app_settings").upsert({ key: "stock", value: { master, changed_at: new Date().toISOString() }, updated_at: new Date().toISOString() });
+  if (error) return done(error.message, "blad");
+  await done(master === "app"
+    ? "Główny jest magazyn aplikacji – przy najbliższym odczycie (co 15 min) stany w Shopify przyjmą liczbę sztuk z aplikacji."
+    : "Główny jest Shopify – nowe stany ze sklepu tworzą sztuki w Magazynie.");
+}
+
+export async function saveShopifyLocation(formData: FormData) {
+  const { supabase } = await requireAdmin();
+  const value = String(formData.get("shopify_location_id") ?? "").trim();
+  if (value && !/^gid:\/\/shopify\/Location\/\d+$/.test(value)) return done("Zła lokalizacja Shopify.", "blad");
+  const { error } = await supabase.from("locations").update({ shopify_location_id: value || null }).eq("id", String(formData.get("id")));
+  if (error) return done(error.message, "blad");
+  await done("Lokalizacja Shopify zapisana.");
+}
+
+export async function runStockNow() {
+  await requireAdmin();
+  const db = createAdminClient();
+  try {
+    const { syncStock } = await import("@/lib/sync/shopify-stock");
+    const r = await syncStock(db);
+    await db.from("sync_log").insert({ job: "stock", ok: true, message: JSON.stringify(r) });
+    await done(`Stany sprawdzone: ${JSON.stringify(r.result)}`);
+  } catch (e) {
+    unstable_rethrow(e);
+    await db.from("sync_log").insert({ job: "stock", ok: false, message: errorMessage(e) });
+    await done(errorMessage(e), "blad");
+  }
+}
+
+export async function saveInvoiceSettings(formData: FormData) {
+  const { supabase } = await requireAdmin();
+  const { error } = await supabase.from("app_settings").upsert({ key: "invoices", value: { auto_email: formData.get("auto_email") === "1" }, updated_at: new Date().toISOString() });
+  if (error) return done(error.message, "blad");
+  await done("Ustawienia faktur zapisane.");
+}

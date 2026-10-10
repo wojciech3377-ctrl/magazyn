@@ -236,6 +236,9 @@ export async function cancelOrderAction(_: OrderOpState, fd: FormData): Promise<
   if (!["CUSTOMER", "DECLINED", "FRAUD", "INVENTORY", "OTHER", "STAFF"].includes(reason)) return { error: "Wybierz powód." };
   const db = createAdminClient();
   const notes: string[] = [];
+  // Najpierw oznaczamy anulowanie u nas: webhook ze Shopify nie zwolni wtedy sztuk drugi raz, a podwójne kliknięcie nic nie zrobi.
+  const { data: claimed } = await db.from("orders").update({ cancelled_at: new Date().toISOString() }).eq("id", order.id).is("cancelled_at", null).select("id");
+  if (!claimed?.length) return { error: "Zamówienie jest już anulowane." };
 
   if (order.store?.shopify_domain) {
     try {
@@ -243,6 +246,7 @@ export async function cancelOrderAction(_: OrderOpState, fd: FormData): Promise<
         reason, refund: !!fd.get("refund"), notify: !!fd.get("notify"), note: str(fd, "note") || "Anulowane w aplikacji magazynowej",
       });
     } catch (e) {
+      await db.from("orders").update({ cancelled_at: null }).eq("id", order.id);
       return { error: errorMessage(e) };
     }
   }
@@ -264,12 +268,20 @@ export async function cancelOrderAction(_: OrderOpState, fd: FormData): Promise<
   await releaseSales((sales ?? []).map((s) => s.id), str(fd, "units") !== "check", notes);
 
   await db.from("orders").update({ cancelled_at: new Date().toISOString(), status: "cancelled", status_detail: null, status_changed_at: new Date().toISOString() }).eq("id", order.id);
+  if (order.store?.shopify_domain) {
+    // Zwrot pieniędzy przy anulowaniu (stan „zwrot w toku” / „zwrócone”) od razu na liście.
+    const fresh = await getOrder(order.store.shopify_domain, order.store.code, order.shopify_order_id).catch(() => null);
+    if (fresh) await saveShopifyOrders(db, order.store_id, [fresh]).catch(() => null);
+  }
   revalidatePath(`/sprzedaz/${order.id}`);
   revalidatePath("/sprzedaz");
   return { ok: "Zamówienie anulowane.", notes };
 }
 
-/** Zwrot wybranych pozycji: pieniądze w Shopify i sztuki z powrotem na stan (albo do sprawdzenia). */
+/**
+ * Zwrot (częściowy): wybrane pozycje i/lub koszt wysyłki i/lub własna kwota – pieniądze w Shopify;
+ * towar wraca na stan, do sprawdzenia albo zostaje u klienta (sam zwrot pieniędzy).
+ */
 export async function returnOrderAction(_: OrderOpState, fd: FormData): Promise<OrderOpState> {
   let supabase;
   try {
@@ -282,7 +294,14 @@ export async function returnOrderAction(_: OrderOpState, fd: FormData): Promise<
   const picked = order.line_items
     .map((l) => ({ line: l, qty: Math.min(l.quantity, Math.max(0, Math.floor(num(fd, `qty_${l.id}`)))) }))
     .filter((x) => x.qty > 0);
-  if (!picked.length) return { error: "Zaznacz, co wraca." };
+  const refundMoney = !!fd.get("refund");
+  const rawAmount = str(fd, "amount").replace(/\s/g, "").replace(",", ".");
+  const amount = rawAmount ? Math.round(Number(rawAmount) * 100) / 100 : null;
+  if (amount !== null && !(amount > 0)) return { error: "Kwota zwrotu musi być większa od zera." };
+  const shipping = !!fd.get("shipping");
+  if (!picked.length && !shipping && !(refundMoney && amount)) return { error: "Wybierz pozycje, koszt wysyłki albo wpisz kwotę zwrotu." };
+  const goods = str(fd, "units"); // stock | check | keep
+  if (goods === "keep" && !refundMoney) return { error: "Towar zostaje u klienta – zaznacz zwrot pieniędzy (inaczej nie ma czego zapisać)." };
   const notes: string[] = [];
   let summary = "";
 
@@ -290,35 +309,42 @@ export async function returnOrderAction(_: OrderOpState, fd: FormData): Promise<
     try {
       const r = await refundShopifyLines(order.store.shopify_domain, order.store.code, order.shopify_order_id,
         picked.map((p) => ({ lineItemId: p.line.id, quantity: p.qty })),
-        { refundMoney: !!fd.get("refund"), shipping: !!fd.get("shipping"), notify: !!fd.get("notify"), note: str(fd, "note") || undefined });
-      summary = r.moneyBack ? ` Zwrot pieniędzy: ${r.refunded.toFixed(2)} zł.` : fd.get("refund") ? " Shopify nie zwrócił pieniędzy automatycznie (np. płatność za pobraniem) – oddaj je ręcznie." : "";
+        { refundMoney, shipping, notify: !!fd.get("notify"), note: str(fd, "note") || undefined, amount, keepGoods: goods === "keep", key: /^[0-9a-f-]{36}$/i.test(str(fd, "nonce")) ? `zwrot-${str(fd, "nonce")}` : undefined });
+      summary = r.moneyBack ? ` Zwrot pieniędzy: ${(amount ?? r.suggested).toFixed(2)} zł.` : refundMoney ? " Shopify nie zwrócił pieniędzy automatycznie (np. płatność za pobraniem) – oddaj je ręcznie." : "";
     } catch (e) {
       return { error: errorMessage(e) };
     }
   }
 
-  // Pozycje Shopify → linie sprzedaży z tym samym rozmiarem w tym zamówieniu.
-  const { data: sales } = await supabase.from("sales").select("id, variant_id, status, unit:units(status)").eq("order_id", order.id);
-  const variantIds = await Promise.all(picked.map(async (p) => {
-    if (!p.line.shopify_variant_id) return null;
-    const { data } = await supabase.from("variant_store_links").select("variant_id").eq("shopify_variant_id", p.line.shopify_variant_id).maybeSingle();
-    return (data?.variant_id as string | undefined) ?? null;
-  }));
-  const used = new Set<string>();
-  const saleIds: string[] = [];
-  picked.forEach((p, i) => {
-    const pool = (sales ?? []).filter((s) => !used.has(s.id) && s.status !== "cancelled" && (variantIds[i] ? s.variant_id === variantIds[i] : false));
-    for (const s of pool.slice(0, p.qty)) {
-      used.add(s.id);
-      saleIds.push(s.id);
-    }
-    if (pool.length < p.qty) notes.push(`${p.line.title} ${p.line.variant_title ?? ""}: nie znalazłem sztuki w magazynie – sprawdź ręcznie.`);
-  });
-  await releaseSales(saleIds, str(fd, "units") !== "check", notes);
+  if (goods !== "keep" && picked.length) {
+    // Pozycje Shopify → linie sprzedaży tej pozycji (albo z Base z tym samym rozmiarem) w tym zamówieniu.
+    const { data: sales } = await supabase.from("sales").select("id, variant_id, status, shopify_line_id, shopify_line_index").eq("order_id", order.id);
+    const variantIds = await Promise.all(picked.map(async (p) => {
+      if (!p.line.shopify_variant_id) return null;
+      const { data } = await supabase.from("variant_store_links").select("variant_id").eq("shopify_variant_id", p.line.shopify_variant_id).limit(1).maybeSingle();
+      return (data?.variant_id as string | undefined) ?? null;
+    }));
+    const used = new Set<string>();
+    const saleIds: string[] = [];
+    picked.forEach((p, i) => {
+      const free = (sales ?? []).filter((s) => !used.has(s.id) && s.status !== "cancelled");
+      const pool = [
+        ...free.filter((s) => s.shopify_line_id === p.line.id),
+        ...free.filter((s) => !s.shopify_line_id && variantIds[i] && s.variant_id === variantIds[i]),
+      ];
+      for (const s of pool.slice(0, p.qty)) {
+        used.add(s.id);
+        saleIds.push(s.id);
+      }
+      if (pool.length < p.qty) notes.push(`${p.line.title} ${p.line.variant_title ?? ""}: nie znalazłem sztuki w magazynie – sprawdź ręcznie.`);
+    });
+    await releaseSales(saleIds, goods !== "check", notes);
+  }
 
   if (order.store?.shopify_domain) {
+    // Odświeżenie po zwrocie nie może zgłosić błędu – zwrot już się wykonał (ponowne wysłanie zwróciłoby drugi raz).
     const fresh = await getOrder(order.store.shopify_domain, order.store.code, order.shopify_order_id).catch(() => null);
-    if (fresh) await saveShopifyOrders(createAdminClient(), order.store_id, [fresh]);
+    if (fresh) await saveShopifyOrders(createAdminClient(), order.store_id, [fresh]).catch((e) => notes.push(`Odświeżenie zamówienia: ${errorMessage(e)}`));
   }
   revalidatePath(`/sprzedaz/${order.id}`);
   revalidatePath("/sprzedaz");

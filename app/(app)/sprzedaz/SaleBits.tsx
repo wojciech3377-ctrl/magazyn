@@ -44,7 +44,7 @@ export function UnitCell({ unit }: { unit: SaleUnit }) {
 }
 
 export const SALE_SELECT =
-  "id, order_id, order_ref, product_name, status, sold_at, variant_id, store:stores(name), unit:units(id, code, identifier, owner_type, status, consignor:consignors(name), contract:contracts(id, counterparty, status, template)), variant:variants(option, product:products(title))";
+  "id, order_id, order_ref, product_name, status, sold_at, variant_id, shopify_line_id, shopify_line_index, store:stores(name), unit:units(id, code, identifier, owner_type, status, consignor:consignors(name), contract:contracts(id, counterparty, status, template)), variant:variants(option, product:products(title))";
 
 /** Status zamówienia; „Problem” jako wyraźna czerwona plakietka. */
 export function OrderStatusPill({ status }: { status: OrderStatus }) {

@@ -200,7 +200,14 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
                     )}
                     <span className="block text-xs text-muted">{PURCHASE_FORM[u.purchase_form]}</span>
                   </td>
-                  <td className="whitespace-nowrap text-right tabular-nums">{money(shopPrice(u))}</td>
+                  <td className="whitespace-nowrap text-right tabular-nums">
+                    {shopPrice(u) !== null ? money(shopPrice(u)) : u.price_error ? (
+                      <span className="group relative inline-block cursor-help" tabIndex={0} aria-label={`Błąd ceny: ${u.price_error}`}>
+                        <span className="rounded bg-rose-100 px-1.5 py-0.5 text-xs font-bold text-bad">BŁĄD</span>
+                        <span role="tooltip" className="pointer-events-none absolute right-0 top-full z-30 mt-1 hidden w-72 whitespace-normal rounded-md border border-line bg-white p-2 text-left text-xs font-normal text-ink shadow-lg group-hover:block group-focus:block">{u.price_error}</span>
+                      </span>
+                    ) : "–"}
+                  </td>
                   {profile.can_see_prices && <td className="whitespace-nowrap text-right tabular-nums">{money(u.purchase_price)}</td>}
                   <td className="whitespace-nowrap text-muted">{dateOnly(u.received_at)}</td>
                   <td className="whitespace-nowrap text-right">

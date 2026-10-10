@@ -3,8 +3,9 @@
 import { useActionState, useState } from "react";
 import { createContract } from "./actions";
 import { ContractFileInput } from "@/components/ContractFileInput";
+import { VariantPick } from "@/components/VariantPick";
 
-export function ContractForm({ consignors, defaultUnits, canSeePrices, returnTo = "", saleId = null, saleLabel = null }: { consignors: { id: string; name: string }[]; defaultUnits: string; canSeePrices: boolean; returnTo?: string; saleId?: string | null; saleLabel?: string | null }) {
+export function ContractForm({ consignors, defaultUnits, canSeePrices, returnTo = "", saleId = null, saleLabel = null, pickVariantStore = null }: { consignors: { id: string; name: string }[]; defaultUnits: string; canSeePrices: boolean; returnTo?: string; saleId?: string | null; saleLabel?: string | null; pickVariantStore?: string | null }) {
   const [state, action, pending] = useActionState(createContract, null);
   const [type, setType] = useState("purchase");
   return (
@@ -12,6 +13,7 @@ export function ContractForm({ consignors, defaultUnits, canSeePrices, returnTo 
       <input type="hidden" name="returnTo" value={returnTo} />
       {saleId && <input type="hidden" name="sale_id" value={saleId} />}
       {saleLabel && <p className="rounded-md bg-sky-50 p-2 text-sm md:col-span-2">Umowa do sprzedanego przedmiotu: <b>{saleLabel}</b>. Przedmiot dostanie sztukę w magazynie (sprzedaną) z tą umową; kwota umowy = cena zakupu.</p>}
+      {saleLabel && pickVariantStore !== null && <div className="md:col-span-2"><VariantPick name="variant_id" storeId={pickVariantStore} label="Pozycja nie jest powiązana z katalogiem – wybierz produkt i rozmiar" /></div>}
       <div>
         <label className="label" htmlFor="type">Typ</label>
         <select className="input" id="type" name="type" value={type} onChange={(e) => setType(e.target.value)}>

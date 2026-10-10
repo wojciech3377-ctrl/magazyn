@@ -96,10 +96,72 @@ select '20000000-0000-0000-0000-000000000008', id, 'gid://shopify/ProductVariant
 insert into public.units (variant_id, location_id) values ('20000000-0000-0000-0000-000000000008', '60000000-0000-0000-0000-000000000001');
 select public.reconcile_base_stock('[{"variant_id":"20000000-0000-0000-0000-000000000008","location_id":"60000000-0000-0000-0000-000000000001","qty":3}]') as before_import;
 insert into public.sync_state (key, value) values ('initial_stock_imported', '{}');
-select public.reconcile_base_stock('[{"variant_id":"20000000-0000-0000-0000-000000000008","location_id":"60000000-0000-0000-0000-000000000001","qty":3}]') as first;
+select public.reconcile_base_stock('[{"variant_id":"20000000-0000-0000-0000-000000000008","location_id":"60000000-0000-0000-0000-000000000001","qty":3}]') as first_waits;
+update public.stock_excess set first_seen_at = now() - interval '20 minutes';
+select public.reconcile_base_stock('[{"variant_id":"20000000-0000-0000-0000-000000000008","location_id":"60000000-0000-0000-0000-000000000001","qty":3}]') as confirmed;
 select public.reconcile_base_stock('[{"variant_id":"20000000-0000-0000-0000-000000000008","location_id":"60000000-0000-0000-0000-000000000001","qty":3}]') as again;
+-- zupełnie nowy produkt: od razu; dwie lokalizacje aplikacji liczone razem (jedna lokalizacja Shopify)
+insert into public.locations (id, store_id, name) select '60000000-0000-0000-0000-000000000003', id, 'Magazyn 2' from public.stores where code = 'sneakers-depot';
+insert into public.variants (id, product_id, option) values ('20000000-0000-0000-0000-000000000005', '10000000-0000-0000-0000-000000000008', '44');
+select public.reconcile_stock('[{"variant_id":"20000000-0000-0000-0000-000000000005","location_id":"60000000-0000-0000-0000-000000000001","qty":2,"count_locations":["60000000-0000-0000-0000-000000000001","60000000-0000-0000-0000-000000000003"]}]', 300, 'Shopify', null, 10) as new_product;
+update public.units set location_id = '60000000-0000-0000-0000-000000000003' where variant_id = '20000000-0000-0000-0000-000000000005';
+update public.unit_events set created_at = now() - interval '1 hour';
+select public.reconcile_stock('[{"variant_id":"20000000-0000-0000-0000-000000000005","location_id":"60000000-0000-0000-0000-000000000001","qty":2,"count_locations":["60000000-0000-0000-0000-000000000001","60000000-0000-0000-0000-000000000003"]}]', 300, 'Shopify', null, 0) as grouped_no_phantom;
 select public.reconcile_base_stock('[{"variant_id":"20000000-0000-0000-0000-000000000008","location_id":"60000000-0000-0000-0000-000000000001","qty":1}]') as fewer;
 set local role authenticated;
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000001', true);
 select title, option, shop_price, store_name, count(*) from public.units_list group by 1, 2, 3, 4;
+rollback;
+-- Linie sprzedaży ze Shopify, przejęcie przez Base, umowa do starej pozycji.
+begin;
+insert into auth.users (id, email) values ('00000000-0000-0000-0000-000000000001', 'szef@example.com');
+insert into public.locations (id, store_id, name) select '60000000-0000-0000-0000-000000000002', id, 'Sklep' from public.stores where code = 'sneakers-depot';
+insert into public.products (id, title) values ('10000000-0000-0000-0000-000000000007', 'Samba');
+insert into public.variants (id, product_id, option) values ('20000000-0000-0000-0000-000000000007', '10000000-0000-0000-0000-000000000007', '41');
+insert into public.variants (id, product_id, option) values ('20000000-0000-0000-0000-000000000006', '10000000-0000-0000-0000-000000000007', '44');
+insert into public.variant_store_links (variant_id, store_id, shopify_variant_id)
+select '20000000-0000-0000-0000-000000000007', id, 'gid://shopify/ProductVariant/7' from public.stores where code = 'sneakers-depot';
+insert into public.units (variant_id, location_id) values ('20000000-0000-0000-0000-000000000007', '60000000-0000-0000-0000-000000000002');
+-- nowe zamówienie: 2 sztuki rozmiaru 41 (jedna na stanie) + pozycja bez katalogu
+insert into public.orders (id, store_id, shopify_order_id, name, number, ordered_at, line_items)
+select '70000000-0000-0000-0000-000000000001', id, 'gid://shopify/Order/70', '#7001', '7001', now() + interval '1 minute',
+  '[{"id":"gid://shopify/LineItem/1","title":"Samba","variant_title":"41","quantity":2,"shopify_variant_id":"gid://shopify/ProductVariant/7","price":399,"service":false},
+    {"id":"gid://shopify/LineItem/2","title":"Coś","variant_title":null,"quantity":1,"shopify_variant_id":null,"price":10,"service":false}]'
+from public.stores where code = 'sneakers-depot';
+select public.register_shopify_sales(array['70000000-0000-0000-0000-000000000001'::uuid]) as created;
+select public.register_shopify_sales(array['70000000-0000-0000-0000-000000000001'::uuid]) as created_again;
+select shopify_line_index, status, unit_id is not null as has_unit from public.sales where order_id = '70000000-0000-0000-0000-000000000001' order by shopify_line_index;
+-- Base przejmuje obie linie zamiast tworzyć nowe
+select public.register_sale((select id from public.stores where code = 'sneakers-depot'), 9001, 1, '20000000-0000-0000-0000-000000000007', 2, '7001', 'Samba 41') as base_new;
+select count(*) as sales, count(*) filter (where base_order_id = 9001) as adopted from public.sales where order_id = '70000000-0000-0000-0000-000000000001';
+-- pozycja bez katalogu: linia na żądanie i umowa z wybranym rozmiarem
+select public.ensure_order_line_sale('70000000-0000-0000-0000-000000000001', 'gid://shopify/LineItem/2', 0) is not null as ensured;
+select status, variant_id is null as no_variant from public.sales where shopify_line_id = 'gid://shopify/LineItem/2';
+do $$ begin
+  perform public.ensure_order_line_sale('70000000-0000-0000-0000-000000000001', 'gid://shopify/LineItem/1', 0);
+  raise notice 'OK: istniejąca linia zwrócona';
+end $$;
+insert into public.contracts (id, type, counterparty) values ('50000000-0000-0000-0000-000000000002', 'purchase', 'Ola');
+select public.attach_sale_unit(public.ensure_order_line_sale('70000000-0000-0000-0000-000000000001', 'gid://shopify/LineItem/2', 0),
+  '50000000-0000-0000-0000-000000000002', 5, '20000000-0000-0000-0000-000000000006') is not null as attached_with_variant;
+-- stare zamówienie (przed włączeniem) nie dostaje automatycznie linii
+insert into public.orders (id, store_id, shopify_order_id, name, number, ordered_at, line_items)
+select '70000000-0000-0000-0000-000000000002', id, 'gid://shopify/Order/71', '#7002', '7002', now() - interval '1 day',
+  '[{"id":"gid://shopify/LineItem/3","title":"Samba","quantity":1,"shopify_variant_id":"gid://shopify/ProductVariant/7","price":399}]'
+from public.stores where code = 'sneakers-depot';
+select public.register_shopify_sales(array['70000000-0000-0000-0000-000000000002'::uuid]) as old_created;
+-- anulowane zamówienie: bez linii na żądanie; anulowanie w Shopify zwalnia sztuki
+update public.orders set cancelled_at = now() where id = '70000000-0000-0000-0000-000000000002';
+do $$ begin
+  perform public.ensure_order_line_sale('70000000-0000-0000-0000-000000000002', 'gid://shopify/LineItem/3', 0);
+  raise exception 'anulowane nie powinno przejść';
+exception when others then
+  if sqlerrm like 'anulowane nie%' then raise; end if;
+  raise notice 'OK: %', sqlerrm;
+end $$;
+select public.release_order_sales('70000000-0000-0000-0000-000000000001') as released;
+select s.status, u.status as unit_status from public.sales s left join public.units u on u.id = s.unit_id where s.order_id = '70000000-0000-0000-0000-000000000001' order by s.shopify_line_index;
+set local role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000001', true);
+select option, shop_price, shop_price_error is not null as has_error from public.units_list where product_id = '10000000-0000-0000-0000-000000000007' order by option;
 rollback;

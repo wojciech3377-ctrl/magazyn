@@ -14,14 +14,15 @@ export default async function NewContractPage({ searchParams }: { searchParams: 
   // Umowa do sprzedanego przedmiotu bez sztuki w magazynie (?sprzedaz=).
   const saleId = typeof sp.sprzedaz === "string" && /^[0-9a-f-]{36}$/.test(sp.sprzedaz) ? sp.sprzedaz : null;
   const { data: sale } = saleId
-    ? await supabase.from("sales").select("id, order_ref, unit_id, variant:variants(option, product:products(title))").eq("id", saleId).maybeSingle()
+    ? await supabase.from("sales").select("id, order_ref, unit_id, store_id, variant_id, variant:variants(option, product:products(title))").eq("id", saleId).maybeSingle()
     : { data: null };
   const v = sale?.variant as unknown as { option: string; product: { title: string } } | null;
   const saleLabel = sale && !sale.unit_id ? `${v ? `${v.product.title} ${v.option}` : "przedmiot"}${sale.order_ref ? ` (zamówienie ${sale.order_ref})` : ""}` : null;
   return (
     <>
       <PageHeader title="Nowa umowa" sub="Plik trafia do prywatnego magazynu plików; widzą go tylko zalogowani pracownicy." />
-      <ContractForm consignors={consignors ?? []} defaultUnits={codes.join(" ")} canSeePrices={profile.can_see_prices} returnTo={back} saleId={saleLabel ? saleId : null} saleLabel={saleLabel} />
+      <ContractForm consignors={consignors ?? []} defaultUnits={codes.join(" ")} canSeePrices={profile.can_see_prices} returnTo={back} saleId={saleLabel ? saleId : null} saleLabel={saleLabel}
+        pickVariantStore={sale && !sale.unit_id && !sale.variant_id ? (sale.store_id as string | null) ?? "" : null} />
     </>
   );
 }

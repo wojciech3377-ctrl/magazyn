@@ -1,7 +1,7 @@
 "use client";
 
-import { useActionState, useMemo, useRef, useState } from "react";
-import { createInvoiceAction, lookupNipAction, type InvoiceFormState } from "./actions";
+import { useActionState, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { createInvoiceAction, lookupNipAction, searchCustomersAction, type CustomerHit, type InvoiceFormState } from "./actions";
 import type { InvoiceDraft } from "@/lib/invoices/service";
 
 type Row = { name: string; quantity: string; unit: string; price: string; vat: "23" | "margin"; unit_id?: string | null; sale_id?: string | null; pos_item_id?: string | null; checkVat?: boolean };
@@ -35,6 +35,36 @@ export function InvoiceForm({ draft, ksefReady }: { draft: InvoiceDraft; ksefRea
     setField("country", "PL");
     setLookup({ busy: false, msg: `Uzupełniono z: ${r.source}${r.note ? ` · ${r.note}` : ""}`, error: !!r.note });
   }
+  // Zapisani nabywcy: wyszukiwanie i wstawienie danych do formularza.
+  const [custQ, setCustQ] = useState("");
+  const [custHits, setCustHits] = useState<CustomerHit[]>([]);
+  const [custOpen, setCustOpen] = useState(false);
+  const [, startSearch] = useTransition();
+  useEffect(() => {
+    if (!custOpen) return;
+    const t = setTimeout(() => startSearch(async () => setCustHits(await searchCustomersAction(custQ))), 250);
+    return () => clearTimeout(t);
+  }, [custQ, custOpen]);
+  function pickCustomer(c: CustomerHit) {
+    setCompany(c.company);
+    setCustOpen(false);
+    setCustQ("");
+    // Pole NIP pojawia się dopiero po przełączeniu na firmę – uzupełniamy po wyrenderowaniu.
+    setTimeout(() => {
+      const form = formRef.current;
+      const set = (name: string, value: string | null) => {
+        const el = form?.elements.namedItem(name) as HTMLInputElement | null;
+        if (el) el.value = value ?? "";
+      };
+      set("name", c.name);
+      set("nip", c.nip);
+      set("address1", c.address1);
+      set("address2", c.address2);
+      set("country", c.country || "PL");
+      set("email", c.email);
+      setLookup({ busy: false, msg: "Dane z zapisanych nabywców.", error: false });
+    }, 0);
+  }
   const [rows, setRows] = useState<Row[]>(draft.items.length ? draft.items.map((i) => ({
     name: i.name, quantity: String(i.quantity), unit: i.unit, price: i.unit_price_gross.toFixed(2), vat: i.vat,
     unit_id: i.unit_id, sale_id: i.sale_id, pos_item_id: i.pos_item_id, checkVat: i.checkVat,
@@ -63,6 +93,22 @@ export function InvoiceForm({ draft, ksefReady }: { draft: InvoiceDraft; ksefRea
       <section className="card p-4">
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <h2 className="h2 mr-2">Nabywca</h2>
+          <div className="relative order-last w-full sm:order-none sm:ml-auto sm:w-72">
+            <input className="input" value={custQ} placeholder="Zapisani nabywcy – szukaj…" aria-label="Szukaj zapisanego nabywcy"
+              onFocus={() => setCustOpen(true)} onBlur={() => setTimeout(() => setCustOpen(false), 150)} onChange={(e) => setCustQ(e.target.value)} />
+            {custOpen && custHits.length > 0 && (
+              <ul className="absolute right-0 z-30 mt-1 max-h-72 w-full overflow-auto rounded-md border border-line bg-white py-1 text-sm shadow-lg">
+                {custHits.map((c) => (
+                  <li key={c.id}>
+                    <button type="button" className="block w-full px-3 py-1.5 text-left hover:bg-panel" onMouseDown={(e) => e.preventDefault()} onClick={() => pickCustomer(c)}>
+                      <span className="font-medium">{c.name}</span>
+                      <span className="block text-xs text-muted">{[c.nip ? `NIP ${c.nip}` : "osoba prywatna", c.address2, c.email].filter(Boolean).join(" · ")}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
           {[false, true].map((c) => (
             <button key={String(c)} type="button" onClick={() => setCompany(c)}
               className={`rounded-md px-3 py-1 text-sm ${company === c ? "bg-ink text-white" : "text-muted hover:bg-panel"}`}>
@@ -88,7 +134,11 @@ export function InvoiceForm({ draft, ksefReady }: { draft: InvoiceDraft; ksefRea
             <div><label className="label" htmlFor="address2">Kod pocztowy i miasto</label><input id="address2" className="input" name="address2" defaultValue={draft.buyer.address2 ?? ""} /></div>
             <div><label className="label" htmlFor="country">Kraj</label><input id="country" className="input uppercase" name="country" maxLength={2} defaultValue={draft.buyer.country ?? "PL"} /></div>
           </div>
-          <div><label className="label" htmlFor="email">E-mail</label><input id="email" className="input" type="email" name="email" defaultValue={draft.buyer.email ?? ""} /></div>
+          <div>
+            <label className="label" htmlFor="email">E-mail (faktura pójdzie tu automatycznie)</label>
+            <input id="email" className="input" type="email" name="email" defaultValue={draft.buyer.email ?? ""} />
+          </div>
+          <label className="flex items-center gap-2 self-end pb-2 text-sm"><input type="checkbox" name="save_customer" value="1" defaultChecked /> Zapisz nabywcę na liście</label>
         </div>
       </section>
 

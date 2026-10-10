@@ -1,6 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { LineItem } from "@/lib/sync/shop-orders";
+import { matchPieces } from "@/lib/orders/pieces";
 
 /**
  * JPK: wszystkie sprzedaże – zamówienia ze sklepów (pozycje z Shopify) i sprzedaż stacjonarna – z dokumentem
@@ -33,6 +34,8 @@ export type JpkLine = {
   saleId: string | null;       // linia sprzedaży (do dołączenia umowy, gdy nie ma sztuki)
   variantLinked: boolean;      // produkt powiązany z katalogiem (można utworzyć sztukę)
   baseOrderId: number | null;  // zamówienie w Base (pobranie paragonu z Base)
+  pieceRef: string | null;     // <zamówienie>|<pozycja>|<sztuka> – „Dołącz umowę” także bez linii sprzedaży
+  pendingContractId: string | null; // umowa w toku (czeka na podpis) do sprzedaży bez sztuki
 };
 
 type Contract = { id: string; number: number | null; doc_number: string | null; contract_date: string | null; currency: string | null; template: string | null };
@@ -101,44 +104,45 @@ type Order = {
 };
 const ORDER_FIELDS = "id, name, ordered_at, cancelled_at, status, cod, financial_status, base_order_id, line_items";
 
-type Sale = { id: string; order_id: string; variant_id: string | null; status: string; unit: Unit };
+type Sale = { id: string; order_id: string; variant_id: string | null; status: string; shopify_line_id: string | null; shopify_line_index: number | null; unit: Unit };
 
 /** Pozycje zamówień ze sklepu (każda sztuka osobno) z przypisanymi sztukami i umowami. */
 async function shopLines(db: SupabaseClient, orders: Order[], docOf: (o: Order) => Doc | undefined) {
   if (!orders.length) return [];
   const sales = await inChunks<Sale>(orders.map((o) => o.id), (part) =>
-    db.from("sales").select(`id, order_id, variant_id, status, unit:units(${UNIT_FIELDS})`).in("order_id", part as string[]));
+    db.from("sales").select(`id, order_id, variant_id, status, shopify_line_id, shopify_line_index, unit:units(${UNIT_FIELDS})`).in("order_id", part as string[]));
   const gids = [...new Set(orders.flatMap((o) => o.line_items.map((l) => l.shopify_variant_id).filter((x): x is string => !!x)))];
   const links = await inChunks<{ variant_id: string; shopify_variant_id: string }>(gids, (part) =>
     db.from("variant_store_links").select("variant_id, shopify_variant_id").in("shopify_variant_id", part as string[]));
   const variantOf = new Map(links.map((l) => [l.shopify_variant_id, l.variant_id]));
   const salesBy = new Map<string, Sale[]>();
   for (const s of sales) salesBy.set(s.order_id, [...(salesBy.get(s.order_id) ?? []), s]);
+  // Umowy w toku do sprzedaży bez sztuki (link do podpisu wysłany).
+  const noUnit = sales.filter((s) => !s.unit).map((s) => s.id);
+  const pending = await inChunks<{ id: string; sale_id: string }>(noUnit, (part) =>
+    db.from("contracts").select("id, sale_id").in("sale_id", part as string[]).not("status", "in", "(cancelled,rejected)"));
+  const pendingBy = new Map(pending.map((c) => [c.sale_id, c.id]));
 
   const lines: JpkLine[] = [];
   for (const o of orders) {
     const r = docOf(o);
-    const pool = [...(salesBy.get(o.id) ?? [])];
     const orderNote = o.cancelled_at
       ? (o.cod && o.status === "problem" ? "NIE ODEBRANE POBRANIE" : "ANULOWANE")
-      : (o.financial_status ?? "").toUpperCase() === "REFUNDED" ? "ZWROT" : null;
-    o.line_items.forEach((l, li) => {
-      if (l.service) return;
-      const variantId = l.shopify_variant_id ? variantOf.get(l.shopify_variant_id) : undefined;
-      for (let n = 0; n < Math.max(1, l.quantity); n++) {
-        const idx = pool.findIndex((s) => variantId && s.variant_id === variantId);
-        const sale = idx >= 0 ? pool.splice(idx, 1)[0] : null;
-        const item = r?.items?.find((i) => i.name && l.title && i.name.toLowerCase().includes(l.title.toLowerCase().slice(0, 12)));
-        lines.push({
-          key: `o:${o.id}:${li}:${n}`, source: "shop", kind: r?.kind ?? null, docNumber: r?.number ?? null, docDate: r?.date ?? null,
-          saleDate: o.ordered_at, name: [l.title, l.variant_title].filter(Boolean).join(" "), price: Number(l.price),
-          vat: vatOf(sale?.unit ?? null, item?.tax_rate), ...unitPart(sale?.unit ?? null),
-          orderLabel: o.name, orderHref: `/sprzedaz/${o.id}`,
-          saleNote: orderNote ?? (sale?.status === "cancelled" ? "ZWROT" : null),
-          saleId: sale?.id ?? null, variantLinked: !!variantId, baseOrderId: o.base_order_id ? Number(o.base_order_id) : null,
-        });
-      }
-    });
+      : (o.financial_status ?? "").toUpperCase() === "REFUNDED" || o.status === "returned" ? "ZWROT" : null;
+    for (const p of matchPieces(o.id, o.line_items, salesBy.get(o.id) ?? [], (g) => variantOf.get(g))) {
+      const l = p.line;
+      const sale = p.sale;
+      const item = r?.items?.find((i) => i.name && l.title && i.name.toLowerCase().includes(l.title.toLowerCase().slice(0, 12)));
+      lines.push({
+        key: `o:${o.id}:${p.lineIndex}:${p.n}`, source: "shop", kind: r?.kind ?? null, docNumber: r?.number ?? null, docDate: r?.date ?? null,
+        saleDate: o.ordered_at, name: [l.title, l.variant_title].filter(Boolean).join(" "), price: Number(l.price),
+        vat: vatOf(sale?.unit ?? null, item?.tax_rate), ...unitPart(sale?.unit ?? null),
+        orderLabel: o.name, orderHref: `/sprzedaz/${o.id}`,
+        saleNote: orderNote ?? (sale?.status === "cancelled" ? "ZWROT" : null),
+        saleId: sale?.id ?? null, variantLinked: !!p.variantId, baseOrderId: o.base_order_id ? Number(o.base_order_id) : null,
+        pieceRef: p.ref, pendingContractId: sale && !sale.unit ? pendingBy.get(sale.id) ?? null : null,
+      });
+    }
   }
   return lines;
 }
@@ -162,7 +166,7 @@ async function posLines(db: SupabaseClient, posOrderIds: string[], docOf: (posOr
       price: Number(i.price), vat: vatOf(i.unit), ...unitPart(i.unit),
       orderLabel: i.order?.code ?? "", orderHref: i.order ? `/kasa/${i.order.id}` : null,
       saleNote: i.status === "returned" ? "ZWROT" : null,
-      saleId: null, variantLinked: true, baseOrderId: null,
+      saleId: null, variantLinked: true, baseOrderId: null, pieceRef: null, pendingContractId: null,
     };
   });
 }
@@ -217,7 +221,7 @@ async function manualInvoiceLines(db: SupabaseClient, invoiceIds: string[]) {
     key: `i:${i.id}`, source: "shop", kind: "invoice", docNumber: i.invoice.number, docDate: invoiceInstant(i.invoice.issue_date), saleDate: invoiceInstant(i.invoice.issue_date),
     name: i.name, price: Number(i.total_gross), vat: i.unit ? vatOf(i.unit) : i.vat === "23" ? "A" : "F", ...unitPart(i.unit),
     orderLabel: i.invoice.number, orderHref: `/sprzedaz/faktury/${i.invoice.id}`, saleNote: null,
-    saleId: null, variantLinked: false, baseOrderId: null,
+    saleId: null, variantLinked: false, baseOrderId: null, pieceRef: null, pendingContractId: null,
   }));
 }
 
