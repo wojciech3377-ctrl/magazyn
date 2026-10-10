@@ -183,7 +183,7 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
         {status === "cancelled" ? (
           <Notice>Zamówienie anulowane.</Notice>
         ) : !furgonetkaReady ? (
-          <Notice>Do tworzenia etykiet połącz aplikację z Furgonetką: <Link className="underline" href="/ustawienia#furgonetka">Ustawienia → Wysyłka</Link>.</Notice>
+          <Notice>Do tworzenia etykiet połącz aplikację z Furgonetką: <Link className="underline" href="/ustawienia?zakladka=wysylka">Ustawienia → Wysyłka</Link>.</Notice>
         ) : (
           <>
             {activeShipments.length > 0 && <p className="mb-3 text-sm text-warn">To zamówienie ma już przesyłkę. Kolejną etykietę twórz tylko, gdy wysyłasz drugą paczkę.</p>}

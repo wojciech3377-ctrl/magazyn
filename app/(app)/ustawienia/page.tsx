@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { requireProfile } from "@/lib/auth";
 import { dateTime } from "@/lib/labels";
 import { Notice, PageHeader, Pill } from "@/components/ui";
@@ -24,8 +25,21 @@ async function safe<T>(fn: () => Promise<T>): Promise<{ data: T | null; error: s
   }
 }
 
+const SETTINGS_TABS = [
+  { key: "polaczenia", label: "Połączenia" },
+  { key: "firma", label: "Firma i umowy" },
+  { key: "faktury", label: "Faktury i KSeF" },
+  { key: "wysylka", label: "Wysyłka" },
+  { key: "sklepy", label: "Sklepy i lokalizacje" },
+  { key: "wykluczenia", label: "Wykluczenia" },
+  { key: "uzytkownicy", label: "Użytkownicy" },
+  { key: "start", label: "Start: stany z Base" },
+  { key: "dziennik", label: "Dziennik" },
+] as const;
+
 export default async function UstawieniaPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const sp = await searchParams;
+  const tab = SETTINGS_TABS.find((t) => t.key === sp.zakladka)?.key ?? "polaczenia";
   const { supabase, profile } = await requireProfile();
   const isAdmin = profile.role === "admin";
 
@@ -63,6 +77,7 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
     ["Furgonetka (klucze aplikacji)", furgonetkaConfigured()],
     [`KSeF (${ksefEnv()})`, ksefConfigured()],
   ] as [string, boolean][];
+  const missing = envStatus.filter(([, ok]) => !ok).length;
 
   return (
     <>
@@ -72,7 +87,18 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
       {!isAdmin && <Notice>Ustawienia zmienia administrator.</Notice>}
 
       {isAdmin && (
-        <div className="min-w-0 space-y-5">
+        <div className="flex flex-col gap-5 md:flex-row md:items-start">
+        <nav className="-mx-4 flex gap-1 overflow-x-auto px-4 md:sticky md:top-4 md:mx-0 md:w-52 md:shrink-0 md:flex-col md:px-0" aria-label="Sekcje ustawień">
+          {SETTINGS_TABS.map((t) => (
+            <Link key={t.key} href={`/ustawienia?zakladka=${t.key}`} aria-current={tab === t.key ? "page" : undefined}
+              className={`whitespace-nowrap rounded-md px-3 py-2 text-sm ${tab === t.key ? "bg-ink font-medium text-white" : "text-muted hover:bg-panel hover:text-ink"}`}>
+              {t.label}
+              {t.key === "polaczenia" && missing > 0 && <span className="ml-1.5 rounded-full bg-bad px-1.5 text-xs text-white">{missing}</span>}
+            </Link>
+          ))}
+        </nav>
+        <div className="min-w-0 flex-1 space-y-5">
+          {tab === "polaczenia" && (
           <section className="card p-4">
             <h2 className="h2 mb-3">Połączenia</h2>
             <div className="flex flex-wrap gap-2">
@@ -81,7 +107,9 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
             <p className="mt-2 text-xs text-muted">Klucze wpisuje się w Vercel → Settings → Environment Variables (nigdy w czacie ani w kodzie).</p>
             {[inventories.error, warehouses.error, sources.error].filter(Boolean).slice(0, 1).map((e) => <div key={e} className="mt-3"><Notice tone="error">{e}</Notice></div>)}
           </section>
+          )}
 
+          {tab === "sklepy" && (
           <section className="card p-4">
             <h2 className="h2 mb-3">Sklepy</h2>
             <div className="grid gap-4 md:grid-cols-2">
@@ -117,7 +145,9 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
               ))}
             </div>
           </section>
+          )}
 
+          {tab === "sklepy" && (
           <section className="card p-4">
             <h2 className="h2 mb-1">Lokalizacje</h2>
             <p className="mb-3 text-sm text-muted">Każda lokalizacja należy do sklepu i wskazuje magazyn w Base, którego stan aplikacja zmienia.</p>
@@ -144,7 +174,9 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
               </form>
             </div>
           </section>
+          )}
 
+          {tab === "faktury" && (
           <section id="ksef" className="card scroll-mt-4 p-4">
             <h2 className="h2 mb-1">Faktury i KSeF</h2>
             <p className="mb-3 text-sm text-muted">
@@ -155,8 +187,9 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
               ? <form action={testKsefAction}><SubmitButton className="btn-secondary" pendingText="Łączę…">Sprawdź połączenie z KSeF</SubmitButton></form>
               : <Notice>Brak KSEF_TOKEN / KSEF_NIP w ustawieniach serwera.</Notice>}
           </section>
+          )}
 
-          {sender && (
+          {tab === "wysylka" && sender && (
             <section id="furgonetka" className="card scroll-mt-4 p-4">
               <h2 className="h2 mb-1">Wysyłka i Furgonetka</h2>
               <p className="mb-3 text-sm text-muted">Etykiety InPost i DPD z poziomu zamówienia oraz statusy przesyłek (Wysłane / Dostarczone / Problem).</p>
@@ -196,8 +229,9 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
             </section>
           )}
 
-          {company && <ContractSettings company={company} signature={buyerSignature} general={(generalLink?.value as { key?: string; enabled?: boolean }) ?? null} />}
+          {tab === "firma" && company && <ContractSettings company={company} signature={buyerSignature} general={(generalLink?.value as { key?: string; enabled?: boolean }) ?? null} />}
 
+          {tab === "wykluczenia" && (
           <section className="card p-4">
             <h2 className="h2 mb-1">Wykluczenia z magazynu</h2>
             <p className="mb-3 text-sm text-muted">Usługi i produkty, które nie są towarem na sztuki (naprawy, mystery boxy). Nie trafiają do katalogu ani do sprzedaży; ich stan zostaje tylko w Base.</p>
@@ -227,7 +261,9 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
               </form>
             </div>
           </section>
+          )}
 
+          {tab === "start" && (
           <section className="card p-4">
             <h2 className="h2 mb-1">Start: stany z Base</h2>
             {imported ? (
@@ -242,7 +278,9 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
               </form>
             )}
           </section>
+          )}
 
+          {tab === "uzytkownicy" && (
           <section className="card overflow-x-auto p-4">
             <h2 className="h2 mb-3">Użytkownicy</h2>
             <table className="table">
@@ -274,7 +312,9 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
               <SubmitButton>Dodaj konto</SubmitButton>
             </form>
           </section>
+          )}
 
+          {tab === "dziennik" && (
           <section className="card overflow-x-auto p-4">
             <h2 className="h2 mb-3">Dziennik synchronizacji</h2>
             <table className="table">
@@ -291,6 +331,8 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
               </tbody>
             </table>
           </section>
+          )}
+        </div>
         </div>
       )}
       <p className="mt-6 text-xs text-muted">Sklepy: {[...storeName.values()].join(", ")}</p>

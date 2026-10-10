@@ -92,7 +92,7 @@ export function buildFa3(inv: InvoiceInput) {
     inv.paid ? `${el("Zaplacono", 1)}${el("DataZaplaty", inv.paidAt ?? inv.issueDate)}` : "",
     !inv.paid && inv.dueDate ? `<TerminPlatnosci>${el("Termin", inv.dueDate)}</TerminPlatnosci>` : "",
     el("FormaPlatnosci", PAYMENT_CODE[inv.paymentMethod]),
-    inv.paymentMethod === "transfer" && inv.bankAccount && inv.bankAccount.replace(/\s/g, "").length >= 10 ? `<RachunekBankowy>${el("NrRB", inv.bankAccount.replace(/\s/g, ""))}</RachunekBankowy>` : "",
+    inv.bankAccount && inv.bankAccount.replace(/\s/g, "").length >= 10 ? `<RachunekBankowy>${el("NrRB", inv.bankAccount.replace(/\s/g, ""))}</RachunekBankowy>` : "",
     "</Platnosc>",
   ].join("");
 

@@ -120,6 +120,7 @@ function validate(company: Awaited<ReturnType<typeof getCompany>>, d: InvoiceDra
   const sellerNip = onlyDigits(company.nip);
   if (!company.name || !company.street || !company.city) throw new Error("Uzupełnij nazwę i adres firmy w Ustawieniach (Umowy i dane firmy).");
   if (!nipValid(sellerNip)) throw new Error("NIP firmy w Ustawieniach jest nieprawidłowy.");
+  if ((company.bank_account ?? "").replace(/\s/g, "").length < 10) throw new Error("Uzupełnij numer konta bankowego w Ustawieniach → Firma – jest na każdej fakturze.");
   const ksefNip = onlyDigits(process.env.KSEF_NIP);
   if (ksefNip && ksefNip !== sellerNip) throw new Error(`NIP firmy w Ustawieniach (${sellerNip}) różni się od NIP-u KSeF (${ksefNip}).`);
   const country = (d.buyer.country || "PL").toUpperCase();

@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
   const { profile } = await requireProfile();
   const base = await appUrl();
   const back = (msg: string, ok: boolean) => {
-    const res = NextResponse.redirect(`${base}/ustawienia?${ok ? "ok" : "blad"}=${encodeURIComponent(msg)}#furgonetka`);
+    const res = NextResponse.redirect(`${base}/ustawienia?zakladka=wysylka&${ok ? "ok" : "blad"}=${encodeURIComponent(msg)}`);
     res.cookies.delete({ name: "furgonetka_state", path: "/api/furgonetka" });
     return res;
   };

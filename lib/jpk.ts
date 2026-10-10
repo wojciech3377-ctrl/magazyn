@@ -30,6 +30,9 @@ export type JpkLine = {
   orderLabel: string;
   orderHref: string | null;
   saleNote: string | null;     // ZWROT, NIE ODEBRANE POBRANIE, ANULOWANE
+  saleId: string | null;       // linia sprzedaży (do dołączenia umowy, gdy nie ma sztuki)
+  variantLinked: boolean;      // produkt powiązany z katalogiem (można utworzyć sztukę)
+  baseOrderId: number | null;  // zamówienie w Base (pobranie paragonu z Base)
 };
 
 type Contract = { id: string; number: number | null; doc_number: string | null; contract_date: string | null; currency: string | null; template: string | null };
@@ -74,8 +77,8 @@ async function inChunks<T>(ids: (string | number)[], fn: (part: (string | number
   return out;
 }
 
-type Receipt = { number: string | null; issued_at: string; base_order_id: number | null; pos_order_id: string | null; items: { name: string; price_brutto: number; tax_rate: number }[] };
-const RECEIPT_FIELDS = "number, issued_at, base_order_id, pos_order_id, items";
+type Receipt = { number: string | null; issued_at: string; base_order_id: number | null; pos_order_id: string | null; source: string; items: { name: string; price_brutto: number; tax_rate: number }[] };
+const RECEIPT_FIELDS = "number, issued_at, base_order_id, pos_order_id, source, items";
 
 /** Dokument sprzedaży: paragon (ma pierwszeństwo – faktura do paragonu nie jest osobną sprzedażą) albo faktura. */
 type Doc = { kind: DocKind; number: string | null; date: string; items?: Receipt["items"] };
@@ -132,6 +135,7 @@ async function shopLines(db: SupabaseClient, orders: Order[], docOf: (o: Order) 
           vat: vatOf(sale?.unit ?? null, item?.tax_rate), ...unitPart(sale?.unit ?? null),
           orderLabel: o.name, orderHref: `/sprzedaz/${o.id}`,
           saleNote: orderNote ?? (sale?.status === "cancelled" ? "ZWROT" : null),
+          saleId: sale?.id ?? null, variantLinked: !!variantId, baseOrderId: o.base_order_id ? Number(o.base_order_id) : null,
         });
       }
     });
@@ -158,8 +162,20 @@ async function posLines(db: SupabaseClient, posOrderIds: string[], docOf: (posOr
       price: Number(i.price), vat: vatOf(i.unit), ...unitPart(i.unit),
       orderLabel: i.order?.code ?? "", orderHref: i.order ? `/kasa/${i.order.id}` : null,
       saleNote: i.status === "returned" ? "ZWROT" : null,
+      saleId: null, variantLinked: true, baseOrderId: null,
     };
   });
+}
+
+export type JpkSort = "data_asc" | "data_desc" | "kwota_desc" | "kwota_asc";
+
+export function sortBy(lines: JpkLine[], sort: JpkSort) {
+  const d = (l: JpkLine) => l.docDate ?? l.saleDate;
+  const sorted = sortLines(lines);
+  if (sort === "data_desc") return sorted.reverse();
+  if (sort === "kwota_desc") return sorted.sort((a, b) => (b.price ?? 0) - (a.price ?? 0) || d(a).localeCompare(d(b)));
+  if (sort === "kwota_asc") return sorted.sort((a, b) => (a.price ?? 0) - (b.price ?? 0) || d(a).localeCompare(d(b)));
+  return sorted;
 }
 
 export function sortLines(lines: JpkLine[]) {
@@ -177,8 +193,10 @@ async function docsFor(db: SupabaseClient, orders: Order[], posIds: string[]) {
   ]);
   const byBase = new Map<number, Receipt>();
   const byPos = new Map<string, Receipt>();
-  for (const r of rb) if (r.base_order_id && !byBase.has(Number(r.base_order_id))) byBase.set(Number(r.base_order_id), r);
-  for (const r of rp) if (r.pos_order_id && !byPos.has(r.pos_order_id)) byPos.set(r.pos_order_id, r);
+  // Paragon z naszego systemu (drukarka / ręczny) ma pierwszeństwo przed paragonem z Base.
+  const better = (cur: Receipt | undefined, r: Receipt) => !cur || (cur.source === "base" && r.source !== "base");
+  for (const r of rb) if (r.base_order_id && better(byBase.get(Number(r.base_order_id)), r)) byBase.set(Number(r.base_order_id), r);
+  for (const r of rp) if (r.pos_order_id && better(byPos.get(r.pos_order_id), r)) byPos.set(r.pos_order_id, r);
   const invByOrder = new Map(ib.map((i) => [i.order_id as string, i]));
   const invByPos = new Map(ip.map((i) => [i.pos_order_id as string, i]));
   return {
@@ -199,6 +217,7 @@ async function manualInvoiceLines(db: SupabaseClient, invoiceIds: string[]) {
     key: `i:${i.id}`, source: "shop", kind: "invoice", docNumber: i.invoice.number, docDate: invoiceInstant(i.invoice.issue_date), saleDate: invoiceInstant(i.invoice.issue_date),
     name: i.name, price: Number(i.total_gross), vat: i.unit ? vatOf(i.unit) : i.vat === "23" ? "A" : "F", ...unitPart(i.unit),
     orderLabel: i.invoice.number, orderHref: `/sprzedaz/faktury/${i.invoice.id}`, saleNote: null,
+    saleId: null, variantLinked: false, baseOrderId: null,
   }));
 }
 

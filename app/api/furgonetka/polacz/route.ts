@@ -9,9 +9,9 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   const { profile } = await requireProfile();
   const base = await appUrl();
-  if (profile.role !== "admin") return NextResponse.redirect(`${base}/ustawienia?blad=${encodeURIComponent("Tylko administrator może połączyć Furgonetkę.")}`);
+  if (profile.role !== "admin") return NextResponse.redirect(`${base}/ustawienia?zakladka=wysylka&blad=${encodeURIComponent("Tylko administrator może połączyć Furgonetkę.")}`);
   if (!furgonetkaConfigured()) {
-    return NextResponse.redirect(`${base}/ustawienia?blad=${encodeURIComponent("Najpierw dodaj FURGONETKA_CLIENT_ID i FURGONETKA_CLIENT_SECRET w Vercel.")}`);
+    return NextResponse.redirect(`${base}/ustawienia?zakladka=wysylka&blad=${encodeURIComponent("Najpierw dodaj FURGONETKA_CLIENT_ID i FURGONETKA_CLIENT_SECRET w Vercel.")}`);
   }
   const state = newState();
   const res = NextResponse.redirect(authorizeUrl(`${base}/api/furgonetka/callback`, state));

@@ -1,7 +1,7 @@
 "use client";
 
-import { useActionState, useMemo, useState } from "react";
-import { createInvoiceAction, type InvoiceFormState } from "./actions";
+import { useActionState, useMemo, useRef, useState } from "react";
+import { createInvoiceAction, lookupNipAction, type InvoiceFormState } from "./actions";
 import type { InvoiceDraft } from "@/lib/invoices/service";
 
 type Row = { name: string; quantity: string; unit: string; price: string; vat: "23" | "margin"; unit_id?: string | null; sale_id?: string | null; pos_item_id?: string | null; checkVat?: boolean };
@@ -14,6 +14,27 @@ export function InvoiceForm({ draft, ksefReady }: { draft: InvoiceDraft; ksefRea
   const [state, action, pending] = useActionState<InvoiceFormState, FormData>(createInvoiceAction, null);
   const [company, setCompany] = useState(!!draft.buyer.company);
   const [paid, setPaid] = useState(draft.paid);
+  const formRef = useRef<HTMLFormElement>(null);
+  const [lookup, setLookup] = useState<{ busy: boolean; msg: string | null; error: boolean }>({ busy: false, msg: null, error: false });
+  async function fetchNip() {
+    const form = formRef.current;
+    const nip = (form?.elements.namedItem("nip") as HTMLInputElement | null)?.value ?? "";
+    setLookup({ busy: true, msg: null, error: false });
+    const r = await lookupNipAction(nip);
+    if (!r.ok) {
+      setLookup({ busy: false, msg: r.error, error: true });
+      return;
+    }
+    const setField = (name: string, value: string) => {
+      const el = form?.elements.namedItem(name) as HTMLInputElement | null;
+      if (el) el.value = value;
+    };
+    setField("name", r.name);
+    setField("address1", r.address1);
+    setField("address2", r.address2);
+    setField("country", "PL");
+    setLookup({ busy: false, msg: `Uzupełniono z: ${r.source}${r.note ? ` · ${r.note}` : ""}`, error: !!r.note });
+  }
   const [rows, setRows] = useState<Row[]>(draft.items.length ? draft.items.map((i) => ({
     name: i.name, quantity: String(i.quantity), unit: i.unit, price: i.unit_price_gross.toFixed(2), vat: i.vat,
     unit_id: i.unit_id, sale_id: i.sale_id, pos_item_id: i.pos_item_id, checkVat: i.checkVat,
@@ -32,7 +53,7 @@ export function InvoiceForm({ draft, ksefReady }: { draft: InvoiceDraft; ksefRea
   const needsCheck = rows.some((r) => r.checkVat);
 
   return (
-    <form action={action} className="space-y-5">
+    <form ref={formRef} action={action} className="space-y-5">
       <input type="hidden" name="items" value={itemsJson} />
       <input type="hidden" name="company" value={company ? "1" : "0"} />
       <input type="hidden" name="paid" value={paid ? "1" : "0"} />
@@ -51,7 +72,17 @@ export function InvoiceForm({ draft, ksefReady }: { draft: InvoiceDraft; ksefRea
         </div>
         <div className="grid gap-3 md:grid-cols-2">
           <div><label className="label" htmlFor="name">{company ? "Nazwa firmy" : "Imię i nazwisko"}</label><input id="name" className="input" name="name" defaultValue={draft.buyer.name} required /></div>
-          {company && <div><label className="label" htmlFor="nip">NIP</label><input id="nip" className="input font-mono" name="nip" defaultValue={draft.buyer.nip ?? ""} placeholder="1234567890" required /></div>}
+          {company && (
+            <div>
+              <label className="label" htmlFor="nip">NIP</label>
+              <div className="flex gap-2">
+                <input id="nip" className="input font-mono" name="nip" defaultValue={draft.buyer.nip ?? ""} placeholder="1234567890" required
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void fetchNip(); } }} />
+                <button type="button" className="btn-secondary whitespace-nowrap" onClick={fetchNip} disabled={lookup.busy}>{lookup.busy ? "Szukam…" : "Pobierz z GUS"}</button>
+              </div>
+              {lookup.msg && <p className={`mt-1 text-xs ${lookup.error ? "text-warn" : "text-ok"}`}>{lookup.msg}</p>}
+            </div>
+          )}
           <div><label className="label" htmlFor="address1">Ulica i numer</label><input id="address1" className="input" name="address1" defaultValue={draft.buyer.address1 ?? ""} /></div>
           <div className="grid grid-cols-[1fr_5rem] gap-2">
             <div><label className="label" htmlFor="address2">Kod pocztowy i miasto</label><input id="address2" className="input" name="address2" defaultValue={draft.buyer.address2 ?? ""} /></div>

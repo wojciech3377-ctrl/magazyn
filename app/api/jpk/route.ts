@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
   const fd = await req.formData();
   const keys = fd.getAll("l").map(String).filter((k) => KEY.test(k)).slice(0, 5000);
   const what = String(fd.get("eksport") ?? "");
-  const label = String(fd.get("okres") ?? fd.get("miesiac") ?? "").replace(/[^\d-]/g, "").slice(0, 7) || new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Warsaw" }).format(new Date());
+  const label = String(fd.get("okres") ?? fd.get("miesiac") ?? "").replace(/[^\d_-]/g, "").slice(0, 7) || new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Warsaw" }).format(new Date());
   // „…z ostatniego miesiąca”: bez zaznaczania – wszystkie linie z dokumentem z podanego miesiąca.
   const wholeMonth = !keys.length && fd.get("miesiac") ? monthRange(String(fd.get("miesiac"))) : null;
   if (!keys.length && !wholeMonth) return new Response("Zaznacz sprzedaże.", { status: 400, headers: { "Content-Type": "text/plain; charset=utf-8" } });

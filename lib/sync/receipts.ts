@@ -1,6 +1,6 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { getReceipts } from "@/lib/integrations/base";
+import { getReceiptForOrder, getReceipts, type BaseReceipt } from "@/lib/integrations/base";
 
 const KEY = "base_receipts";
 // Pierwszy odczyt: od początku roku (JPK za wcześniejsze miesiące).
@@ -15,15 +15,7 @@ export async function syncBaseReceipts(db: SupabaseClient, maxPages = 10) {
     const batch = await getReceipts(idFrom ? { idFrom } : { dateFrom: FIRST_FROM });
     const fresh = batch.filter((r) => r.receipt_id >= idFrom);
     if (!fresh.length) break;
-    const rows = fresh.map((r) => ({
-      source: "base",
-      base_receipt_id: r.receipt_id,
-      number: String(r.receipt_nr ?? r.receipt_full_nr ?? r.receipt_id),
-      issued_at: new Date(r.date_add * 1000).toISOString(),
-      base_order_id: r.order_id || null,
-      currency: r.currency ?? null,
-      items: r.products ?? [],
-    }));
+    const rows = fresh.map(toRow);
     const { error } = await db.from("receipts").upsert(rows, { onConflict: "base_receipt_id" });
     if (error) throw error;
     count += rows.length;
@@ -34,4 +26,29 @@ export async function syncBaseReceipts(db: SupabaseClient, maxPages = 10) {
     idFrom = next;
   }
   return { receipts: count };
+}
+
+function toRow(r: BaseReceipt) {
+  return {
+    source: "base",
+    base_receipt_id: r.receipt_id,
+    number: String(r.receipt_nr ?? r.receipt_full_nr ?? r.receipt_id),
+    issued_at: new Date(r.date_add * 1000).toISOString(),
+    base_order_id: r.order_id || null,
+    currency: r.currency ?? null,
+    items: r.products ?? [],
+  };
+}
+
+/** Paragony z Base dla konkretnych zamówień (brakujące w JPK). Limit Base: 100 zapytań/min. */
+export async function fetchReceiptsForOrders(db: SupabaseClient, baseOrderIds: number[]) {
+  let found = 0;
+  for (const id of baseOrderIds.slice(0, 60)) {
+    const r = await getReceiptForOrder(id);
+    if (!r) continue;
+    const { error } = await db.from("receipts").upsert(toRow(r), { onConflict: "base_receipt_id" });
+    if (error) throw error;
+    found++;
+  }
+  return { checked: Math.min(60, baseOrderIds.length), found };
 }

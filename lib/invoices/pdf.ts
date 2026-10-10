@@ -128,9 +128,14 @@ export async function renderInvoicePdf(inv: InvoiceForPdf) {
   }
   const payInfo = inv.paid
     ? `Zapłacono: ${PAY[inv.payment_method] ?? inv.payment_method}, ${date(inv.paid_at)}`
-    : `Forma płatności: ${PAY[inv.payment_method] ?? inv.payment_method}${inv.due_date ? `, termin: ${date(inv.due_date)}` : ""}${inv.payment_method === "transfer" && inv.seller.bank_account ? `, konto: ${inv.seller.bank_account}` : ""}`;
+    : `Forma płatności: ${PAY[inv.payment_method] ?? inv.payment_method}${inv.due_date ? `, termin: ${date(inv.due_date)}` : ""}`;
   page.drawText(payInfo, { x: M, y, size: 9, font: regular });
   y -= 14;
+  if (inv.seller.bank_account) {
+    const acc = inv.seller.bank_account.replace(/\s/g, "").replace(/^(\d{2})(?=\d)/, "$1 ").replace(/(\d{4})(?=\d)/g, "$1 ").trim();
+    page.drawText(`Numer konta: ${acc}`, { x: M, y, size: 9, font: bold });
+    y -= 14;
+  }
   if (Number(inv.margin_total) > 0) {
     page.drawText("procedura marży - towary używane", { x: M, y, size: 9, font: bold });
     y -= 14;

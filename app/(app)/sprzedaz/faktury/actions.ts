@@ -8,6 +8,7 @@ import { errorMessage } from "@/lib/errors";
 import { issueInvoice, refreshKsefStatus, sendInvoiceToKsef, type DraftItem, type InvoiceDraft, type PaymentMethod } from "@/lib/invoices/service";
 import { nipValid, onlyDigits } from "@/lib/invoices/xml";
 import { ksefCheck, ksefConfigured } from "@/lib/ksef/client";
+import { lookupNip } from "@/lib/invoices/nip-lookup";
 
 export type InvoiceFormState = { error?: string } | null;
 
@@ -127,7 +128,7 @@ export async function testKsefAction() {
   } catch (e) {
     q = `blad=${encodeURIComponent(errorMessage(e))}`;
   }
-  redirect(`/ustawienia?${q}#ksef`);
+  redirect(`/ustawienia?zakladka=faktury&${q}`);
 }
 
 /** Odrzucona faktura → unieważniona, żeby wystawić nową z poprawionymi danymi. */
@@ -140,4 +141,23 @@ export async function voidInvoiceAction(fd: FormData) {
   if (error || !data?.length) redirect(`/sprzedaz/faktury/${id}?blad=${encodeURIComponent(error?.message ?? "Unieważnić można tylko fakturę odrzuconą przez KSeF.")}`);
   const r = data[0];
   redirect(r.order_id ? `/sprzedaz/faktury/nowa?zamowienie=${r.order_id}` : r.pos_order_id ? `/sprzedaz/faktury/nowa?kasa=${r.pos_order_id}` : "/sprzedaz/faktury/nowa");
+}
+
+export type NipLookupResult = { ok: true; name: string; address1: string; address2: string; source: string; note?: string } | { ok: false; error: string };
+
+/** Dane nabywcy po NIP (GUS / biała lista VAT). */
+export async function lookupNipAction(raw: string): Promise<NipLookupResult> {
+  await requireProfile();
+  const nip = onlyDigits(raw);
+  if (!nipValid(nip)) return { ok: false, error: "Nieprawidłowy NIP." };
+  try {
+    const d = await lookupNip(nip);
+    if (!d) return { ok: false, error: "Nie znaleziono firmy o tym NIP-ie." };
+    return {
+      ok: true, name: d.name, address1: d.address1, address2: d.address2, source: d.source === "GUS" ? "GUS" : "biała lista VAT",
+      note: d.vatStatus && d.vatStatus !== "Czynny" ? `Status VAT: ${d.vatStatus}` : undefined,
+    };
+  } catch (e) {
+    return { ok: false, error: errorMessage(e) };
+  }
 }

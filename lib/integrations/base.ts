@@ -160,3 +160,14 @@ export async function getReceipts(opts: { idFrom?: number; dateFrom?: number }) 
   });
   return r.receipts ?? [];
 }
+
+/** Paragon do jednego zamówienia w Base (null, gdy nie wystawiono). */
+export async function getReceiptForOrder(orderId: number): Promise<BaseReceipt | null> {
+  try {
+    const r = await baseCall<BaseReceipt & { receipt_id?: number }>("getReceipt", { order_id: orderId });
+    return r.receipt_id ? { ...r, order_id: r.order_id || orderId } : null;
+  } catch (e) {
+    if (e instanceof BaseApiError && /not.?found|nie znaleziono|brak|ERROR_RECEIPT/i.test(`${e.code} ${e.message}`)) return null;
+    throw e;
+  }
+}
