@@ -59,7 +59,7 @@ export function SoldList({ rows }: { rows: SoldRow[] }) {
                 <td className="text-sm">
                   {r.doc.kind === "none" && <span className="font-medium text-warn">brak – dołącz umowę</span>}
                   {r.doc.kind === "sign" && (r.doc.href ? <a className="font-medium text-accent hover:underline" href={r.doc.href}>dokończ i podpisz umowę</a> : <span className="text-muted">umowa do podpisu</span>)}
-                  {r.doc.kind === "approve" && <span className="text-muted">umowa podpisana – sprawdzamy</span>}
+                  {r.doc.kind === "approve" && <span className="text-muted">przesłane – sprawdzamy</span>}
                   {r.doc.kind === "done" && <span className="text-ok">{r.doc.label} ✓</span>}
                 </td>
                 <td>{r.hasDocument ? <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-xs text-emerald-800">do wypłaty</span> : <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-800">czeka na paragon / fakturę sprzedaży</span>}</td>

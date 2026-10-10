@@ -84,6 +84,7 @@ export type ShopifyProduct = {
       barcode: string | null;
       position: number;
       price: string | null;
+      compareAtPrice?: string | null;
       inventoryItem: { id: string; tracked: boolean } | null;
     }[];
   };
@@ -92,7 +93,7 @@ export type ShopifyProduct = {
 const PRODUCT_FIELDS = `
   id title handle vendor productType status
   featuredMedia { preview { image { url } } }
-  variants(first: 250) { nodes { id title sku barcode position price inventoryItem { id tracked } } }
+  variants(first: 250) { nodes { id title sku barcode position price compareAtPrice inventoryItem { id tracked } } }
 `;
 
 export async function* iterateProducts(domain: string, storeCode: string) {
@@ -405,3 +406,18 @@ export async function productsUpdatedSince(domain: string, storeCode: string, si
   );
   return data.products;
 }
+
+/**
+ * Metapola produktu i jego rozmiarów, które wyglądają na dane aplikacji Omnibus (najniższa cena z 30 dni).
+ * Aplikacje trzymające dane w prywatnych metapolach ($app) nie są tu widoczne.
+ */
+export async function omnibusMetafields(domain: string, storeCode: string, productGid: string) {
+  const data = await shopifyGraphql<{ product: { metafields: { nodes: Mf[] }; variants: { nodes: { id: string; metafields: { nodes: Mf[] } }[] } } | null }>(domain, storeCode,
+    `query($id: ID!) { product(id: $id) { metafields(first: 50) { nodes { namespace key type value } } variants(first: 100) { nodes { id metafields(first: 30) { nodes { namespace key type value } } } } } }`, { id: productGid });
+  const pick = (list: Mf[]) => list.filter((m) => /omnibus|lowest|najni|min_price|price_history|30/i.test(`${m.namespace}.${m.key}`));
+  return {
+    product: pick(data.product?.metafields.nodes ?? []),
+    variants: new Map((data.product?.variants.nodes ?? []).map((v) => [v.id, pick(v.metafields.nodes)])),
+  };
+}
+type Mf = { namespace: string; key: string; type: string; value: string };

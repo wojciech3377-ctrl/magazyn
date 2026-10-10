@@ -20,7 +20,7 @@ export default async function AttachContractPage({ searchParams }: { searchParam
   const saleId = sp.sprzedaz && UUID.test(sp.sprzedaz) ? sp.sprzedaz : null;
   const unitParam = !saleId && sp.sztuka && UUID.test(sp.sztuka) ? sp.sztuka : null;
   if (!saleId && !unitParam) notFound();
-  const back = sp.back?.startsWith("/sprzedaz") && !sp.back.startsWith("//") ? sp.back : "/sprzedaz";
+  const back = (sp.back?.startsWith("/sprzedaz") || sp.back?.startsWith("/magazyn")) && !sp.back.startsWith("//") ? sp.back : "/sprzedaz";
 
   type U = { id: string; code: string; owner_type: string; contract_id: string | null; status: string; consignor: { id: string; name: string } | null; variant: { option: string; product: { title: string } } | null };
   const UNIT = "id, code, owner_type, contract_id, status, consignor:consignors(id, name), variant:variants(option, product:products(title))";
@@ -54,7 +54,7 @@ export default async function AttachContractPage({ searchParams }: { searchParam
   const q = (sp.q ?? "").replace(/[%,()*\\]/g, " ").trim();
   let query = supabase.from("contract_overview_unused").select("id, number, counterparty, amount, currency, contract_date, created_at, status, template, items")
     .order("created_at", { ascending: false }).limit(60);
-  if (q) query = /^\d+$/.test(q) ? query.or(`number.eq.${q},counterparty.ilike.%${q}%`) : query.ilike("counterparty", `%${q}%`);
+  if (q) query = query.or([`counterparty.ilike.%${q}%`, `items_text.ilike.%${q}%`, ...(/^\d+$/.test(q) ? [`number.eq.${q}`] : [])].join(","));
   const { data: candidates } = await query;
   const ids = (candidates ?? []).map((c) => c.id as string);
   const { data: bound } = ids.length ? await supabase.from("contracts").select("id, sale_id, doc_number").in("id", ids) : { data: [] };
@@ -94,8 +94,11 @@ export default async function AttachContractPage({ searchParams }: { searchParam
       <form className="mb-3 flex flex-wrap gap-2" method="get">
         {saleId ? <input type="hidden" name="sprzedaz" value={saleId} /> : <input type="hidden" name="sztuka" value={unitParam!} />}
         <input type="hidden" name="back" value={back} />
-        <input className="input w-80" name="q" defaultValue={sp.q} placeholder="Sprzedający albo numer umowy" />
+        <input className="input w-96" name="q" defaultValue={sp.q} placeholder="Sprzedający, produkt (nazwa, rozmiar) albo numer umowy" />
         <button className="btn">Szukaj</button>
+        {variant && !q && (
+          <Link className="btn-secondary" href={`/sprzedaz/umowa?${saleId ? `sprzedaz=${saleId}` : `sztuka=${unitParam}`}&back=${encodeURIComponent(back)}&q=${encodeURIComponent(variant.product.title.split(" ").slice(0, 4).join(" "))}`}>Pokaż umowy z „{variant.product.title.split(" ").slice(0, 4).join(" ")}”</Link>
+        )}
       </form>
       <form action={attachExistingContract}>
       {saleId ? <input type="hidden" name="sale_id" value={saleId} /> : <input type="hidden" name="unit_id" value={unitParam!} />}

@@ -238,7 +238,12 @@ export async function runAutoCatalogNow() {
     const stockMsg = r?.stock.master === "app"
       ? `zmieniono ${sum(stockVals, "changed")} stanów w Shopify (główny: magazyn aplikacji)`
       : `ze stanów Shopify: dodano ${sum(stockVals, "created")}, usunięto ${sum(stockVals, "removed")}, wycofano ${sum(stockVals, "withdrawn")} sztuk (czeka na potwierdzenie: ${sum(stockVals, "waiting")})`;
-    msg = `Sprawdzono: ${products} produktów ze Shopify${pendingShops ? " (katalog jest duży – reszta dojdzie przy kolejnym kliknięciu albo odczycie co 15 min)" : " – cały katalog"}, ${r?.base.added ?? 0} nowych w Base, ${stockMsg}.`;
+    const catalogMsg = pendingShops
+      ? `Katalog Shopify: odczytano ${products} zmienionych produktów, reszta dojdzie przy kolejnym kliknięciu albo odczycie co 15 min`
+      : products
+        ? `Katalog Shopify aktualny – od ostatniego sprawdzenia zmieniło się ${products} ${products === 1 ? "produkt" : "produktów"}`
+        : "Katalog Shopify aktualny – od ostatniego sprawdzenia nic się nie zmieniło";
+    msg = `${catalogMsg}. Base: ${r?.base.added ?? 0} nowych. Stany wszystkich rozmiarów porównane z Shopify – ${stockMsg.replace(/^ze stanów Shopify: /, "")}.`;
     await db.from("sync_log").insert({ job: "auto-catalog", ok: true, message: JSON.stringify(r) });
   } catch (e) {
     ok = false;

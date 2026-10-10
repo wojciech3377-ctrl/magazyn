@@ -161,11 +161,16 @@ export async function upsertShopifyProducts(db: SupabaseClient, store: Store, al
       shopify_inventory_item_id: v.inventoryItem?.id ?? null,
       inventory_tracked: v.inventoryItem?.tracked !== false,
       price: v.price !== null && v.price !== undefined && v.price !== "" ? Number(v.price) : null,
+      compare_at_price: v.compareAtPrice ? Number(v.compareAtPrice) : null,
       sku: v.sku || null,
       updated_at: new Date().toISOString(),
   }));
   for (let i = 0; i < linkRows.length; i += 500) {
-    const { error } = await db.from("variant_store_links").upsert(linkRows.slice(i, i + 500), { onConflict: "store_id,shopify_variant_id" });
+    let { error } = await db.from("variant_store_links").upsert(linkRows.slice(i, i + 500), { onConflict: "store_id,shopify_variant_id" });
+    // Baza bez migracji 0030 (brak kolumny ceny przed obniżką) – zapis bez niej, żeby katalog działał dalej.
+    if (error && /compare_at_price/.test(error.message)) {
+      ({ error } = await db.from("variant_store_links").upsert(linkRows.slice(i, i + 500).map(({ compare_at_price: _c, ...r }) => r), { onConflict: "store_id,shopify_variant_id" }));
+    }
     if (error) throw error;
   }
 
@@ -199,7 +204,7 @@ const PAGE_QUERY = `query($after: String) {
     nodes {
       id title handle vendor productType status
       featuredMedia { preview { image { url } } }
-      variants(first: 100) { nodes { id title sku barcode position price inventoryItem { id tracked } } }
+      variants(first: 100) { nodes { id title sku barcode position price compareAtPrice inventoryItem { id tracked } } }
     }
     pageInfo { hasNextPage endCursor }
   }

@@ -245,8 +245,7 @@ export async function attachConsignorInvoice(_: DocState, fd: FormData): Promise
   const { data: c, error } = await db.from("contracts").insert({
     type: "invoice",
     source: "consignor_invoice",
-    status: "accepted",
-    accepted_at: new Date().toISOString(),
+    status: "signed", // czeka na zatwierdzenie przez sklep (Umowy)
     counterparty: consignor.name,
     consignor_id: consignor.id,
     contract_date: docDate,
@@ -266,7 +265,7 @@ export async function attachConsignorInvoice(_: DocState, fd: FormData): Promise
   }
   const name = consignor.name.replace(/</g, "&lt;");
   await tellCompany(db, `Komis: ${consignor.name} dołączył fakturę ${docNumber}`,
-    `<p>Komisant <b>${name}</b> wgrał fakturę <b>${docNumber.replace(/</g, "&lt;")}</b> do sprzedanych rzeczy: ${kept.map((u) => u.code).join(", ")}.</p><p>Faktura jest w aplikacji: Umowy.</p>`);
+    `<p>Komisant <b>${name}</b> wgrał fakturę <b>${docNumber.replace(/</g, "&lt;")}</b> do sprzedanych rzeczy: ${kept.map((u) => u.code).join(", ")}.</p><p>Sprawdź i zatwierdź ją w aplikacji: Umowy → Do zatwierdzenia.</p>`);
   revalidatePath("/komis");
-  return { ok: `Faktura ${docNumber} dołączona do ${kept.length} szt.${r.skipped ? ` ${r.skipped} zaznaczonych rzeczy miało już umowę.` : ""}` };
+  return { ok: `Faktura ${docNumber} wysłana do sprawdzenia (${kept.length} szt.). Damy znać, gdy ją zatwierdzimy.${r.skipped ? ` ${r.skipped} zaznaczonych rzeczy miało już umowę.` : ""}` };
 }

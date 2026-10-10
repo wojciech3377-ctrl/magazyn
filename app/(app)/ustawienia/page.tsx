@@ -219,6 +219,7 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
                   <WarehouseSelect warehouses={warehouses.data} value={l.base_warehouse_id} />
                   <label className="flex items-center gap-1.5 text-sm"><input type="checkbox" name="active" defaultChecked={l.active} /> aktywna</label>
                   <SubmitButton className="btn-secondary">Zapisz</SubmitButton>
+                  <textarea className="input md:col-span-5" name="ship_address" rows={2} defaultValue={l.ship_address ?? ""} placeholder="Adres do wysyłki dla komisantów (odbiorca, ulica, kod, miasto, telefon) – widoczny w panelu komisanta" aria-label="Adres do wysyłki" />
                 </form>
               ))}
               <form action={saveLocation} className="grid items-end gap-2 border-t border-line pt-3 md:grid-cols-[1fr_1fr_1fr_auto]">

@@ -9,7 +9,8 @@ import { Notice, Pill } from "@/components/ui";
 import { SelectAllNamed } from "@/components/SelectAll";
 import { errorMessage } from "@/lib/errors";
 import { KSEF_STATUS } from "@/lib/invoices/labels";
-import { STAGE_TEXT } from "@/lib/contracts/stage";
+import { isSettled, MISSING_BTN, STAGE_TEXT } from "@/lib/contracts/stage";
+import { ConsignorWaiting } from "@/components/ContractBadges";
 
 const KINDS: { key: "all" | DocKind | "none"; label: string }[] = [
   { key: "all", label: "Paragony i faktury" },
@@ -150,13 +151,13 @@ export async function Jpk({ sp }: { sp: Record<string, string | undefined> }) {
                     <td className="whitespace-nowrap text-muted">{dateOnly(l.contractDate)}</td>
                     {prices && <td className="text-right tabular-nums">{l.purchasePrice !== null ? `${l.purchasePrice.toFixed(2)}${foreign ? ` ${l.currency}` : ""}` : "–"}</td>}
                     <td className="whitespace-nowrap">
-                      {l.contractId && l.contractStage && l.contractStage !== "done"
-                        ? <Link className="text-xs text-warn hover:underline" href={`/umowy/${l.contractId}`} title={STAGE_TEXT[l.contractStage]}>umowa w toku · {STAGE_TEXT[l.contractStage]}</Link>
-                        : l.contractId ? <Link className="text-accent hover:underline" href={`/umowy/${l.contractId}`}>{l.contractNumber ?? "bez numeru"}</Link>
-                        : l.pendingContractId ? <Link className="text-xs text-warn hover:underline" href={`/umowy/${l.pendingContractId}`}>umowa w toku</Link>
-                        : l.consignorWait ? <span className="text-xs font-medium text-warn">czeka na umowę od komisanta</span>
-                        : l.unitId ? <Link className="btn-secondary px-2 py-0.5 text-xs" href={`/sprzedaz/umowa?sztuka=${l.unitId}&back=${encodeURIComponent(`/sprzedaz?${qs}`)}`}>Dołącz umowę</Link>
-                        : l.pieceRef && !l.saleNote ? <button form="jpk-umowa" name="umowa_dla" value={l.pieceRef} className="btn-secondary px-2 py-0.5 text-xs" title={l.variantLinked ? undefined : "Produkt nie jest powiązany z katalogiem – wybierzesz go przy umowie"}>Dołącz umowę</button>
+                      {l.contractId && l.contractStage && !isSettled(l.contractStage) && l.contractStage !== "dead"
+                        ? <Link className="rounded border border-orange-300 bg-orange-50 px-1.5 py-0.5 text-xs text-orange-800 hover:underline" href={`/umowy/${l.contractId}`}>umowa w toku · {STAGE_TEXT[l.contractStage]}</Link>
+                        : l.contractId ? <Link className="rounded border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-emerald-800 hover:underline" href={`/umowy/${l.contractId}`}>{l.contractNumber ?? "bez numeru"} ✓</Link>
+                        : l.pendingContractId ? <Link className="rounded border border-orange-300 bg-orange-50 px-1.5 py-0.5 text-xs text-orange-800 hover:underline" href={`/umowy/${l.pendingContractId}`}>umowa w toku</Link>
+                        : l.consignorWait ? <ConsignorWaiting />
+                        : l.unitId ? <Link className={MISSING_BTN} href={`/sprzedaz/umowa?sztuka=${l.unitId}&back=${encodeURIComponent(`/sprzedaz?${qs}`)}`}>Dołącz umowę</Link>
+                        : l.pieceRef && !l.saleNote ? <button form="jpk-umowa" name="umowa_dla" value={l.pieceRef} className={MISSING_BTN} title={l.variantLinked ? undefined : "Produkt nie jest powiązany z katalogiem – wybierzesz go przy umowie"}>Dołącz umowę</button>
                         : <span className="text-muted">–</span>}
                     </td>
                     <td className="whitespace-nowrap text-xs">

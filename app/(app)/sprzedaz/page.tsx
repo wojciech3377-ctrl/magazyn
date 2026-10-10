@@ -10,8 +10,9 @@ import { WtbButton } from "@/components/WtbButton";
 import { ReceiptButton } from "@/components/ReceiptButton";
 import { SelectAllNamed } from "@/components/SelectAll";
 import { Invoices, Jpk } from "./Jpk";
-import { ContractInProgress, OrderStatusPill, SALE_SELECT, SaleContract, UnitCell, type SaleUnit } from "./SaleBits";
-import { CONTRACT_LITE_FIELDS, contractStage, type ContractLite } from "@/lib/contracts/stage";
+import { OrderStatusPill, SALE_SELECT, SaleContract, UnitCell, type SaleUnit } from "./SaleBits";
+import { CONTRACT_LITE_FIELDS, contractStage, isSettled, MISSING_BTN, type ContractLite } from "@/lib/contracts/stage";
+import { ConsignorWaiting, ContractDone, ContractInProgress } from "@/components/ContractBadges";
 import { classifyShipment, ORDER_STATUS, paymentLabel, type Fulfillment, type OrderStatus } from "@/lib/orders/status";
 import type { LineItem } from "@/lib/sync/shop-orders";
 
@@ -377,7 +378,7 @@ async function PosList({ page, q }: { page: number; q: string }) {
                     {((o.items ?? []) as unknown as PosItem[]).map((i, k) => (
                       <li key={k}>
                         <span className="line-clamp-1">{i.unit?.variant ? <>{i.unit.variant.product.title} · <b>{i.unit.variant.option}</b></> : "–"} <span className="font-mono text-xs text-muted">{i.unit?.code}</span></span>
-                        {i.unit?.owner_type === "consignment" && !i.unit.contract_id && i.status !== "returned" && <span className="block text-xs font-medium text-warn">czeka na umowę od komisanta</span>}
+                        {i.unit?.owner_type === "consignment" && !i.unit.contract_id && i.status !== "returned" && <span className="block"><ConsignorWaiting /></span>}
                       </li>
                     ))}
                   </ul>
@@ -415,16 +416,16 @@ function ContractAction({ pieces, saleContract, cancelled, back }: {
     return { p, c, stage: stage === "dead" ? null : stage, consignment: p.sale?.unit?.owner_type === "consignment" };
   }).filter((r) => r.stage || r.consignment || r.p.sale?.unit || !cancelled);
   if (!rows.length) return null;
-  if (rows.every((r) => r.stage === "done")) return <span className="whitespace-nowrap text-xs text-ok">umowa ✓</span>;
+  if (rows.every((r) => isSettled(r.stage)) && rows.length === 1) return <ContractDone c={rows[0].c!} stage={rows[0].stage!} />;
   const many = rows.length > 1;
-  const btn = "btn-secondary relative z-10 whitespace-nowrap px-2.5 py-1 text-xs";
+  const btn = `${MISSING_BTN} relative z-10`;
   return (
     <>
       {rows.map(({ p, c, stage, consignment }) => {
         const tag = many ? <span className="block max-w-40 truncate text-[11px] text-muted">{p.line.variant_title ?? p.line.title}</span> : null;
-        if (c && stage === "done") return <span key={p.ref} className="relative z-10">{tag}<Link className="whitespace-nowrap text-xs text-ok hover:underline" href={`/umowy/${c.id}`}>umowa ✓</Link></span>;
+        if (c && isSettled(stage)) return <span key={p.ref} className="relative z-10">{tag}<ContractDone c={c} stage={stage!} /></span>;
         if (c && stage) return <span key={p.ref} className="relative z-10">{tag}<ContractInProgress c={c} stage={stage} /></span>;
-        if (consignment) return <span key={p.ref} className="relative z-10 block max-w-44 text-xs font-medium text-warn">{tag}czeka na umowę od komisanta</span>;
+        if (consignment) return <span key={p.ref} className="relative z-10 block">{tag}<ConsignorWaiting /></span>;
         return (
           <form key={p.ref} action={attachContractForPiece} className="relative z-10">
             <input type="hidden" name="back" value={back} />

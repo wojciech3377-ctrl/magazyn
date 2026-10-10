@@ -7,6 +7,9 @@ import { SubmitButton } from "@/components/SubmitButton";
 import { ConfirmSubmit } from "@/components/ConfirmSubmit";
 import { SelectAll } from "@/components/SelectAll";
 import { bulkAction, runAutoCatalogNow } from "./actions";
+import { CONTRACT_LITE_FIELDS, contractStage, isSettled, MISSING_BTN, type ContractLite } from "@/lib/contracts/stage";
+import { ConsignorWaiting, ContractDone, ContractInProgress } from "@/components/ContractBadges";
+import { Barcode } from "@/app/etykiety/Barcode";
 
 // Przycisk „Sprawdź nowe produkty i stany” czyta cały katalog Shopify – potrzebuje dłuższego czasu.
 export const maxDuration = 300;
@@ -39,6 +42,11 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
     supabase.from("units").select("id", { count: "exact", head: true }).is("contract_id", null).in("status", ["in_stock", "in_transit", "reserved"]),
     supabase.from("consignors").select("id, name").order("name"),
   ]);
+
+  // Etap umów widocznych sztuk (zielony / pomarańczowy).
+  const contractIds = [...new Set(rows.map((r) => r.contract_id).filter((x): x is string => !!x))];
+  const { data: contractRows } = contractIds.length ? await supabase.from("contracts").select(CONTRACT_LITE_FIELDS).in("id", contractIds) : { data: [] };
+  const contractById = new Map((contractRows ?? []).map((c) => [c.id as string, c as unknown as ContractLite]));
 
   const filterParams = Object.fromEntries(Object.entries(filters).filter(([, v]) => v)) as Record<string, string>;
   const qs = new URLSearchParams(filterParams).toString();
@@ -194,6 +202,10 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
                   <td className="whitespace-nowrap font-mono text-xs">
                     {u.code}
                     {u.identifier && <span className="block text-muted">{u.identifier}</span>}
+                    {(() => {
+                      const sku = u.variant.links.find((l) => l.store_id === u.location.store_id && l.base_sku)?.base_sku ?? u.variant.links.find((l) => l.base_sku)?.base_sku ?? u.code;
+                      return <span className="mt-1 block" title={`Kod kreskowy: ${sku}${sku === u.code ? " (kod z magazynu – brak SKU z Base)" : " (SKU z Base)"}`}><Barcode value={sku} className="h-[20px] w-[104px]" /></span>;
+                    })()}
                   </td>
                   <td className="whitespace-nowrap">
                     {u.location.name}
@@ -222,13 +234,17 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
                   {profile.can_see_prices && <td className="whitespace-nowrap text-right tabular-nums">{money(u.purchase_price)}</td>}
                   <td className="whitespace-nowrap text-muted">{dateOnly(u.received_at)}</td>
                   <td className="whitespace-nowrap text-right">
-                    {u.contract ? (
-                      <a href={`/api/umowy/${u.contract.id}/pdf`} target="_blank" rel="noreferrer" className="text-accent hover:underline" title="Otwórz umowę">{u.contract.counterparty}</a>
-                    ) : (
-                      <Link href={`/umowy/z-szablonu?ids=${u.id}`} className="btn-secondary px-2.5 py-1 text-xs">
-                        Dodaj umowę
-                      </Link>
-                    )}
+                    <div className="flex flex-col items-end gap-1">
+                      {(() => {
+                        const c = u.contract_id ? contractById.get(u.contract_id) : undefined;
+                        const stage = c ? contractStage(c) : null;
+                        if (c && isSettled(stage)) return <ContractDone c={c} stage={stage!} label={`${c.counterparty ?? "umowa"} ✓`} />;
+                        if (c && stage && stage !== "dead") return <ContractInProgress c={c} stage={stage} />;
+                        if (u.owner_type === "consignment" && ["sold", "shipped"].includes(u.status)) return <ConsignorWaiting />;
+                        return <Link href={`/sprzedaz/umowa?sztuka=${u.id}&back=${encodeURIComponent(returnTo)}`} className={MISSING_BTN}>Dodaj umowę</Link>;
+                      })()}
+                      <a href={`/metka?ids=${u.id}`} target="_blank" rel="noreferrer" className="btn-secondary whitespace-nowrap px-2.5 py-1 text-xs">Wydrukuj metkę</a>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -258,6 +274,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
             Wysyłka do komisanta
           </ConfirmSubmit>
           <button type="submit" className="btn-secondary" formAction="/etykiety" formMethod="get" formTarget="_blank">Drukuj etykietę</button>
+          <button type="submit" className="btn-secondary" formAction="/metka" formMethod="get" formTarget="_blank">Wydrukuj metki</button>
           {profile.role === "admin" && (
             <ConfirmSubmit name="action" value="delete" className="btn-danger ml-auto" message="Usunąć zaznaczone sztuki z aplikacji? Stan w Base się nie zmieni. Sztuk ze sprzedażą nie da się usunąć.">
               Usuń zaznaczone

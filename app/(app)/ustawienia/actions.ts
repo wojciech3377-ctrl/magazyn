@@ -49,6 +49,7 @@ export async function saveLocation(formData: FormData) {
     name: String(formData.get("name") ?? "").trim(),
     base_warehouse_id: String(formData.get("base_warehouse_id") ?? "").trim() || null,
     active: formData.get("active") !== null || !id,
+    ...(formData.has("ship_address") ? { ship_address: String(formData.get("ship_address") ?? "").trim().slice(0, 400) || null } : {}),
   };
   if (!row.name) return done("Podaj nazwę lokalizacji.", "blad");
   const { error } = id ? await supabase.from("locations").update(row).eq("id", id) : await supabase.from("locations").insert(row);

@@ -1,6 +1,9 @@
 import Link from "next/link";
 import { consignorBalance, consignorContracts, consignorUnits, consignmentFee, defaultAddress, requireConsignor, SHIPMENT_METHOD, SHIPMENT_STATUS, type ConsignorContract, type ConsignorShipment } from "@/lib/consignment";
 import { SoldList, type SoldRow } from "./SoldList";
+import { IntakeForm } from "./IntakeForm";
+import { IntakeList, type IntakeCard } from "./IntakeList";
+import { INTAKE_STATUS, ITEM_STATUS, type Intake, type IntakeItem } from "@/lib/intake";
 import { dateOnly, dateTime, money } from "@/lib/labels";
 import { Pill } from "@/components/ui";
 import { ShipRequestForm } from "./ShipRequestForm";
@@ -26,13 +29,13 @@ function docOf(c: ConsignorContract | undefined): SoldRow["doc"] {
     const live = c.source === "consignor" && c.sign_token && (!c.sign_expires_at || new Date(c.sign_expires_at) > new Date());
     return live ? { kind: "sign", href: `/podpis/${c.sign_token}` } : c.source === "consignor" ? { kind: "none" } : { kind: "sign", href: null };
   }
-  if (c.status === "signed" && c.template) return { kind: "approve" };
+  if (c.status === "signed") return { kind: "approve" };
   return { kind: "done", label: c.type === "invoice" ? `faktura ${c.doc_number ?? ""}`.trim() : `umowa${c.number ? ` nr ${c.number}` : ""}` };
 }
 
 export default async function KomisPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const sp = await searchParams;
-  const tab = sp.zakladka === "sprzedane" ? "sprzedane" : "aktywne";
+  const tab = sp.zakladka === "sprzedane" ? "sprzedane" : sp.zakladka === "wyslij" ? "wyslij" : "aktywne";
   const { db, consignor } = await requireConsignor();
   const units = await consignorUnits(db, consignor.id);
   const [bal, fee, { data: shipments }] = await Promise.all([
@@ -49,6 +52,20 @@ export default async function KomisPage({ searchParams }: { searchParams: Promis
   }));
   const missing = soldRows.filter((r) => r.doc.kind === "none").length;
   const codeOf = new Map(units.map((u) => [u.id, `${u.title} ${u.option}`]));
+  const [{ data: locs }, { data: intakeRows }] = await Promise.all([
+    db.from("locations").select("id, name, ship_address, store:stores(name)").eq("active", true).order("name"),
+    db.from("consignor_intakes").select("*, items:consignor_intake_items(*)").eq("consignor_id", consignor.id).order("created_at", { ascending: false }).limit(30),
+  ]);
+  const locLabel = new Map((locs ?? []).map((l) => [l.id as string, { label: `${(l.store as unknown as { name: string } | null)?.name ?? ""} · ${l.name}`, address: (l.ship_address as string | null) ?? null }]));
+  const intakes: IntakeCard[] = ((intakeRows ?? []) as (Intake & { items: IntakeItem[] })[]).map((i) => ({
+    id: i.id, status: i.status, statusText: INTAKE_STATUS[i.status].text, tone: INTAKE_STATUS[i.status].tone, created: dateOnly(i.created_at),
+    location: locLabel.get(i.location_id)?.label ?? "", address: locLabel.get(i.location_id)?.address ?? null, tracking: i.tracking, carrier: i.carrier,
+    items: [...i.items].sort((a, b) => a.position - b.position).map((x) => ({
+      id: x.id, title: x.title, option: x.option, proposed: Number(x.proposed_price), offer: x.offer_price === null ? null : Number(x.offer_price),
+      final: x.final_price === null ? null : Number(x.final_price), status: x.status, statusText: ITEM_STATUS[x.status],
+    })),
+  }));
+  const waitingOnMe = intakes.filter((i) => i.status === "offer" || i.status === "to_send").length;
   const addr = defaultAddress(consignor);
 
   return (
@@ -74,6 +91,9 @@ export default async function KomisPage({ searchParams }: { searchParams: Promis
         <Link href="/komis" className={`-mb-px border-b-2 px-3 py-2 ${tab === "aktywne" ? "border-accent font-medium text-ink" : "border-transparent text-muted hover:text-ink"}`}>Aktywne <span className="ml-1 rounded bg-panel px-1.5 py-0.5 text-xs tabular-nums">{onStock.length}</span></Link>
         <Link href="/komis?zakladka=sprzedane" className={`-mb-px border-b-2 px-3 py-2 ${tab === "sprzedane" ? "border-accent font-medium text-ink" : "border-transparent text-muted hover:text-ink"}`}>
           Sprzedane <span className={`ml-1 rounded px-1.5 py-0.5 text-xs tabular-nums ${missing ? "bg-bad text-white" : "bg-panel"}`}>{missing ? `${missing} bez umowy` : sold.length}</span>
+        </Link>
+        <Link href="/komis?zakladka=wyslij" className={`-mb-px border-b-2 px-3 py-2 ${tab === "wyslij" ? "border-accent font-medium text-ink" : "border-transparent text-muted hover:text-ink"}`}>
+          Wyślij do nas {waitingOnMe > 0 && <span className="ml-1 rounded bg-bad px-1.5 py-0.5 text-xs text-white">{waitingOnMe} do zrobienia</span>}
         </Link>
       </nav>
 
@@ -115,6 +135,20 @@ export default async function KomisPage({ searchParams }: { searchParams: Promis
       </section>
 
       </>}
+
+      {tab === "wyslij" && (
+        <>
+          <section className="mb-6">
+            <h2 className="h2 mb-1">Zgłoś rzeczy do wysłania</h2>
+            <p className="mb-3 text-sm text-muted">Dodaj rzeczy i swoją kwotę. Sprawdzimy zgłoszenie i odpiszemy e-mailem – po akceptacji wyślesz paczkę i wpiszesz numer przesyłki.</p>
+            <IntakeForm locations={(locs ?? []).map((l) => ({ id: l.id as string, label: locLabel.get(l.id as string)!.label, address: locLabel.get(l.id as string)!.address }))} />
+          </section>
+          <section className="mb-6">
+            <h2 className="h2 mb-2">Twoje zgłoszenia i paczki</h2>
+            <IntakeList intakes={intakes} />
+          </section>
+        </>
+      )}
 
       {tab === "sprzedane" && <>
       <section className="mb-6">

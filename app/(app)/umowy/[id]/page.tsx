@@ -4,7 +4,7 @@ import { requireProfile } from "@/lib/auth";
 import { CONTRACT_TYPE, dateOnly, money } from "@/lib/labels";
 import { Field, Notice, PageHeader, StatusBadge } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
-import { acceptContract, attachUnits, cancelContract, deleteContract, detachUnit, markPaid, rejectContract, replaceFile, retryFinalize, sendSigningEmail, updateContractMeta } from "../actions";
+import { acceptContract, attachUnits, decideConsignorInvoice, cancelContract, deleteContract, detachUnit, markPaid, rejectContract, replaceFile, retryFinalize, sendSigningEmail, updateContractMeta } from "../actions";
 import { appUrl } from "@/lib/app-url";
 import { mailConfigured } from "@/lib/mail";
 import { contractTotal, formatMoney } from "@/lib/contracts/purchase";
@@ -48,6 +48,32 @@ export default async function ContractPage({ params, searchParams }: { params: P
       {sp.ok && <div className="mb-4"><Notice tone="ok">{sp.ok}</Notice></div>}
       {sp.blad && <div className="mb-4"><Notice tone="error">{sp.blad}</Notice></div>}
       {c.template && <TemplateSection c={c} canSeePrices={profile.can_see_prices} />}
+      {c.source === "consignor_invoice" && (
+        <section className={`card mb-5 space-y-3 p-4 ${c.status === "signed" ? "border-orange-300 bg-orange-50/40" : ""}`}>
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="h2">Faktura od komisanta {(c.consignor as { name: string } | null)?.name ?? ""}</h2>
+            {c.status === "signed" && <Pill tone="amber">do zatwierdzenia</Pill>}
+            {c.status === "accepted" && <Pill tone="green">zatwierdzona</Pill>}
+            {c.status === "rejected" && <Pill tone="slate">odrzucona</Pill>}
+          </div>
+          <p className="text-sm">Numer <b>{c.doc_number ?? "–"}</b> z dnia {dateOnly(c.contract_date)} · kwota komisanta {profile.can_see_prices && c.amount !== null ? <b>{money(c.amount)}</b> : "–"} · rzeczy: {(c.items ?? []).map((i: { title: string; option: string }) => `${i.title} ${i.option}`).join(", ")}</p>
+          {c.status === "signed" && (
+            <div className="flex flex-wrap items-end gap-2">
+              <form action={decideConsignorInvoice}>
+                <input type="hidden" name="id" value={c.id} />
+                <input type="hidden" name="decision" value="accept" />
+                <SubmitButton pendingText="…">Zatwierdź fakturę</SubmitButton>
+              </form>
+              <form action={decideConsignorInvoice} className="flex flex-wrap items-end gap-2">
+                <input type="hidden" name="id" value={c.id} />
+                <input type="hidden" name="decision" value="reject" />
+                <input className="input w-72" name="reason" placeholder="Powód odrzucenia (trafi do komisanta)" maxLength={300} />
+                <SubmitButton className="btn-danger" pendingText="…">Odrzuć</SubmitButton>
+              </form>
+            </div>
+          )}
+        </section>
+      )}
       <div className="grid gap-5 lg:grid-cols-3">
         <div className="min-w-0 space-y-5 lg:col-span-2">
           <form action={updateContractMeta} className="card flex flex-wrap items-end gap-3 p-4">
@@ -153,6 +179,7 @@ type TemplateContract = {
   payment_days: number | null; units_created_at: string | null; sale_id: string | null;
   payment_method: string | null; currency: string | null; seller_country: string | null; paid_at: string | null;
   location_id: string | null;
+  offer: { prices?: number[]; note?: string | null } | null;
   items: { title: string; option: string; qty: number; price: number; unit_id?: string; variant_id?: string; identifier?: string | null }[] | null;
 };
 
@@ -179,6 +206,7 @@ async function TemplateSection({ c, canSeePrices }: { c: TemplateContract; canSe
           <h2 className="h2">Umowa z szablonu</h2>
           {c.status === "sent" && <Pill tone="amber">czeka na podpis</Pill>}
           {c.status === "signed" && <Pill tone="red">do zatwierdzenia</Pill>}
+          {c.status === "offer" && <Pill tone="blue">nasza oferta cenowa – czeka na odpowiedź sprzedającego</Pill>}
           {c.status === "accepted" && (c.paid_at ? <Pill tone="green">opłacona</Pill> : <Pill tone="amber">zaakceptowana – do opłaty</Pill>)}
           {c.status === "rejected" && <Pill tone="slate">odrzucona</Pill>}
           {c.status === "cancelled" && <Pill tone="slate">anulowana</Pill>}
@@ -216,7 +244,15 @@ async function TemplateSection({ c, canSeePrices }: { c: TemplateContract; canSe
                 <input type="hidden" name="id" value={c.id} />
                 <SubmitButton className="btn-danger" pendingText="…">Odrzuć</SubmitButton>
               </form>
+              <Link className="btn-secondary" href="/dostawa?zakladka=akceptacja">Cena nie pasuje? Złóż ofertę</Link>
             </div>
+          </div>
+        )}
+        {c.status === "offer" && c.offer?.prices && (
+          <div className="space-y-1 border-t border-line pt-3 text-sm">
+            <p>Zaproponowane ceny: {items.map((i, idx) => `${i.title} ${i.option}: ${formatMoney(Number(c.offer!.prices![idx] ?? i.price), c.currency ?? "PLN")}`).join(" · ")}</p>
+            <p className="text-muted">Sprzedający odpowiada pod linkiem {link ? <code className="text-xs">{link}/oferta</code> : ""} (ważny do {dateOnly(c.sign_expires_at)}). Po akceptacji umowa jest zawarta, a towar pojawi się w Przyjęciu dostawy → W drodze.</p>
+            <form action={rejectContract}><input type="hidden" name="id" value={c.id} /><SubmitButton className="text-sm text-bad underline" pendingText="…">Wycofaj ofertę i odrzuć umowę</SubmitButton></form>
           </div>
         )}
         {c.status === "accepted" && (

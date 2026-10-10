@@ -67,7 +67,7 @@ export async function attachContractForPiece(formData: FormData) {
 
 /** Powrót tylko na strony sprzedaży (bez przekierowań na zewnątrz). */
 function safeBack(v: string) {
-  return v.startsWith("/sprzedaz") && !v.startsWith("//") ? v : "/sprzedaz";
+  return (v.startsWith("/sprzedaz") || v.startsWith("/magazyn")) && !v.startsWith("//") ? v : "/sprzedaz";
 }
 
 /**

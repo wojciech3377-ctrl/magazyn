@@ -6,7 +6,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getCompany } from "@/lib/contracts/settings";
 import { notifyAwaitingApproval } from "@/lib/contracts/store";
 import { contractTotal } from "@/lib/contracts/purchase";
-import { validateSignaturePng } from "@/lib/contracts/png";
+import { escapeHtml, validateSignaturePng } from "@/lib/contracts/png";
 import { COUNTRIES, CURRENCIES } from "@/lib/contracts/options";
 
 type Result = { error?: string };
@@ -160,4 +160,67 @@ export async function submitGeneralContract(key: string, _: Result | null, formD
   if (error) return { error: "Nie udało się zapisać umowy. Spróbuj ponownie." };
   await notifyAwaitingApproval(c.id);
   redirect(`/podpis/${token}`);
+}
+
+/** Odpowiedź sprzedającego na naszą ofertę cenową: akceptacja (nowy podpis, umowa zawarta) albo odmowa. */
+export async function respondContractOffer(token: string, _: Result | null, formData: FormData): Promise<Result> {
+  if (formData.get("website")) return { error: "Błąd formularza." };
+  const db = createAdminClient();
+  const { data: c } = await db.from("contracts").select("id, status, items, offer, sign_expires_at, location_id, number").eq("sign_token", token).maybeSingle();
+  if (!c || c.status !== "offer") return { error: "Ta oferta nie czeka już na odpowiedź." };
+  if (c.sign_expires_at && new Date(c.sign_expires_at) < new Date()) return { error: "Oferta wygasła – skontaktuj się z nami." };
+  const decision = String(formData.get("decision") ?? "");
+  if (decision !== "accept" && decision !== "decline") return { error: "Wybierz: akceptuję albo odrzucam. / Choose accept or decline." };
+  const offer = (c.offer ?? {}) as { prices?: number[]; location_id?: string | null };
+  const meta = await requestMeta();
+
+  if (decision === "decline") {
+    const { data: done } = await db.from("contracts").update({ status: "rejected", offer_responded_at: new Date().toISOString(), notes: "Sprzedający odrzucił ofertę cenową." })
+      .eq("id", c.id).eq("status", "offer").select("id");
+    if (done?.length) {
+      await db.from("units").update({ contract_id: null }).eq("contract_id", c.id);
+      await notifyOfferAnswer(c.id, false);
+    }
+    redirect(`/podpis/${token}/oferta`);
+  }
+
+  if (!formData.get("consent")) return { error: "Zaznacz akceptację nowych cen. / Please confirm the new prices." };
+  const signature = String(formData.get("signature") ?? "");
+  const sigError = validateSignaturePng(signature);
+  if (sigError) return { error: sigError };
+  const items = ((c.items ?? []) as { price: number }[]).map((it, idx) => ({ ...it, price: Number(offer.prices?.[idx] ?? it.price) }));
+  const { data: done, error } = await db.from("contracts").update({
+    status: "accepted", accepted_at: new Date().toISOString(), offer_responded_at: new Date().toISOString(),
+    items, amount: contractTotal(items as unknown as Parameters<typeof contractTotal>[0]), seller_signature: signature,
+    location_id: c.location_id ?? offer.location_id ?? null, ...meta,
+  }).eq("id", c.id).eq("status", "offer").select("id");
+  if (error) return { error: "Nie udało się zapisać odpowiedzi. Spróbuj ponownie." };
+  if (!done?.length) redirect(`/podpis/${token}/oferta`);
+  // Umowa zawarta na nowych cenach: sztuki „w drodze”, PDF z podpisami, powiadomienie sklepu.
+  const its = items as { unit_id?: string; variant_id?: string }[];
+  if (its.every((i) => i.unit_id || i.variant_id)) {
+    const fin = await db.rpc("finalize_contract", { p_contract_id: c.id });
+    if (fin.error) await db.from("sync_log").insert({ job: "contract-offer", ok: false, message: `${c.id}: ${fin.error.message}` });
+  }
+  const { deliverAcceptedContract } = await import("@/lib/contracts/store");
+  await deliverAcceptedContract(c.id);
+  await notifyOfferAnswer(c.id, true);
+  redirect(`/podpis/${token}/oferta`);
+}
+
+async function notifyOfferAnswer(contractId: string, accepted: boolean) {
+  const db = createAdminClient();
+  try {
+    const { mailConfigured, sendMail } = await import("@/lib/mail");
+    if (!(await mailConfigured())) return;
+    const { data: c } = await db.from("contracts").select("number, seller_name").eq("id", contractId).single();
+    const company = await getCompany(db);
+    if (!company.email) return;
+    await sendMail(company.email, `Umowa nr ${c?.number}: oferta ${accepted ? "zaakceptowana" : "odrzucona"}`,
+      accepted
+        ? `<p>${escapeHtml(c?.seller_name ?? "Sprzedający")} zaakceptował(a) nowe ceny w umowie nr ${c?.number}. Umowa jest zawarta – towar czeka w Przyjęciu dostawy → W drodze.</p>`
+        : `<p>${escapeHtml(c?.seller_name ?? "Sprzedający")} odrzucił(a) ofertę cenową do umowy nr ${c?.number}. Umowa jest odrzucona.</p>`);
+  } catch {
+    // powiadomienie nie jest konieczne
+  }
 }

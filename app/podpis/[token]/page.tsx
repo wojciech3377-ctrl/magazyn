@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { redirect } from "next/navigation";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getBuyerSignature, getCompany } from "@/lib/contracts/settings";
 import { SellerContractForm } from "@/components/contracts/SellerContractForm";
@@ -41,6 +42,7 @@ export default async function SignPage({ params }: { params: Promise<{ token: st
       </PublicShell>
     );
   }
+  if (c.status === "offer") redirect(`/podpis/${token}/oferta`);
   if (c.status === "rejected") {
     return <PublicShell company={company.name}><div className="card mx-auto max-w-lg p-6">Umowa nr {c.number} nie została zaakceptowana. Skontaktuj się z nami: {company.email}</div></PublicShell>;
   }

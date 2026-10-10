@@ -189,14 +189,22 @@ export async function retryFinalize(formData: FormData) {
 }
 
 /** Zatwierdzenie umowy podpisanej przez sprzedającego: nasz podpis, PDF dla sprzedającego, sztuki „w drodze”. */
+/** Powrót po decyzji: na stronę umowy albo do Przyjęcia dostawy (gdy decyzja zapadła tam). */
+function decisionTarget(formData: FormData, id: string) {
+  const b = String(formData.get("back") ?? "");
+  return b.startsWith("/dostawa") && !b.startsWith("//") ? b : `/umowy/${id}`;
+}
+const withMsg = (url: string, key: "ok" | "blad", msg: string) => `${url}${url.includes("?") ? "&" : "?"}${key}=${encodeURIComponent(msg)}`;
+
 export async function acceptContract(formData: FormData) {
   const { supabase, profile } = await requireProfile();
   const id = String(formData.get("id"));
+  const target = decisionTarget(formData, id);
   const locationId = String(formData.get("location_id") ?? "") || null;
   const { data: accepted } = await supabase.from("contracts")
     .update({ status: "accepted", accepted_at: new Date().toISOString(), accepted_by: profile.id, ...(locationId ? { location_id: locationId } : {}) })
     .eq("id", id).eq("status", "signed").select("id, source, items");
-  if (!accepted?.length) redirect(`/umowy/${id}?blad=${encodeURIComponent("Zatwierdzić można tylko umowę podpisaną przez sprzedającego.")}`);
+  if (!accepted?.length) redirect(withMsg(target, "blad", "Zatwierdzić można tylko umowę podpisaną przez sprzedającego."));
 
   // Umowa z ogólnego linku czeka jeszcze na przypisanie pozycji do katalogu; pozostałe od razu tworzą sztuki.
   const msgs: string[] = ["Umowa zatwierdzona."];
@@ -212,17 +220,20 @@ export async function acceptContract(formData: FormData) {
   if (d.error) msgs.push(`PDF: ${d.error}`);
   else msgs.push(d.emailed ? "Sprzedający dostał umowę e-mailem." : "Sprzedający pobierze umowę ze swojego linku.");
   revalidatePath(`/umowy/${id}`);
-  redirect(`/umowy/${id}?${d.error ? "blad" : "ok"}=${encodeURIComponent(msgs.join(" "))}`);
+  revalidatePath("/dostawa");
+  redirect(withMsg(target, d.error ? "blad" : "ok", msgs.join(" ")));
 }
 
 export async function rejectContract(formData: FormData) {
   const { supabase } = await requireProfile();
   const id = String(formData.get("id"));
-  const { data: rejected } = await supabase.from("contracts").update({ status: "rejected" }).eq("id", id).eq("status", "signed").select("id");
-  if (!rejected?.length) redirect(`/umowy/${id}?blad=${encodeURIComponent("Odrzucić można tylko umowę czekającą na zatwierdzenie.")}`);
+  const target = decisionTarget(formData, id);
+  const { data: rejected } = await supabase.from("contracts").update({ status: "rejected" }).eq("id", id).in("status", ["signed", "offer"]).select("id");
+  if (!rejected?.length) redirect(withMsg(target, "blad", "Odrzucić można tylko umowę czekającą na zatwierdzenie."));
   await supabase.from("units").update({ contract_id: null }).eq("contract_id", id);
   revalidatePath(`/umowy/${id}`);
-  redirect(`/umowy/${id}?ok=${encodeURIComponent("Umowa odrzucona.")}`);
+  revalidatePath("/dostawa");
+  redirect(withMsg(target, "ok", "Umowa odrzucona."));
 }
 
 /** Oznaczenie zapłaty sprzedającemu (przelew wysłany / gotówka wypłacona) → zakładka „Gotowe”. */
@@ -302,4 +313,39 @@ export async function assignContractToPiece(formData: FormData) {
   revalidatePath("/umowy");
   revalidatePath("/sprzedaz");
   redirect(`/umowy/${contractId}?ok=${encodeURIComponent("Umowa przypisana do sprzedanego przedmiotu.")}`);
+}
+
+/** Faktura wgrana przez komisanta: zatwierdzenie albo odrzucenie (wtedy komisant może wgrać nową). */
+export async function decideConsignorInvoice(formData: FormData) {
+  const { supabase, profile } = await requireProfile();
+  const id = String(formData.get("id"));
+  const accept = formData.get("decision") === "accept";
+  const note = String(formData.get("reason") ?? "").trim().slice(0, 300);
+  const { data: done } = await supabase.from("contracts")
+    .update(accept ? { status: "accepted", accepted_at: new Date().toISOString(), accepted_by: profile.id } : { status: "rejected", notes: note ? `Odrzucona: ${note}` : "Odrzucona" })
+    .eq("id", id).eq("status", "signed").eq("source", "consignor_invoice").select("id, doc_number, consignor:consignors(name, email)");
+  if (!done?.length) redirect(`/umowy/${id}?blad=${encodeURIComponent("Ta faktura nie czeka na zatwierdzenie.")}`);
+  if (!accept) await supabase.from("units").update({ contract_id: null }).eq("contract_id", id);
+  const consignor = done[0].consignor as unknown as { name: string; email: string | null } | null;
+  let mailNote = "";
+  try {
+    const { mailConfigured, sendMail } = await import("@/lib/mail");
+    if (consignor?.email && (await mailConfigured())) {
+      const { getCompany } = await import("@/lib/contracts/settings");
+      const { escapeHtml } = await import("@/lib/contracts/png");
+      const { appUrl } = await import("@/lib/app-url");
+      const company = await getCompany(supabase);
+      const num = escapeHtml(String(done[0].doc_number ?? ""));
+      await sendMail(consignor.email, accept ? `Faktura ${done[0].doc_number ?? ""} zatwierdzona – ${company.name}` : `Faktura ${done[0].doc_number ?? ""} odrzucona – ${company.name}`,
+        accept
+          ? `<p>Dzień dobry,</p><p>zatwierdziliśmy Twoją fakturę <b>${num}</b>. Kwotę do wypłaty widzisz w panelu komisanta.</p><p>${escapeHtml(company.name)}</p>`
+          : `<p>Dzień dobry,</p><p>nie możemy przyjąć faktury <b>${num}</b>${note ? `: ${escapeHtml(note)}` : ""}.</p><p>Wgraj poprawioną fakturę albo wypełnij umowę w panelu komisanta: <a href="${escapeHtml(`${await appUrl()}/komis?zakladka=sprzedane`)}">otwórz panel</a>.</p><p>${escapeHtml(company.name)}</p>`);
+      mailNote = " Komisant dostał e-mail.";
+    }
+  } catch (e) {
+    mailNote = ` E-mail do komisanta nie wyszedł: ${errorMessage(e)}`;
+  }
+  revalidatePath(`/umowy/${id}`);
+  revalidatePath("/umowy");
+  redirect(`/umowy/${id}?ok=${encodeURIComponent((accept ? "Faktura zatwierdzona." : "Faktura odrzucona – komisant może wgrać nową.") + mailNote)}`);
 }
