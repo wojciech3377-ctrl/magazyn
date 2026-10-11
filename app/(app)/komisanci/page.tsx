@@ -11,11 +11,17 @@ export default async function KomisanciPage({ searchParams }: { searchParams: Pr
   const sp = await searchParams;
   const { supabase, profile } = await requireProfile();
   const db = createAdminClient();
-  const [{ data: consignors }, { data: open }, fee] = await Promise.all([
+  const [{ data: consignors }, { data: open }, fee, { data: intakes }] = await Promise.all([
     supabase.from("consignors").select("*").order("name"),
     supabase.from("consignor_shipments").select("consignor_id").eq("status", "requested"),
     consignmentFee(db),
+    db.from("consignor_intakes").select("consignor_id, status").in("status", ["review", "sent"]),
   ]);
+  const reviewBy = new Map<string, number>();
+  const sentBy = new Map<string, number>();
+  for (const i of intakes ?? []) { const m = i.status === "review" ? reviewBy : sentBy; m.set(i.consignor_id as string, (m.get(i.consignor_id as string) ?? 0) + 1); }
+  const totalReview = [...reviewBy.values()].reduce((a, b) => a + b, 0);
+  const totalShip = (open ?? []).length;
   const openBy = new Map<string, number>();
   for (const o of open ?? []) openBy.set(o.consignor_id as string, (openBy.get(o.consignor_id as string) ?? 0) + 1);
   const stats = new Map<string, { onStock: number; sold: number; balance: number }>();
@@ -34,6 +40,12 @@ export default async function KomisanciPage({ searchParams }: { searchParams: Pr
       <PageHeader title="Komisanci" sub="Rzeczy w komisie, wypłaty i zlecenia wysyłki. Komisant z kontem widzi swój panel pod tym samym adresem aplikacji." />
       {sp.ok && <div className="mb-4"><Notice tone="ok">{sp.ok}</Notice></div>}
       {sp.blad && <div className="mb-4"><Notice tone="error">{sp.blad}</Notice></div>}
+      {(totalReview > 0 || totalShip > 0) && (
+        <div className="mb-4 flex flex-wrap gap-2">
+          {totalReview > 0 && <Link className="rounded-md border border-bad/40 bg-rose-50 px-3 py-2 text-sm font-medium text-bad hover:bg-rose-100" href="/dostawa?zakladka=akceptacja">Nowe zgłoszenia rzeczy do akceptacji: {totalReview} →</Link>}
+          {totalShip > 0 && <span className="rounded-md border border-bad/40 bg-rose-50 px-3 py-2 text-sm font-medium text-bad">Zlecenia wysyłki do komisantów: {totalShip} – otwórz komisanta poniżej</span>}
+        </div>
+      )}
       <div className="grid gap-5 lg:grid-cols-3">
         <div className="card min-w-0 overflow-x-auto lg:col-span-2">
           <table className="table">
@@ -49,7 +61,11 @@ export default async function KomisanciPage({ searchParams }: { searchParams: Pr
                     <td className="text-right tabular-nums">{st.onStock}</td>
                     <td className="text-right tabular-nums">{st.sold}</td>
                     {profile.can_see_prices && <td className="text-right tabular-nums">{money(st.balance)}</td>}
-                    <td>{openBy.get(c.id) ? <Pill tone="amber">wysyłka: {openBy.get(c.id)}</Pill> : null}</td>
+                    <td className="space-x-1 whitespace-nowrap">
+                      {openBy.get(c.id) ? <Pill tone="red">wysyłka do komisanta: {openBy.get(c.id)}</Pill> : null}
+                      {reviewBy.get(c.id) ? <Link href="/dostawa?zakladka=akceptacja"><Pill tone="red">zgłoszenie: {reviewBy.get(c.id)}</Pill></Link> : null}
+                      {sentBy.get(c.id) ? <Link href="/dostawa?zakladka=w-drodze"><Pill tone="blue">paczka w drodze</Pill></Link> : null}
+                    </td>
                   </tr>
                 );
               })}

@@ -77,14 +77,25 @@ export async function attachUnits(formData: FormData) {
   redirect(`/umowy/${id}?${msg}`);
 }
 
+/** Odpięcie umowy od rzeczy. Gdy przy umowie nie zostaje żadna rzecz, wraca do niewykorzystanych umów. */
 export async function detachUnit(formData: FormData) {
   const { supabase } = await requireProfile();
   const id = String(formData.get("id"));
   const unitId = String(formData.get("unit_id"));
-  await supabase.from("units").update({ contract_id: null }).eq("id", unitId).eq("contract_id", id);
-  await supabase.from("unit_events").insert({ unit_id: unitId, type: "contract", data: { contract_id: null, detached_from: id } });
+  const b = String(formData.get("back") ?? "");
+  const target = b.startsWith("/") && !b.startsWith("//") ? b : `/umowy/${id}`;
+  const { data: done } = await supabase.from("units").update({ contract_id: null }).eq("id", unitId).eq("contract_id", id).select("id, code");
+  if (done?.length) {
+    await supabase.from("unit_events").insert({ unit_id: unitId, type: "contract", data: { contract_id: null, detached_from: id } });
+    const { count } = await supabase.from("units").select("id", { count: "exact", head: true }).eq("contract_id", id);
+    // Bez rzeczy umowa nie jest już przypięta do sprzedaży – można ją przypisać gdzie indziej.
+    if (!count) await supabase.from("contracts").update({ sale_id: null }).eq("id", id).not("status", "in", "(sent,signed,offer)");
+  }
   revalidatePath(`/umowy/${id}`);
-  redirect(`/umowy/${id}`);
+  revalidatePath("/umowy");
+  revalidatePath("/sprzedaz");
+  revalidatePath("/magazyn");
+  redirect(`${target}${target.includes("?") ? "&" : "?"}ok=${encodeURIComponent(done?.length ? `Umowa odpięta od ${done[0].code} – jest znowu do przypisania.` : "Ta rzecz nie ma już tej umowy.")}`);
 }
 
 export async function replaceFile(formData: FormData) {

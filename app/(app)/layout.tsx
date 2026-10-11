@@ -1,9 +1,25 @@
 import { requireProfile } from "@/lib/auth";
 import { signOut } from "@/app/login/actions";
 import { Nav } from "./Nav";
+import { createAdminClient } from "@/lib/supabase/admin";
+
+/** Zgłoszenia komisantów czekające na nas: nowe zgłoszenia rzeczy i zlecenia wysyłki do komisanta. */
+async function consignorAlerts() {
+  try {
+    const db = createAdminClient();
+    const [a, b] = await Promise.all([
+      db.from("consignor_intakes").select("id", { count: "exact", head: true }).eq("status", "review"),
+      db.from("consignor_shipments").select("id", { count: "exact", head: true }).eq("status", "requested"),
+    ]);
+    return (a.count ?? 0) + (b.count ?? 0);
+  } catch {
+    return 0;
+  }
+}
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const { profile } = await requireProfile();
+  const alerts = await consignorAlerts();
   return (
     <div className="min-h-screen">
       <header className="border-b border-line bg-white">
@@ -14,7 +30,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
               <button className="text-sm text-muted hover:text-ink">Wyloguj</button>
             </form>
           </div>
-          <Nav />
+          <Nav badges={{ "/komisanci": alerts }} />
           <form action={signOut} className="hidden items-center gap-3 md:flex">
             <span className="text-sm text-muted">{profile.full_name || profile.email}</span>
             <button className="text-sm text-muted hover:text-ink">Wyloguj</button>

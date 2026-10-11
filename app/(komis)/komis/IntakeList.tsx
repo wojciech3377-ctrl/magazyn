@@ -3,7 +3,7 @@
 import { useActionState } from "react";
 import { addIntakeTracking, cancelIntake, respondIntakeOffer, type IntakeState } from "./intake-actions";
 
-type Item = { id: string; title: string; option: string | null; proposed: number; offer: number | null; final: number | null; status: string; statusText: string };
+type Item = { id: string; title: string; option: string | null; form: string; proposed: number; offer: number | null; final: number | null; status: string; statusText: string };
 export type IntakeCard = {
   id: string; status: string; statusText: string; tone: string; created: string; location: string; address: string | null;
   tracking: string | null; carrier: string | null; items: Item[];
@@ -41,14 +41,14 @@ function Card({ i }: { i: IntakeCard }) {
             <tbody>
               {i.items.map((x) => (
                 <tr key={x.id}>
-                  <td>{x.title}{x.option ? <> · <b>{x.option}</b></> : null}</td>
+                  <td>{x.title}{x.option ? <> · <b>{x.option}</b></> : null}<span className="block text-xs text-muted">{x.form}</span></td>
                   <td className="text-right tabular-nums">{pln(x.proposed)}</td>
                   <td className="text-right tabular-nums">{x.offer !== null ? <b>{pln(x.offer)}</b> : "–"}</td>
                   <td className="text-sm">
                     {x.status === "offered" ? (
                       <span className="flex flex-wrap gap-3">
-                        <label className="flex items-center gap-1"><input type="radio" name={`odp_${x.id}`} value="accept" required /> akceptuję</label>
-                        <label className="flex items-center gap-1"><input type="radio" name={`odp_${x.id}`} value="decline" /> odmawiam</label>
+                        <label className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-line px-2.5 py-1 transition-colors hover:bg-panel hover:border-ok has-[:checked]:border-ok has-[:checked]:bg-emerald-50 has-[:checked]:text-ok"><input type="radio" name={`odp_${x.id}`} value="accept" required /> akceptuję</label>
+                        <label className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-line px-2.5 py-1 transition-colors hover:bg-panel hover:border-bad has-[:checked]:border-bad has-[:checked]:bg-rose-50 has-[:checked]:text-bad"><input type="radio" name={`odp_${x.id}`} value="decline" /> odmawiam</label>
                       </span>
                     ) : x.statusText}
                   </td>

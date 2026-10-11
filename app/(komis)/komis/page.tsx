@@ -61,7 +61,7 @@ export default async function KomisPage({ searchParams }: { searchParams: Promis
     id: i.id, status: i.status, statusText: INTAKE_STATUS[i.status].text, tone: INTAKE_STATUS[i.status].tone, created: dateOnly(i.created_at),
     location: locLabel.get(i.location_id)?.label ?? "", address: locLabel.get(i.location_id)?.address ?? null, tracking: i.tracking, carrier: i.carrier,
     items: [...i.items].sort((a, b) => a.position - b.position).map((x) => ({
-      id: x.id, title: x.title, option: x.option, proposed: Number(x.proposed_price), offer: x.offer_price === null ? null : Number(x.offer_price),
+      id: x.id, title: x.title, option: x.option, form: x.purchase_form === "vat_23" ? "VAT 23%" : "VAT marża", proposed: Number(x.proposed_price), offer: x.offer_price === null ? null : Number(x.offer_price),
       final: x.final_price === null ? null : Number(x.final_price), status: x.status, statusText: ITEM_STATUS[x.status],
     })),
   }));

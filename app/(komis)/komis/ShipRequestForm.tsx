@@ -1,5 +1,7 @@
 "use client";
 
+import { FileButton } from "@/components/FileButton";
+
 import { useActionState, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { prepareLabelUpload, requestShipment, type ShipState } from "./actions";
@@ -59,15 +61,15 @@ export function ShipRequestForm({ units, address, fee }: { units: U[]; address: 
             <span className="text-sm text-muted">zaznaczono: {picked.size}</span>
           </div>
           <fieldset className="space-y-2 text-sm">
-            <label className={`flex items-start gap-2 ${address ? "" : "opacity-50"}`}>
+            <label className={`flex cursor-pointer items-start gap-2 rounded-lg border border-line bg-white p-3 transition-colors hover:border-accent hover:bg-sky-50 has-[:checked]:border-accent has-[:checked]:bg-sky-50 has-[:checked]:ring-1 has-[:checked]:ring-accent ${address ? "" : "pointer-events-none opacity-50"}`}>
               <input type="radio" name="method" value="default" checked={method === "default"} disabled={!address} onChange={() => setMethod("default")} className="mt-1" />
               <span>Na mój adres z konta{address ? <span className="block text-muted">{address.name}, {address.street}, {address.postcode} {address.city}</span> : <span className="block text-muted">brak adresu w koncie – napisz do nas albo wybierz inny adres</span>}</span>
             </label>
-            <label className="flex items-start gap-2">
+            <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-line bg-white p-3 transition-colors hover:border-accent hover:bg-sky-50 has-[:checked]:border-accent has-[:checked]:bg-sky-50 has-[:checked]:ring-1 has-[:checked]:ring-accent">
               <input type="radio" name="method" value="custom" checked={method === "custom"} onChange={() => setMethod("custom")} className="mt-1" />
               <span>Na inny adres <span className="text-muted">– płatna wysyłka {pln(fee)}, wystawimy fakturę</span></span>
             </label>
-            <label className="flex items-start gap-2">
+            <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-line bg-white p-3 transition-colors hover:border-accent hover:bg-sky-50 has-[:checked]:border-accent has-[:checked]:bg-sky-50 has-[:checked]:ring-1 has-[:checked]:ring-accent">
               <input type="radio" name="method" value="own_label" checked={method === "own_label"} onChange={() => setMethod("own_label")} className="mt-1" />
               <span>Mam własną etykietę wysyłkową <span className="text-muted">(PDF, JPG albo PNG)</span></span>
             </label>
@@ -84,7 +86,7 @@ export function ShipRequestForm({ units, address, fee }: { units: U[]; address: 
           )}
           {method === "own_label" && (
             <div className="space-y-1 text-sm">
-              <input type="file" accept="application/pdf,image/jpeg,image/png" onChange={(e) => onFile(e.target.files?.[0])} aria-label="Plik etykiety" />
+              <FileButton label="Wybierz plik etykiety" accept="application/pdf,image/jpeg,image/png" onFile={onFile} />
               {label && <input type="hidden" name="label_path" value={label.path} />}
               {label && <input type="hidden" name="label_name" value={label.name} />}
               {upload.busy && <p className="text-muted">Wgrywam…</p>}

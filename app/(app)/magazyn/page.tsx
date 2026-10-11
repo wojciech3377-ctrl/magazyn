@@ -212,10 +212,10 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
                     <span className="block text-xs text-muted">{u.location.store.name}{u.shelf ? ` · ${u.shelf}` : ""}</span>
                   </td>
                   <td><StatusBadge status={u.status} /></td>
-                  <td className="whitespace-nowrap">
+                  <td className="min-w-32 max-w-48">
                     {u.owner_type === "consignment" ? (
                       <>
-                        <Link href={`/magazyn?wlasciciel=consignment&komisant=${u.consignor?.id}`} className="font-medium text-accent hover:underline">{u.consignor?.name}</Link>
+                        <Link href={`/magazyn?wlasciciel=consignment&komisant=${u.consignor?.id}`} className="line-clamp-2 break-words text-sm font-medium leading-tight text-accent hover:underline" title={u.consignor?.name}>{u.consignor?.name}</Link>
                         {profile.can_see_prices && u.payout_amount !== null && <span className="block text-xs text-muted">w komisie {money(u.payout_amount)}</span>}
                       </>
                     ) : (
@@ -243,7 +243,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
                         if (u.owner_type === "consignment" && ["sold", "shipped"].includes(u.status)) return <ConsignorWaiting />;
                         return <Link href={`/sprzedaz/umowa?sztuka=${u.id}&back=${encodeURIComponent(returnTo)}`} className={MISSING_BTN}>Dodaj umowę</Link>;
                       })()}
-                      <a href={`/metka?ids=${u.id}`} target="_blank" rel="noreferrer" className="btn-secondary whitespace-nowrap px-2.5 py-1 text-xs">Wydrukuj metkę</a>
+                      <a href={`/api/metka?ids=${u.id}`} target="_blank" rel="noreferrer" className="btn-secondary whitespace-nowrap px-2.5 py-1 text-xs">Wydrukuj metkę</a>
                     </div>
                   </td>
                 </tr>

@@ -11,8 +11,39 @@ import { omnibusMetafields } from "@/lib/integrations/shopify";
 export type Range = { min: number; max: number } | null;
 export type PriceTag = {
   unitId: string; code: string; title: string; option: string; sku: string; skuIsBase: boolean;
-  price: Range; compareAt: Range; promo: boolean; lowest30: Range; lowestSource: string; storeName: string;
+  price: Range; compareAt: Range; promo: boolean; lowest30: Range; lowestSource: string; storeName: string; used: boolean;
 };
+
+/** Używane: znacznik w SKU modelu, nazwie albo rozmiarze (np. DM7866-200-USED). */
+export const isUsed = (...texts: (string | null | undefined)[]) => texts.some((t) => /\bused\b|-used|używan|uzywan/i.test(t ?? ""));
+
+/**
+ * Najniższa cena z bloku Omnibus Insight na stronie produktu w sklepie (blok aplikacji w motywie).
+ * Zwraca kwotę albo null, gdy blok się nie wyświetla (np. tylko przy promocjach) albo strona nie odpowiada.
+ */
+async function storefrontLowest(domain: string, handle: string, variantGid: string | null): Promise<number | null> {
+  const vid = variantGid?.split("/").pop();
+  try {
+    const res = await fetch(`https://${domain}/products/${encodeURIComponent(handle)}${vid ? `?variant=${vid}` : ""}`, { redirect: "follow", signal: AbortSignal.timeout(6000), headers: { "user-agent": "MagazynApp/1.0 (metka)" } });
+    if (!res.ok) return null;
+    const text = (await res.text()).replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;|&#160;/g, " ").replace(/\s+/g, " ");
+    const m = text.match(/(?:najni[żz]sz\w*\s+cen\w*|lowest\s+price)[\s\S]{0,160}?(\d{1,3}(?:[ .\u00a0]?\d{3})*(?:[.,]\d{1,2})?)\s*(?:zł|pln)/i);
+    if (!m) return null;
+    const n = Number(m[1].replace(/[ .\u00a0](?=\d{3}\b)/g, "").replace(",", "."));
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+async function pool<T, R>(items: T[], size: number, fn: (x: T) => Promise<R>) {
+  const out: R[] = new Array(items.length);
+  let i = 0;
+  await Promise.all(Array.from({ length: Math.min(size, items.length) }, async () => {
+    while (i < items.length) { const k = i++; out[k] = await fn(items[k]); }
+  }));
+  return out;
+}
 
 const range = (vals: (number | null | undefined)[]): Range => {
   const v = vals.filter((x): x is number => typeof x === "number" && Number.isFinite(x) && x > 0);
@@ -66,9 +97,9 @@ function mfNumber(m: { type: string; value: string }): number | null {
 
 export async function priceTags(db: SupabaseClient, unitIds: string[]) {
   const { data: units } = await db.from("units")
-    .select("id, code, variant_id, variant:variants(option, product_id, product:products(title)), location:locations(store_id, store:stores(name, code, shopify_domain))")
+    .select("id, code, variant_id, variant:variants(option, product_id, product:products(title, style_sku)), location:locations(store_id, store:stores(name, code, shopify_domain))")
     .in("id", unitIds.slice(0, 200)).order("number");
-  type U = { id: string; code: string; variant_id: string; variant: { option: string; product_id: string; product: { title: string } }; location: { store_id: string; store: { name: string; code: string; shopify_domain: string | null } } };
+  type U = { id: string; code: string; variant_id: string; variant: { option: string; product_id: string; product: { title: string; style_sku: string | null } }; location: { store_id: string; store: { name: string; code: string; shopify_domain: string | null } } };
   const list = (units ?? []) as unknown as U[];
   const productIds = [...new Set(list.map((u) => u.variant.product_id))];
   const { data: variants } = productIds.length ? await db.from("variants").select("id, product_id").in("product_id", productIds) : { data: [] };
@@ -79,7 +110,7 @@ export async function priceTags(db: SupabaseClient, unitIds: string[]) {
   const [{ data: links }, { data: hist }, { data: plinks }] = await Promise.all([
     variantIds.length ? db.from("variant_store_links").select("variant_id, store_id, price, compare_at_price, base_sku, shopify_variant_id").in("variant_id", variantIds) : Promise.resolve({ data: [] }),
     variantIds.length ? db.from("variant_price_history").select("variant_id, store_id, price, valid_from").in("variant_id", variantIds).gte("valid_from", since).order("valid_from") : Promise.resolve({ data: [] }),
-    productIds.length ? db.from("product_store_links").select("product_id, store_id, shopify_product_id").in("product_id", productIds) : Promise.resolve({ data: [] }),
+    productIds.length ? db.from("product_store_links").select("product_id, store_id, shopify_product_id, handle").in("product_id", productIds) : Promise.resolve({ data: [] }),
   ]);
   type L = { variant_id: string; store_id: string; price: number | null; compare_at_price: number | null; base_sku: string | null; shopify_variant_id: string | null };
   const linkRows = (links ?? []) as L[];
@@ -105,6 +136,23 @@ export async function priceTags(db: SupabaseClient, unitIds: string[]) {
     }
   }
 
+  // Blok Omnibus Insight na stronie produktu (gdy metapola są prywatne aplikacji): kwota dla każdego rozmiaru.
+  const shopLowest = new Map<string, number>();
+  const jobs: { key: string; domain: string; handle: string; gid: string | null }[] = [];
+  for (const key of [...new Set(list.map((u) => `${u.variant.product_id}|${u.location.store_id}`))].slice(0, 30)) {
+    const [pid, sid] = key.split("|");
+    if (omni.get(key)?.product || omni.get(key)?.variants.size) continue;
+    const u = list.find((x) => x.variant.product_id === pid && x.location.store_id === sid)!;
+    const handle = (plinks ?? []).find((p) => p.product_id === pid && p.store_id === sid)?.handle as string | undefined;
+    if (!handle || !u.location.store.shopify_domain) continue;
+    const vids = byProduct.get(pid) ?? [];
+    for (const l of linkRows.filter((x) => x.store_id === sid && vids.includes(x.variant_id) && x.price !== null).slice(0, 20)) {
+      jobs.push({ key: `${sid}|${l.variant_id}`, domain: u.location.store.shopify_domain, handle, gid: l.shopify_variant_id });
+    }
+  }
+  const found = await pool(jobs.slice(0, 80), 6, (j) => storefrontLowest(j.domain, j.handle, j.gid));
+  jobs.slice(0, 80).forEach((j, k) => { if (found[k]) shopLowest.set(j.key, found[k]!); });
+
   return list.map((u): PriceTag & { omnibusFields: string[]; historyComplete: boolean } => {
     const storeId = u.location.store_id;
     const vids = byProduct.get(u.variant.product_id) ?? [u.variant_id];
@@ -118,6 +166,8 @@ export async function priceTags(db: SupabaseClient, unitIds: string[]) {
     const lows = inStore.map((l) => {
       const fromMf = o?.variants.get(l.shopify_variant_id ?? "") ?? o?.product ?? null;
       if (fromMf) { lowestSource = "aplikacja Omnibus (Shopify)"; return fromMf; }
+      const fromShop = shopLowest.get(`${storeId}|${l.variant_id}`);
+      if (fromShop) { lowestSource = "Omnibus Insight (strona sklepu)"; return fromShop; }
       const r = lowestFromHistory(((hist ?? []) as (Hist & { store_id: string })[]).filter((h) => h.variant_id === l.variant_id && h.store_id === storeId), Number(l.price));
       if (!r.complete) complete = false;
       return r.value ?? Number(l.price);
@@ -127,6 +177,7 @@ export async function priceTags(db: SupabaseClient, unitIds: string[]) {
       unitId: u.id, code: u.code, title: u.variant.product.title, option: u.variant.option, sku: own ?? u.code, skuIsBase: !!own,
       price, compareAt, promo: promoRows.length > 0, lowest30: range(lows), lowestSource, storeName: u.location.store.name,
       omnibusFields: o?.found ?? [], historyComplete: complete,
+      used: isUsed(u.variant.product.style_sku, u.variant.product.title, u.variant.option),
     };
   });
 }

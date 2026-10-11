@@ -6,7 +6,7 @@ import { Notice, PageHeader } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
 import { matchPieces } from "@/lib/orders/pieces";
 import type { LineItem } from "@/lib/sync/shop-orders";
-import { assignContractToPiece, assignContractToUnit } from "../../actions";
+import { assignContractToPiece, assignContractToUnit, detachUnit } from "../../actions";
 
 /** Przypisanie umowy (np. bez rzeczy) do sztuki w magazynie / sprzedanej sztuki albo do pozycji zamówienia. */
 export default async function AssignContractPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<Record<string, string | undefined>> }) {
@@ -41,6 +41,7 @@ export default async function AssignContractPage({ params, searchParams }: { par
       .filter((p) => p.sale?.status !== "cancelled" && !(p.sale as { unit?: { contract_id: string | null } | null } | null)?.unit?.contract_id)]));
   }
   const items = (c.items ?? []) as { title: string; option: string }[];
+  const { data: attached } = await supabase.from("units_list").select("id, code, title, option, status, sold_at, received_at").eq("contract_id", c.id).order("received_at");
 
   return (
     <>
@@ -50,6 +51,27 @@ export default async function AssignContractPage({ params, searchParams }: { par
         actions={<Link className="btn-secondary" href={`/umowy/${c.id}`}>Wróć do umowy</Link>}
       />
       {sp.blad && <div className="mb-4"><Notice tone="error">{sp.blad}</Notice></div>}
+      {sp.ok && <div className="mb-4"><Notice tone="ok">{sp.ok}</Notice></div>}
+      <section className="card mb-5 p-4">
+        <h2 className="h2 mb-2">Przypisane do tej umowy</h2>
+        {!attached?.length ? <p className="text-sm text-muted">Umowa nie jest przypisana do żadnej rzeczy – jest na liście niewykorzystanych.</p> : (
+          <ul className="divide-y divide-line">
+            {attached.map((u) => (
+              <li key={u.id} className="flex flex-wrap items-center gap-3 py-2 text-sm">
+                <Link className="text-accent hover:underline" href={`/magazyn/${u.id}`}>{u.title} · <b>{u.option}</b></Link>
+                <span className="font-mono text-xs text-muted">{u.code}</span>
+                <span className="text-muted">{UNIT_STATUS[u.status] ?? u.status}</span>
+                <form action={detachUnit} className="ml-auto">
+                  <input type="hidden" name="id" value={c.id} />
+                  <input type="hidden" name="unit_id" value={u.id} />
+                  <input type="hidden" name="back" value={`/umowy/${c.id}/przypisz${source === "sprzedaz" ? "?zrodlo=sprzedaz" : ""}`} />
+                  <SubmitButton className="btn-danger px-2.5 py-1 text-xs" pendingText="…">Odepnij</SubmitButton>
+                </form>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
       <nav className="mb-4 flex gap-1 border-b border-line text-sm">
         {[["magazyn", "Magazyn (sztuki bez umowy)"], ["sprzedaz", "Sprzedaż (zamówienia)"]].map(([k, label]) => (
           <Link key={k} href={`/umowy/${c.id}/przypisz?zrodlo=${k}`} className={`-mb-px border-b-2 px-3 py-2 ${source === k ? "border-accent font-medium" : "border-transparent text-muted hover:text-ink"}`}>{label}</Link>

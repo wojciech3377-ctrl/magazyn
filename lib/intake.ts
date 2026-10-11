@@ -14,7 +14,10 @@ export type IntakeItemStatus = "proposed" | "offered" | "accepted" | "rejected" 
 export type IntakeItem = {
   id: string; intake_id: string; position: number; variant_id: string | null; title: string; option: string | null;
   proposed_price: number; offer_price: number | null; final_price: number | null; status: IntakeItemStatus; unit_id: string | null;
+  purchase_form: "vat_margin" | "vat_23";
 };
+
+export const PURCHASE_FORM_SHORT: Record<string, string> = { vat_margin: "VAT marża", vat_23: "VAT 23%" };
 export type Intake = {
   id: string; consignor_id: string; location_id: string; status: IntakeStatus; note: string | null; tracking: string | null; carrier: string | null;
   delivery_id: string | null; created_at: string; decided_at: string | null; sent_at: string | null; received_at: string | null;

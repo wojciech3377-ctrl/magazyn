@@ -5,9 +5,10 @@ import { dateOnly, dateTime, money } from "@/lib/labels";
 import { Pill } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
 import { VariantPick } from "@/components/VariantPick";
-import { INTAKE_STATUS, type Intake, type IntakeItem } from "@/lib/intake";
+import { INTAKE_STATUS, PURCHASE_FORM_SHORT, type Intake, type IntakeItem } from "@/lib/intake";
 import { acceptContract, rejectContract } from "../umowy/actions";
 import { decideIntake, offerContract, receiveContractUnits, receiveIntake } from "./intake-actions";
+import { ContractDecision, IntakeDecisionCells } from "./DecisionControls";
 
 type Loc = { id: string; name: string; store_id: string; store: { name: string } | null };
 type IntakeRow = Intake & { items: IntakeItem[]; consignor: { id: string; name: string } | null };
@@ -65,19 +66,15 @@ export async function AcceptTab() {
           {i.note && <p className="rounded bg-panel p-2 text-sm">{i.note}</p>}
           <div className="overflow-x-auto">
             <table className="table">
-              <thead><tr><th>Rzecz</th><th>Rozmiar</th><th className="text-right">Kwota komisanta</th><th>Decyzja</th><th>Twoja kwota (oferta)</th></tr></thead>
+              <thead><tr><th>Rzecz</th><th>Rozmiar</th><th>Rozliczenie</th><th className="text-right">Kwota komisanta</th><th>Decyzja</th><th>Twoja kwota (oferta)</th></tr></thead>
               <tbody>
                 {[...i.items].sort((a, b) => a.position - b.position).filter((x) => x.status === "proposed").map((x) => (
                   <tr key={x.id}>
                     <td>{x.title}{!x.variant_id && <span className="ml-1 text-xs text-warn">(spoza katalogu)</span>}</td>
                     <td className="font-medium">{x.option ?? "–"}</td>
+                    <td className="whitespace-nowrap text-sm">{PURCHASE_FORM_SHORT[x.purchase_form] ?? "VAT marża"}</td>
                     <td className="text-right tabular-nums">{money(x.proposed_price)}</td>
-                    <td className="whitespace-nowrap text-sm">
-                      <label className="mr-3 inline-flex items-center gap-1 text-ok"><input type="radio" name={`d_${x.id}`} value="yes" required /> Tak</label>
-                      <label className="mr-3 inline-flex items-center gap-1 text-bad"><input type="radio" name={`d_${x.id}`} value="no" /> Nie</label>
-                      <label className="inline-flex items-center gap-1 text-accent"><input type="radio" name={`d_${x.id}`} value="offer" /> Oferta</label>
-                    </td>
-                    <td className="w-36"><input className="input" name={`o_${x.id}`} inputMode="decimal" placeholder="kwota przy Ofercie" aria-label="Kwota oferty" /></td>
+                    <IntakeDecisionCells id={x.id} />
                   </tr>
                 ))}
               </tbody>
@@ -94,11 +91,6 @@ export async function AcceptTab() {
         const items = c.items ?? [];
         const needsLocation = !c.location_id && items.some((it) => !it.unit_id && it.variant_id);
         const needsAssign = items.some((it) => !it.unit_id && !it.variant_id);
-        const locSelect = needsLocation ? (
-          <select className="input w-56" name="location_id" aria-label="Dokąd przyjdzie towar">
-            {locs.map((l) => <option key={l.id} value={l.id}>{l.store?.name} · {l.name}</option>)}
-          </select>
-        ) : null;
         return (
           <div key={c.id} className="card space-y-3 p-4">
             <div className="flex flex-wrap items-center gap-2">
@@ -106,47 +98,12 @@ export async function AcceptTab() {
               <b><Link className="text-accent hover:underline" href={`/umowy/${c.id}`}>Umowa nr {c.number}</Link> · {c.seller_name ?? c.counterparty}</b>
               <span className="text-sm text-muted">podpisana {dateTime(c.signed_at)}{c.source === "general" ? " · z ogólnego linku" : ""}{c.location_id ? ` · towar na ${locName(c.location_id)}` : ""}</span>
             </div>
-            <form action={offerContract} id={`oferta-${c.id}`}>
-              <input type="hidden" name="id" value={c.id} />
-              <div className="overflow-x-auto">
-                <table className="table">
-                  <thead><tr><th>Pozycja</th><th>Rozmiar</th><th className="text-right">Ilość</th>{prices && <th className="text-right">Cena sprzedającego</th>}<th>Twoja oferta</th></tr></thead>
-                  <tbody>
-                    {items.map((it, idx) => (
-                      <tr key={idx}>
-                        <td>{it.title}{!it.unit_id && !it.variant_id && <span className="ml-1 text-xs text-warn">(do przypisania do katalogu)</span>}</td>
-                        <td className="font-medium">{it.option}</td>
-                        <td className="text-right">{it.qty ?? 1}</td>
-                        {prices && <td className="text-right tabular-nums">{money(it.price)}</td>}
-                        <td className="w-36"><input className="input" name={`p_${idx}`} inputMode="decimal" placeholder={prices ? String(it.price) : ""} aria-label="Nowa cena" /></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </form>
-            <div className="flex flex-wrap items-end gap-2">
-              <form action={acceptContract} className="flex items-end gap-2">
-                <input type="hidden" name="id" value={c.id} />
-                <input type="hidden" name="back" value={BACK} />
-                {locSelect}
-                <SubmitButton className="btn" pendingText="…">Tak – zatwierdź</SubmitButton>
-              </form>
-              <form action={rejectContract}>
-                <input type="hidden" name="id" value={c.id} />
-                <input type="hidden" name="back" value={BACK} />
-                <SubmitButton className="btn-danger" pendingText="…">Nie – odrzuć</SubmitButton>
-              </form>
-              <span className="flex items-end gap-2">
-                {needsLocation && (
-                  <select className="input w-56" name="location_id" form={`oferta-${c.id}`} aria-label="Dokąd przyjdzie towar (oferta)">
-                    {locs.map((l) => <option key={l.id} value={l.id}>{l.store?.name} · {l.name}</option>)}
-                  </select>
-                )}
-                <input className="input w-64" name="note" form={`oferta-${c.id}`} placeholder="Wiadomość do sprzedającego (opcjonalnie)" maxLength={500} />
-                <button className="btn-secondary border-accent text-accent" form={`oferta-${c.id}`}>Oferta – wyślij nowe ceny</button>
-              </span>
-            </div>
+            <ContractDecision
+              id={c.id} back={BACK} showPrices={prices} needsLocation={needsLocation}
+              items={items.map((it) => ({ title: it.title, option: it.option, qty: Number(it.qty ?? 1), price: Number(it.price), unassigned: !it.unit_id && !it.variant_id }))}
+              locations={locs.map((l) => ({ id: l.id, label: `${l.store?.name ?? ""} · ${l.name}` }))}
+              accept={acceptContract} reject={rejectContract} offer={offerContract}
+            />
             {needsAssign && <p className="text-xs text-warn">Po zatwierdzeniu przypisz pozycje do katalogu na stronie umowy – wtedy powstaną sztuki „w drodze”.</p>}
           </div>
         );
@@ -206,13 +163,14 @@ export async function TransitTab() {
             </div>
             <div className="overflow-x-auto">
               <table className="table">
-                <thead><tr><th>Dotarło</th><th>Rzecz</th><th>Rozmiar</th>{profile.can_see_prices && <th className="text-right">Kwota komisanta</th>}<th>Produkt z katalogu</th></tr></thead>
+                <thead><tr><th>Dotarło</th><th>Rzecz</th><th>Rozmiar</th><th>Rozliczenie</th>{profile.can_see_prices && <th className="text-right">Kwota komisanta</th>}<th>Produkt z katalogu</th></tr></thead>
                 <tbody>
                   {items.map((x) => (
                     <tr key={x.id}>
                       <td><input type="checkbox" name={`got_${x.id}`} defaultChecked className="h-4 w-4" aria-label="Dotarło" /></td>
                       <td>{x.title}</td>
                       <td className="font-medium">{x.option ?? "–"}</td>
+                      <td className="whitespace-nowrap text-sm">{PURCHASE_FORM_SHORT[x.purchase_form] ?? "VAT marża"}</td>
                       {profile.can_see_prices && <td className="text-right tabular-nums">{money(x.final_price)}</td>}
                       <td className="min-w-64">{x.variant_id ? <span className="text-sm text-ok">z katalogu ✓</span> : <VariantPick name={`v_${x.id}`} storeId={loc?.store_id ?? ""} label="Wybierz produkt i rozmiar" />}</td>
                     </tr>

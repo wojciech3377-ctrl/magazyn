@@ -1,5 +1,7 @@
 "use client";
 
+import { FileButton } from "@/components/FileButton";
+
 import { useActionState, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { attachConsignorInvoice, createConsignorContract, prepareInvoiceUpload, type DocState } from "./actions";
@@ -77,11 +79,11 @@ export function SoldList({ rows }: { rows: SoldRow[] }) {
             <span className="text-sm text-muted">zaznaczono: {picked.size}</span>
           </div>
           <fieldset className="space-y-2 text-sm">
-            <label className="flex items-start gap-2">
+            <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-line bg-white p-3 transition-colors hover:border-accent hover:bg-sky-50 has-[:checked]:border-accent has-[:checked]:bg-sky-50 has-[:checked]:ring-1 has-[:checked]:ring-accent">
               <input type="radio" name="doc_mode" checked={mode === "contract"} onChange={() => setMode("contract")} className="mt-1" />
               <span>Wypełnię umowę kupna online <span className="block text-muted">Wpiszesz swoje dane i podpiszesz umowę na ekranie. Pozycje i kwoty są już uzupełnione.</span></span>
             </label>
-            <label className="flex items-start gap-2">
+            <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-line bg-white p-3 transition-colors hover:border-accent hover:bg-sky-50 has-[:checked]:border-accent has-[:checked]:bg-sky-50 has-[:checked]:ring-1 has-[:checked]:ring-accent">
               <input type="radio" name="doc_mode" checked={mode === "invoice"} onChange={() => setMode("invoice")} className="mt-1" />
               <span>Mam fakturę <span className="block text-muted">Wgraj fakturę wystawioną na nas (PDF, JPG albo PNG).</span></span>
             </label>
@@ -89,7 +91,7 @@ export function SoldList({ rows }: { rows: SoldRow[] }) {
           {mode === "invoice" && (
             <div className="grid gap-2 sm:grid-cols-3">
               <div className="sm:col-span-3 space-y-1 text-sm">
-                <input type="file" accept="application/pdf,image/jpeg,image/png" onChange={(e) => onFile(e.target.files?.[0])} aria-label="Plik faktury" />
+                <FileButton label="Wybierz plik faktury" accept="application/pdf,image/jpeg,image/png" onFile={onFile} />
                 {file && <input type="hidden" name="file_path" value={file.path} />}
                 {file && <input type="hidden" name="file_name" value={file.name} />}
                 {upload.busy && <p className="text-muted">Wgrywam…</p>}

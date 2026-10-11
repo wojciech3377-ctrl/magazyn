@@ -1,5 +1,7 @@
 "use client";
 
+import { FileButton } from "./FileButton";
+
 import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 
@@ -13,8 +15,7 @@ const MAX_BYTES = 25 * 1024 * 1024; // limit bucketu ustawiony w migracji
 export function ContractFileInput({ label = "Plik umowy (PDF lub zdjęcie)" }: { label?: string }) {
   const [state, setState] = useState<{ path?: string; name?: string; status: "idle" | "uploading" | "done" | "error"; message?: string }>({ status: "idle" });
 
-  async function onChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
+  async function onChange(file: File | undefined) {
     if (!file) return setState({ status: "idle" });
     if (!ALLOWED.includes(file.type)) return setState({ status: "error", message: "Wybierz PDF albo zdjęcie (JPG, PNG, HEIC)." });
     if (file.size > MAX_BYTES) return setState({ status: "error", message: "Plik może mieć najwyżej 25 MB." });
@@ -29,8 +30,8 @@ export function ContractFileInput({ label = "Plik umowy (PDF lub zdjęcie)" }: {
 
   return (
     <div>
-      <label className="label">{label}</label>
-      <input className="input" type="file" accept="application/pdf,image/*" onChange={onChange} aria-label={label} />
+      <span className="label">{label}</span>
+      <FileButton label="Wybierz plik umowy" accept="application/pdf,image/*" onFile={onChange} hint="PDF albo zdjęcie" />
       <input type="hidden" name="file_path" value={state.path ?? ""} />
       <input type="hidden" name="file_name" value={state.name ?? ""} />
       {state.status === "uploading" && <p className="mt-1 text-xs text-muted">Wgrywam plik…</p>}

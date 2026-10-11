@@ -20,14 +20,28 @@ export async function searchCatalog(q: string): Promise<CatalogHit[]> {
   const { db } = await requireConsignor();
   const text = q.trim().replace(/[,()*%\\]/g, " ").trim();
   if (text.length < 2) return [];
-  const ids = await findVariantIds(db, text);
+  // Nazwa, SKU modelu, SKU rozmiaru (Shopify / Base), EAN; spacje i myślniki traktowane jak dowolny znak
+  // (np. „dd1391 100” znajdzie DD1391-100), a słowa nazwy w dowolnej kolejności.
+  const loose = `%${text.split(/[\s\-_/]+/).filter(Boolean).join("%")}%`;
+  const tokens = text.split(/\s+/).filter((t) => t.length >= 2).slice(0, 6);
+  let byWords = db.from("products").select("id").limit(200);
+  for (const t of tokens) byWords = byWords.ilike("title", `%${t}%`);
+  const [direct, prods, words, links] = await Promise.all([
+    findVariantIds(db, text),
+    db.from("products").select("id").or(`title.ilike.${loose},style_sku.ilike.${loose}`).limit(200),
+    tokens.length > 1 ? byWords : Promise.resolve({ data: [] as { id: string }[] }),
+    db.from("variant_store_links").select("variant_id").or(`sku.ilike.${loose},base_sku.ilike.${loose}`).limit(300),
+  ]);
+  const productIds = [...new Set([...(prods.data ?? []), ...(words.data ?? [])].map((p) => p.id as string))];
+  const { data: pv } = productIds.length ? await db.from("variants").select("id").in("product_id", productIds.slice(0, 200)) : { data: [] };
+  const ids = [...new Set([...direct, ...(links.data ?? []).map((l) => l.variant_id as string), ...(pv ?? []).map((v) => v.id as string)])];
   if (!ids.length) return [];
-  const { data } = await db.from("variants").select("id, option, position, product:products(title, image_url)").in("id", ids.slice(0, 60));
+  const { data } = await db.from("variants").select("id, option, position, product:products(title, image_url)").in("id", ids.slice(0, 150));
   const collator = new Intl.Collator("pl", { numeric: true });
   return (data ?? []).map((v) => {
     const p = v.product as unknown as { title: string; image_url: string | null };
     return { variantId: v.id as string, title: p.title, option: v.option as string, image: p.image_url };
-  }).sort((a, b) => a.title.localeCompare(b.title) || collator.compare(a.option, b.option)).slice(0, 40);
+  }).sort((a, b) => a.title.localeCompare(b.title) || collator.compare(a.option, b.option)).slice(0, 60);
 }
 
 /** Nowe zgłoszenie: rzeczy, które komisant chce nam wysłać, z jego kwotami – czeka na naszą decyzję. */
@@ -55,7 +69,9 @@ export async function createIntake(_: IntakeState, fd: FormData): Promise<Intake
     const price = money(r.price);
     if (!title) return { error: `Pozycja ${i + 1}: wybierz produkt albo wpisz nazwę.` };
     if (!price) return { error: `Podaj swoją kwotę dla: ${title}${option ? ` ${option}` : ""}.` };
-    items.push({ position: i, variant_id: v ? String(r.variant_id) : null, title, option, proposed_price: price });
+    const form = String(r.purchase_form ?? "");
+    if (form !== "vat_margin" && form !== "vat_23") return { error: `Wybierz rozliczenie (VAT marża albo VAT 23%) dla: ${title}${option ? ` ${option}` : ""}.` };
+    items.push({ position: i, variant_id: v ? String(r.variant_id) : null, title, option, proposed_price: price, purchase_form: form });
   }
   const { data: intake, error } = await db.from("consignor_intakes").insert({
     consignor_id: consignor.id, location_id: loc.id, note: String(fd.get("note") ?? "").trim().slice(0, 500) || null,
@@ -67,7 +83,7 @@ export async function createIntake(_: IntakeState, fd: FormData): Promise<Intake
     return { error: `Nie udało się zapisać rzeczy: ${errorMessage(iErr)}` };
   }
   await mailCompany(db, `Komis: ${consignor.name} chce wysłać ${items.length} szt. – do akceptacji`,
-    `<p>Komisant <b>${escHtml(consignor.name)}</b> zgłosił rzeczy do wysłania na ${escHtml(loc.name as string)}:</p>${itemsTable(items.map((i) => ({ title: i.title, option: i.option, price: i.proposed_price })))}<p>Zdecyduj w aplikacji: Przyjęcie dostawy → Do akceptacji (Tak / Nie / Oferta).</p>`);
+    `<p>Komisant <b>${escHtml(consignor.name)}</b> zgłosił rzeczy do wysłania na ${escHtml(loc.name as string)}:</p>${itemsTable(items.map((i) => ({ title: i.title, option: i.option, price: i.proposed_price, note: i.purchase_form === "vat_23" ? "VAT 23%" : "VAT marża" })))}<p>Zdecyduj w aplikacji: Przyjęcie dostawy → Do akceptacji (Tak / Nie / Oferta).</p>`);
   revalidatePath("/komis");
   return { ok: `Zgłoszenie wysłane (${items.length} szt.). Damy znać e-mailem, gdy je sprawdzimy – nie wysyłaj jeszcze paczki.` };
 }

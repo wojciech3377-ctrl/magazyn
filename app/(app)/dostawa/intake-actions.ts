@@ -87,7 +87,7 @@ export async function receiveIntake(fd: FormData) {
       const before = deliveryId ? new Set(((await db.from("units").select("id").eq("delivery_id", deliveryId)).data ?? []).map((u) => u.id as string)) : new Set<string>();
       const { data, error } = await supabase.rpc("receive_delivery", {
         p_store_id: loc!.store_id, p_location_id: loc!.id, p_variant_id: i.variant_id, p_quantity: 1, p_status: "in_stock",
-        p_owner_type: "consignment", p_consignor_id: intake!.consignor_id, p_purchase_form: "vat_margin", p_purchase_price: null,
+        p_owner_type: "consignment", p_consignor_id: intake!.consignor_id, p_purchase_form: i.purchase_form ?? "vat_margin", p_purchase_price: null,
         p_payout_amount: i.final_price, p_contract_id: null, p_identifiers: [], p_shelf: null, p_note: "ze zgłoszenia komisanta", p_delivery_id: deliveryId,
       });
       if (error) throw error;

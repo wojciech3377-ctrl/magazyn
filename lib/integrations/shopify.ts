@@ -414,7 +414,7 @@ export async function productsUpdatedSince(domain: string, storeCode: string, si
 export async function omnibusMetafields(domain: string, storeCode: string, productGid: string) {
   const data = await shopifyGraphql<{ product: { metafields: { nodes: Mf[] }; variants: { nodes: { id: string; metafields: { nodes: Mf[] } }[] } } | null }>(domain, storeCode,
     `query($id: ID!) { product(id: $id) { metafields(first: 50) { nodes { namespace key type value } } variants(first: 100) { nodes { id metafields(first: 30) { nodes { namespace key type value } } } } } }`, { id: productGid });
-  const pick = (list: Mf[]) => list.filter((m) => /omnibus|lowest|najni|min_price|price_history|30/i.test(`${m.namespace}.${m.key}`));
+  const pick = (list: Mf[]) => list.filter((m) => /omnibus|amasty|lowest|najni|min_price|price_history/i.test(`${m.namespace}.${m.key}`));
   return {
     product: pick(data.product?.metafields.nodes ?? []),
     variants: new Map((data.product?.variants.nodes ?? []).map((v) => [v.id, pick(v.metafields.nodes)])),
