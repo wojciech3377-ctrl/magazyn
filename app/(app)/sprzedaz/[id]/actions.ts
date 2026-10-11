@@ -69,8 +69,11 @@ export async function createLabel(_: LabelState, fd: FormData): Promise<LabelSta
 
   const weight = num(fd, "weight") || 1;
   const size = str(fd, "size") as keyof typeof LOCKER_SIZES;
-  const dims = locker
-    ? LOCKER_SIZES[size] ?? LOCKER_SIZES.B
+  const preset = LOCKER_SIZES[size];
+  if (locker && !preset) return { error: "Wybierz wielkość: Skrytka A, B albo C." };
+  if (preset && weight > preset.maxKg) return { error: `${preset.label}: waga do ${preset.maxKg} kg.` };
+  const dims = preset
+    ? { width: preset.width, depth: preset.depth, height: preset.height }
     : { width: num(fd, "width") || 25, depth: num(fd, "depth") || 35, height: num(fd, "height") || 15 };
   const value = num(fd, "value");
   const cod = num(fd, "cod");

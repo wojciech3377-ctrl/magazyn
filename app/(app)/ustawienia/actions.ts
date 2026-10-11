@@ -312,3 +312,33 @@ export async function saveSmtp(formData: FormData) {
   clearMailCache();
   await done(`Wysyłka e-maili ustawiona – maile wychodzą z ${fromEmail || user}.`);
 }
+
+/** Sprawdzenie, czy aplikacja widzi najniższą cenę z 30 dni (metapole „Lowest price” z Omnibus Insight). */
+export async function checkOmnibus() {
+  const { supabase } = await requireAdmin();
+  const { lowestPriceDefinitions, readMetafields, omnibusMetafields } = await import("@/lib/integrations/shopify");
+  const { data: stores } = await supabase.from("stores").select("id, name, code, shopify_domain").not("shopify_domain", "is", null);
+  const out: string[] = [];
+  for (const st of stores ?? []) {
+    try {
+      const defs = await lowestPriceDefinitions(st.shopify_domain as string, st.code as string);
+      const names = [...defs.product.map((d) => `${d.name} (${d.namespace}.${d.key}, produkt)`), ...defs.variant.map((d) => `${d.name} (${d.namespace}.${d.key}, rozmiar)`)];
+      const { data: pl } = await supabase.from("product_store_links").select("shopify_product_id").eq("store_id", st.id).eq("status", "ACTIVE").order("updated_at", { ascending: false }).limit(1).maybeSingle();
+      let sample = "";
+      if (pl) {
+        const [named, heur] = await Promise.all([
+          readMetafields(st.shopify_domain as string, st.code as string, pl.shopify_product_id as string, defs),
+          omnibusMetafields(st.shopify_domain as string, st.code as string, pl.shopify_product_id as string),
+        ]);
+        const all = [...named.product, ...[...named.variants.values()].flat(), ...heur.product, ...[...heur.variants.values()].flat()];
+        sample = all.length ? ` Próbka: ${all.slice(0, 2).map((m) => `${m.namespace}.${m.key} = ${String(m.value).slice(0, 60)}`).join("; ")}.` : " Próbny produkt nie ma wartości tego metapola.";
+      }
+      out.push(names.length
+        ? `${st.name}: widzę ${names.join(", ")}.${sample}`
+        : `${st.name}: nie widzę metapola „Lowest price” – jest prywatne aplikacji Omnibus Insight. Metka bierze cenę ze strony produktu (blok Omnibus), a gdy go nie ma – z historii cen aplikacji (pełna po 30 dniach od jej startu).`);
+    } catch (e) {
+      out.push(`${st.name}: ${errorMessage(e)}`);
+    }
+  }
+  return done(out.join(" ") || "Brak sklepów Shopify.");
+}

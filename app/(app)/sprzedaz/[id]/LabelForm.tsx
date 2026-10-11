@@ -25,6 +25,8 @@ export function LabelForm({ d }: { d: LabelDefaults }) {
   const [state, action, pending] = useActionState<LabelState, FormData>(createLabel, null);
   const [service, setService] = useState<ServiceKey>(d.service);
   const locker = service === "inpost_locker";
+  const [size, setSize] = useState<string>("");
+  const custom = !locker && size === "custom";
 
   if (state?.ok && state.shipmentId) {
     return (
@@ -43,26 +45,41 @@ export function LabelForm({ d }: { d: LabelDefaults }) {
         <legend className="label mb-1">Przewoźnik</legend>
         {(Object.keys(SERVICE_LABEL) as ServiceKey[]).map((k) => (
           <label key={k} className={`cursor-pointer rounded-md border px-3 py-1.5 text-sm ${service === k ? "border-ink bg-ink text-white" : "border-line hover:bg-panel"}`}>
-            <input className="sr-only" type="radio" name="service" value={k} checked={service === k} onChange={() => setService(k)} />
+            <input className="sr-only" type="radio" name="service" value={k} checked={service === k} onChange={() => { setService(k); if (k === "inpost_locker" && size === "custom") setSize(""); }} />
             {SERVICE_LABEL[k]}
           </label>
         ))}
       </fieldset>
 
-      {locker ? (
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div>
-            <label className="label" htmlFor="point">Paczkomat odbiorcy</label>
-            <input id="point" className="input font-mono uppercase" name="point" defaultValue={d.point} placeholder="np. WAW253M" required />
-          </div>
-          <div>
-            <label className="label" htmlFor="size">Gabaryt</label>
-            <select id="size" className="input" name="size" defaultValue="B">
-              {Object.entries(LOCKER_SIZES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-            </select>
-          </div>
+      {locker && (
+        <div className="max-w-sm">
+          <label className="label" htmlFor="point">Paczkomat odbiorcy</label>
+          <input id="point" className="input font-mono uppercase" name="point" defaultValue={d.point} placeholder="np. WAW253M" required />
         </div>
-      ) : (
+      )}
+
+      <fieldset>
+        <legend className="label mb-1">Wielkość paczki</legend>
+        <div className="grid gap-2 sm:grid-cols-4">
+          {Object.entries(LOCKER_SIZES).map(([k, v]) => (
+            <label key={k} className={`flex cursor-pointer flex-col rounded-lg border-2 p-3 transition-colors hover:border-accent hover:bg-sky-50 ${size === k ? "border-accent bg-sky-50" : "border-line"}`}>
+              <input className="sr-only" type="radio" name="size" value={k} checked={size === k} onChange={() => setSize(k)} required />
+              <span className="flex items-center gap-2 font-semibold">
+                <span className="inline-flex h-7 w-7 items-center justify-center rounded bg-ink text-sm text-white">{k}</span>{v.label}
+              </span>
+              <span className="mt-1 text-xs text-muted">{v.dims} · do {v.maxKg} kg</span>
+            </label>
+          ))}
+          {!locker && (
+            <label className={`flex cursor-pointer flex-col justify-center rounded-lg border-2 p-3 transition-colors hover:border-accent hover:bg-sky-50 ${size === "custom" ? "border-accent bg-sky-50" : "border-line"}`}>
+              <input className="sr-only" type="radio" name="size" value="custom" checked={size === "custom"} onChange={() => setSize("custom")} />
+              <span className="font-semibold">Inne wymiary</span>
+              <span className="mt-1 text-xs text-muted">wpiszesz sam</span>
+            </label>
+          )}
+        </div>
+      </fieldset>
+      {custom && (
         <div className="grid grid-cols-3 gap-3">
           <div><label className="label" htmlFor="width">Szer. (cm)</label><input id="width" className="input" name="width" inputMode="numeric" defaultValue="25" /></div>
           <div><label className="label" htmlFor="depth">Dł. (cm)</label><input id="depth" className="input" name="depth" inputMode="numeric" defaultValue="35" /></div>
@@ -97,7 +114,7 @@ export function LabelForm({ d }: { d: LabelDefaults }) {
       </div>
 
       {state?.error && <p className="text-sm text-bad" role="alert">{state.error}</p>}
-      <button className="btn" disabled={pending}>{pending ? "Tworzę etykietę…" : `Utwórz etykietę ${SERVICE_LABEL[service]}`}</button>
+      <button className="btn" disabled={pending || !size || (locker && size === "custom")}>{pending ? "Tworzę etykietę…" : `Utwórz etykietę ${SERVICE_LABEL[service]}`}</button>
       <p className="text-xs text-muted">Przesyłka zostaje zamówiona w Furgonetce i obciąża konto. {locker ? "Nadanie w dowolnym paczkomacie (zmienisz w Ustawieniach)." : "Odbiór przez kuriera z adresu nadawcy z Ustawień."}</p>
     </form>
   );

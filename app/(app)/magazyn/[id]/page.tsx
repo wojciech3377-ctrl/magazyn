@@ -1,9 +1,12 @@
 import Link from "next/link";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { productImages } from "@/lib/product-images";
+import { ProductGallery } from "@/components/ProductGallery";
 import { notFound } from "next/navigation";
 import { requireProfile } from "@/lib/auth";
 import { UNIT_SELECT, type UnitRow } from "@/lib/queries/units";
 import { CONTRACT_TYPE, dateOnly, dateTime, EVENT_TYPE, money, PURCHASE_FORM, SALE_STATUS, UNIT_STATUS } from "@/lib/labels";
-import { Field, Notice, PageHeader, Pill, StatusBadge, Thumb } from "@/components/ui";
+import { Field, Notice, PageHeader, Pill, StatusBadge } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
 import { changeStatus, deleteUnit, updateUnit } from "../actions";
 
@@ -37,6 +40,7 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
     u.contract_id ? supabase.from("contracts").select("*").eq("id", u.contract_id).single() : Promise.resolve({ data: null }),
   ]);
 
+  const images = await productImages(createAdminClient(), u.variant.product.id, u.location.store_id, u.variant.product.image_url).catch(() => []);
   let fileUrl: string | null = null;
   if (contract?.file_path) {
     const { data: signed } = await supabase.storage.from("contracts").createSignedUrl(contract.file_path, 600);
@@ -51,6 +55,7 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
         actions={
           <>
             <Link className="btn-secondary" href={`/etykiety?ids=${u.id}`} target="_blank">Drukuj etykietę</Link>
+            <a className="btn-secondary" href={`/metka?ids=${u.id}`} target="_blank" rel="noreferrer">Wydrukuj metkę</a>
             <Link className="btn-secondary" href="/magazyn">Wróć do listy</Link>
           </>
         }
@@ -61,8 +66,8 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
       <div className="grid gap-5 lg:grid-cols-3">
         <div className="min-w-0 space-y-5 lg:col-span-2">
           <section className="card p-4">
+            <div className="mb-4"><ProductGallery images={images} title={u.variant.product.title} /></div>
             <div className="mb-4 flex items-center gap-3">
-              <Thumb src={u.variant.product.image_url} alt="" />
               <div className="text-sm">
                 <div>SKU modelu: <b>{u.variant.product.style_sku ?? "–"}</b></div>
                 <div className="text-muted">{u.location.store.name} · {u.location.name}</div>

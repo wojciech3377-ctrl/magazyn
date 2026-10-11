@@ -8,7 +8,7 @@ import { listWebhooks, shopifyCredentials, WEBHOOK_TOPICS } from "@/lib/integrat
 import { getBuyerSignature, getCompany } from "@/lib/contracts/settings";
 import { getSmtpSettings, mailConfig } from "@/lib/mail";
 import { ContractSettings } from "./ContractSettings";
-import { addExclusion, createUser, deleteExclusion, disconnectFurgonetka, importInitialStock, purgeExcluded, purgeNonShopify, registerWebhooks, runStockNow, saveSmtp, saveInvoiceSettings, saveLocation, saveSender, saveShopifyLocation, saveStockMaster, saveStore, saveUser } from "./actions";
+import { addExclusion, createUser, deleteExclusion, disconnectFurgonetka, importInitialStock, purgeExcluded, purgeNonShopify, registerWebhooks, runStockNow, saveSmtp, saveInvoiceSettings, saveLocation, saveSender, saveShopifyLocation, saveStockMaster, saveStore, saveUser, checkOmnibus } from "./actions";
 import { compareStock, getStockMaster, planPushToShopify, shopifyLocations, type ShopifyLocation } from "@/lib/sync/shopify-stock";
 import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/furgonetka";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -171,6 +171,16 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
                 </form>
               ))}
             </div>
+          </section>
+          )}
+
+          {tab === "sklepy" && (
+          <section className="card flex flex-wrap items-center gap-3 p-4">
+            <div className="min-w-64 flex-1">
+              <h2 className="h2 mb-1">Najniższa cena z 30 dni (metki)</h2>
+              <p className="text-sm text-muted">Sprawdza, czy aplikacja widzi metapole „Lowest price” z Omnibus Insight. Niezależnie od tego aplikacja od 11.10 zapamiętuje każdą zmianę ceny.</p>
+            </div>
+            <form action={checkOmnibus}><SubmitButton className="btn-secondary" pendingText="Sprawdzam…">Sprawdź Omnibus</SubmitButton></form>
           </section>
           )}
 

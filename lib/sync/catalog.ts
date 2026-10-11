@@ -108,17 +108,18 @@ export async function upsertShopifyProducts(db: SupabaseClient, store: Store, al
   const { error: e2 } = await db.from("products").upsert(uniqueRows, { onConflict: "id" });
   if (e2) throw e2;
 
-  const { error: e3 } = await db.from("product_store_links").upsert(
-    products.map((p) => ({
-      product_id: productIdByGid.get(p.id)!,
-      store_id: store.id,
-      shopify_product_id: p.id,
-      handle: p.handle,
-      status: p.status,
-      updated_at: new Date().toISOString(),
-    })),
-    { onConflict: "store_id,shopify_product_id" },
-  );
+  const plRows = products.map((p) => ({
+    product_id: productIdByGid.get(p.id)!,
+    store_id: store.id,
+    shopify_product_id: p.id,
+    handle: p.handle,
+    status: p.status,
+    ...(p.tags ? { tags: p.tags } : {}),
+    updated_at: new Date().toISOString(),
+  }));
+  let { error: e3 } = await db.from("product_store_links").upsert(plRows, { onConflict: "store_id,shopify_product_id" });
+  // Baza bez migracji 0032 (brak kolumny tagów) – zapis bez tagów.
+  if (e3 && /tags/.test(e3.message)) ({ error: e3 } = await db.from("product_store_links").upsert(plRows.map(({ tags: _t, ...r }) => r), { onConflict: "store_id,shopify_product_id" }));
   if (e3) throw e3;
 
   // Warianty
@@ -202,7 +203,7 @@ export async function upsertShopifyProducts(db: SupabaseClient, store: Store, al
 const PAGE_QUERY = `query($after: String) {
   products(first: 100, after: $after) {
     nodes {
-      id title handle vendor productType status
+      id title handle vendor productType status tags
       featuredMedia { preview { image { url } } }
       variants(first: 100) { nodes { id title sku barcode position price compareAtPrice inventoryItem { id tracked } } }
     }

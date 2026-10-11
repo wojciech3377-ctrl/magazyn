@@ -1,6 +1,16 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { omnibusMetafields } from "@/lib/integrations/shopify";
+import { lowestPriceDefinitions, omnibusMetafields, readMetafields } from "@/lib/integrations/shopify";
+
+/** Definicje metapola „Lowest price” (Omnibus Insight) w sklepie – pamiętane 6 godzin. */
+const defsCache = new Map<string, { at: number; defs: Awaited<ReturnType<typeof lowestPriceDefinitions>> }>();
+async function defsFor(domain: string, code: string) {
+  const hit = defsCache.get(domain);
+  if (hit && Date.now() - hit.at < 6 * 3600_000) return hit.defs;
+  const defs = await lowestPriceDefinitions(domain, code).catch(() => ({ variant: [], product: [] }));
+  defsCache.set(domain, { at: Date.now(), defs });
+  return defs;
+}
 
 /**
  * Metka sklepowa: cena modelu (zakres po wszystkich rozmiarach w sklepie), promocja (cena przed obniżką)
@@ -14,8 +24,12 @@ export type PriceTag = {
   price: Range; compareAt: Range; promo: boolean; lowest30: Range; lowestSource: string; storeName: string; used: boolean;
 };
 
-/** Używane: znacznik w SKU modelu, nazwie albo rozmiarze (np. DM7866-200-USED). */
-export const isUsed = (...texts: (string | null | undefined)[]) => texts.some((t) => /\bused\b|-used|używan|uzywan/i.test(t ?? ""));
+/** Używane: produkt ma w Shopify tag „reused” (w sklepie sztuki, a gdy go tam nie ma – w którymkolwiek). */
+export function isReused(links: { store_id: string; tags?: string[] | null }[], storeId?: string) {
+  const has = (l: { tags?: string[] | null }) => (l.tags ?? []).some((t) => t.trim().toLowerCase() === "reused");
+  const own = storeId ? links.filter((l) => l.store_id === storeId) : [];
+  return (own.length ? own : links).some(has);
+}
 
 /**
  * Najniższa cena z bloku Omnibus Insight na stronie produktu w sklepie (blok aplikacji w motywie).
@@ -110,7 +124,7 @@ export async function priceTags(db: SupabaseClient, unitIds: string[]) {
   const [{ data: links }, { data: hist }, { data: plinks }] = await Promise.all([
     variantIds.length ? db.from("variant_store_links").select("variant_id, store_id, price, compare_at_price, base_sku, shopify_variant_id").in("variant_id", variantIds) : Promise.resolve({ data: [] }),
     variantIds.length ? db.from("variant_price_history").select("variant_id, store_id, price, valid_from").in("variant_id", variantIds).gte("valid_from", since).order("valid_from") : Promise.resolve({ data: [] }),
-    productIds.length ? db.from("product_store_links").select("product_id, store_id, shopify_product_id, handle").in("product_id", productIds) : Promise.resolve({ data: [] }),
+    productIds.length ? db.from("product_store_links").select("product_id, store_id, shopify_product_id, handle, tags").in("product_id", productIds) : Promise.resolve({ data: [] }),
   ]);
   type L = { variant_id: string; store_id: string; price: number | null; compare_at_price: number | null; base_sku: string | null; shopify_variant_id: string | null };
   const linkRows = (links ?? []) as L[];
@@ -123,7 +137,17 @@ export async function priceTags(db: SupabaseClient, unitIds: string[]) {
     const gid = (plinks ?? []).find((p) => p.product_id === pid && p.store_id === sid)?.shopify_product_id as string | undefined;
     if (!gid || !u.location.store.shopify_domain) continue;
     try {
-      const mf = await omnibusMetafields(u.location.store.shopify_domain, u.location.store.code, gid);
+      const domain = u.location.store.shopify_domain;
+      const defs = await defsFor(domain, u.location.store.code);
+      const [heur, named] = await Promise.all([
+        omnibusMetafields(domain, u.location.store.code, gid),
+        readMetafields(domain, u.location.store.code, gid, defs).catch(() => ({ product: [], variants: new Map() })),
+      ]);
+      // Najpierw metapola z definicji „Lowest price”, potem znalezione po nazwie.
+      const mf = {
+        product: [...named.product, ...heur.product],
+        variants: new Map([...heur.variants.keys(), ...named.variants.keys()].map((k) => [k, [...(named.variants.get(k) ?? []), ...(heur.variants.get(k) ?? [])]])),
+      };
       const vmap = new Map<string, number>();
       for (const [vid, ms] of mf.variants) { const n = ms.map(mfNumber).find((x) => x !== null); if (n) vmap.set(vid, n); }
       omni.set(key, {
@@ -177,7 +201,7 @@ export async function priceTags(db: SupabaseClient, unitIds: string[]) {
       unitId: u.id, code: u.code, title: u.variant.product.title, option: u.variant.option, sku: own ?? u.code, skuIsBase: !!own,
       price, compareAt, promo: promoRows.length > 0, lowest30: range(lows), lowestSource, storeName: u.location.store.name,
       omnibusFields: o?.found ?? [], historyComplete: complete,
-      used: isUsed(u.variant.product.style_sku, u.variant.product.title, u.variant.option),
+      used: isReused((plinks ?? []).filter((p) => p.product_id === u.variant.product_id) as { store_id: string; tags?: string[] | null }[], storeId),
     };
   });
 }

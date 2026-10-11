@@ -32,9 +32,9 @@ export async function getSender(db: SupabaseClient): Promise<Sender> {
 
 /** Gabaryty paczkomatu InPost (cm): A, B, C. */
 export const LOCKER_SIZES = {
-  A: { height: 8, width: 38, depth: 64, label: "A – mała (8 × 38 × 64 cm)" },
-  B: { height: 19, width: 38, depth: 64, label: "B – średnia (19 × 38 × 64 cm)" },
-  C: { height: 41, width: 38, depth: 64, label: "C – duża (41 × 38 × 64 cm)" },
+  A: { height: 8, width: 38, depth: 64, label: "Skrytka A", dims: "8 × 38 × 64 cm", maxKg: 25 },
+  B: { height: 19, width: 38, depth: 64, label: "Skrytka B", dims: "19 × 38 × 64 cm", maxKg: 25 },
+  C: { height: 41, width: 38, depth: 64, label: "Skrytka C", dims: "41 × 38 × 64 cm", maxKg: 25 },
 } as const;
 
 export const SERVICE_LABEL = {

@@ -69,6 +69,7 @@ export async function shopifyGraphql<T>(domain: string, storeCode: string, query
 }
 
 export type ShopifyProduct = {
+  tags?: string[];
   id: string;
   title: string;
   handle: string;
@@ -91,7 +92,7 @@ export type ShopifyProduct = {
 };
 
 const PRODUCT_FIELDS = `
-  id title handle vendor productType status
+  id title handle vendor productType status tags
   featuredMedia { preview { image { url } } }
   variants(first: 250) { nodes { id title sku barcode position price compareAtPrice inventoryItem { id tracked } } }
 `;
@@ -421,3 +422,33 @@ export async function omnibusMetafields(domain: string, storeCode: string, produ
   };
 }
 type Mf = { namespace: string; key: string; type: string; value: string };
+
+/** Wszystkie zdjęcia produktu (media) – do galerii w karcie sztuki. */
+export async function productMedia(domain: string, storeCode: string, productGid: string) {
+  const data = await shopifyGraphql<{ product: { media: { nodes: { alt: string | null; preview: { image: { url: string; width: number | null; height: number | null } | null } | null }[] } } | null }>(domain, storeCode,
+    `query($id: ID!) { product(id: $id) { media(first: 50) { nodes { alt preview { image { url width height } } } } } }`, { id: productGid });
+  return (data.product?.media.nodes ?? []).map((m) => m.preview?.image ? { url: m.preview.image.url, alt: m.alt ?? null, w: m.preview.image.width, h: m.preview.image.height } : null).filter((x): x is { url: string; alt: string | null; w: number | null; h: number | null } => !!x);
+}
+
+/** Definicje metapól wyglądające na najniższą cenę z 30 dni (np. „Lowest price” z Omnibus Insight). */
+export async function lowestPriceDefinitions(domain: string, storeCode: string) {
+  const data = await shopifyGraphql<{ v: { nodes: Def[] }; p: { nodes: Def[] } }>(domain, storeCode,
+    `query { v: metafieldDefinitions(first: 250, ownerType: PRODUCTVARIANT) { nodes { name namespace key } } p: metafieldDefinitions(first: 250, ownerType: PRODUCT) { nodes { name namespace key } } }`);
+  const pick = (list: Def[]) => list.filter((d) => /lowest|najni|omnibus/i.test(`${d.name} ${d.namespace} ${d.key}`));
+  return { variant: pick(data.v.nodes), product: pick(data.p.nodes) };
+}
+type Def = { name: string; namespace: string; key: string };
+
+/** Konkretne metapola (z definicji) produktu i jego rozmiarów. */
+export async function readMetafields(domain: string, storeCode: string, productGid: string, defs: { variant: Def[]; product: Def[] }) {
+  if (!defs.variant.length && !defs.product.length) return { product: [] as Mf[], variants: new Map<string, Mf[]>() };
+  const pf = defs.product.map((d, i) => `p${i}: metafield(namespace: ${JSON.stringify(d.namespace)}, key: ${JSON.stringify(d.key)}) { namespace key type value }`).join(" ");
+  const vf = defs.variant.map((d, i) => `v${i}: metafield(namespace: ${JSON.stringify(d.namespace)}, key: ${JSON.stringify(d.key)}) { namespace key type value }`).join(" ");
+  const data = await shopifyGraphql<{ product: (Record<string, Mf | null> & { variants: { nodes: (Record<string, Mf | null> & { id: string })[] } }) | null }>(domain, storeCode,
+    `query($id: ID!) { product(id: $id) { ${pf} variants(first: 100) { nodes { id ${vf} } } } }`, { id: productGid });
+  const vals = (o: Record<string, unknown> | undefined, prefix: string) => Object.entries(o ?? {}).filter(([k, v]) => k.startsWith(prefix) && /^\w\d+$/.test(k) && v).map(([, v]) => v as Mf);
+  return {
+    product: vals(data.product ?? undefined, "p"),
+    variants: new Map((data.product?.variants.nodes ?? []).map((v) => [v.id, vals(v, "v")])),
+  };
+}

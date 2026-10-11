@@ -54,6 +54,13 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
   const storeName = new Map((stores ?? []).map((s) => [s.id, s.name]));
   const activeSort = UNIT_SORTS[sp.sort ?? ""] ? sp.sort! : "przyjeta";
   const activeAsc = sp.kier === "asc" ? true : sp.kier === "desc" ? false : UNIT_SORTS[activeSort].asc;
+  /** Link sortowania (w nagłówkach łączących dwie kolumny). */
+  const SortLink = ({ k, children }: { k: string; children: React.ReactNode }) => {
+    const on = activeSort === k;
+    const params = new URLSearchParams({ ...filterParams, sort: k, kier: on ? (activeAsc ? "desc" : "asc") : (UNIT_SORTS[k].asc ? "asc" : "desc") });
+    params.delete("strona");
+    return <Link href={`/magazyn?${params}`} className={`inline-flex items-center gap-0.5 hover:text-ink ${on ? "text-ink" : ""}`}>{children}<span className="text-[10px]">{on ? (activeAsc ? "▲" : "▼") : "↕"}</span></Link>;
+  };
   /** Nagłówek kolumny: klik sortuje, drugi klik odwraca kierunek. */
   const SortTh = ({ k, children, right }: { k: string; children: React.ReactNode; right?: boolean }) => {
     const on = activeSort === k;
@@ -153,36 +160,37 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
       <form action={bulkAction}>
         <input type="hidden" name="returnTo" value={returnTo} />
         <input type="hidden" name="wroc" value={returnTo} />
-        <div className="card overflow-x-auto">
-          <table className="table">
+        <div className="card overflow-x-auto xl:overflow-visible">
+          <table className="table [&_td]:px-2 [&_th]:px-2">
             <thead>
               <tr>
                 <th className="w-8"><SelectAll /></th>
                 <SortTh k="nazwa">Produkt</SortTh>
                 <SortTh k="rozmiar">Rozmiar</SortTh>
-                <SortTh k="kod">Kod</SortTh>
-                <SortTh k="lokalizacja">Lokalizacja</SortTh>
-                <SortTh k="status">Status</SortTh>
+                <th><SortLink k="kod">Kod</SortLink></th>
+                <th><SortLink k="lokalizacja">Miejsce</SortLink> · <SortLink k="status">status</SortLink></th>
                 <SortTh k="komisant">Komisant</SortTh>
-                <SortTh k="cena" right>Cena w sklepie</SortTh>
-                {profile.can_see_prices && <SortTh k="zakup" right>Cena zakupu</SortTh>}
-                <SortTh k="przyjeta">Przyjęta</SortTh>
-                <th className="text-right">Umowa</th>
+                <th className="text-right"><SortLink k="cena">Cena</SortLink>{profile.can_see_prices && <> · <SortLink k="zakup">zakup</SortLink></>}</th>
+                <th className="text-right"><SortLink k="przyjeta">Przyjęta</SortLink> · umowa</th>
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 && (
-                <tr><td colSpan={12} className="py-10 text-center text-muted">Brak sztuk dla tych filtrów.</td></tr>
+                <tr><td colSpan={8} className="py-10 text-center text-muted">Brak sztuk dla tych filtrów.</td></tr>
               )}
-              {rows.map((u) => (
+              {rows.map((u) => {
+                const sku = u.variant.links.find((l) => l.store_id === u.location.store_id && l.base_sku)?.base_sku ?? u.variant.links.find((l) => l.base_sku)?.base_sku ?? null;
+                const c = u.contract_id ? contractById.get(u.contract_id) : undefined;
+                const stage = c ? contractStage(c) : null;
+                return (
                 <tr key={u.id}>
                   <td><input type="checkbox" name="ids" value={u.id} className="h-4 w-4" aria-label={`Zaznacz ${u.code}`} /></td>
-                  <td>
-                    <Link href={`/magazyn/${u.id}`} className="flex items-center gap-3">
+                  <td className="min-w-48">
+                    <Link href={`/magazyn/${u.id}`} className="flex items-center gap-2.5">
                       <Thumb src={u.variant.product.image_url} alt="" />
-                      <span>
-                        <span className="block font-medium leading-tight hover:underline">{u.variant.product.title}</span>
-                        <span className="text-xs text-muted">{u.variant.product.style_sku ?? "bez SKU"}</span>
+                      <span className="min-w-0">
+                        <span className="line-clamp-2 font-medium leading-tight hover:underline">{u.variant.product.title}</span>
+                        <span className="block truncate text-xs text-muted" title={u.variant.product.style_sku ?? ""}>{u.variant.product.style_sku ?? "bez SKU"}</span>
                         {u.shop_missing && (
                           <span className="mt-0.5 flex flex-wrap gap-1">
                             <span className="rounded bg-rose-100 px-1.5 py-0.5 text-[11px] font-semibold text-bad" title="Tego rozmiaru nie ma w żadnym sklepie Shopify">brak w Shopify</span>
@@ -192,62 +200,53 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
                       </span>
                     </Link>
                   </td>
-                  <td className="whitespace-nowrap font-medium">
+                  <td className="font-medium">
                     {u.variant.option}
-                    {(() => {
-                      const sku = u.variant.links.find((l) => l.store_id === u.location.store_id && l.base_sku)?.base_sku ?? u.variant.links.find((l) => l.base_sku)?.base_sku;
-                      return sku ? <span className="block text-xs font-normal text-muted">Base {sku}</span> : null;
-                    })()}
+                    {sku && <span className="block break-all text-xs font-normal text-muted">Base {sku}</span>}
                   </td>
-                  <td className="whitespace-nowrap font-mono text-xs">
+                  <td className="font-mono text-xs">
                     {u.code}
-                    {u.identifier && <span className="block text-muted">{u.identifier}</span>}
-                    {(() => {
-                      const sku = u.variant.links.find((l) => l.store_id === u.location.store_id && l.base_sku)?.base_sku ?? u.variant.links.find((l) => l.base_sku)?.base_sku ?? u.code;
-                      return <span className="mt-1 block" title={`Kod kreskowy: ${sku}${sku === u.code ? " (kod z magazynu – brak SKU z Base)" : " (SKU z Base)"}`}><Barcode value={sku} className="h-[20px] w-[104px]" /></span>;
-                    })()}
+                    {u.identifier && <span className="block break-all text-muted">{u.identifier}</span>}
+                    <span className="mt-1 block" title={`Kod kreskowy: ${sku ?? u.code}${sku ? " (SKU z Base)" : " (kod z magazynu – brak SKU z Base)"}`}><Barcode value={sku ?? u.code} className="h-[18px] w-[92px]" /></span>
                   </td>
-                  <td className="whitespace-nowrap">
-                    {u.location.name}
+                  <td className="text-sm">
+                    <span className="block leading-tight">{u.location.name}</span>
                     <span className="block text-xs text-muted">{u.location.store.name}{u.shelf ? ` · ${u.shelf}` : ""}</span>
+                    <span className="mt-1 block"><StatusBadge status={u.status} /></span>
                   </td>
-                  <td><StatusBadge status={u.status} /></td>
-                  <td className="min-w-32 max-w-48">
+                  <td className="max-w-44">
                     {u.owner_type === "consignment" ? (
                       <>
                         <Link href={`/magazyn?wlasciciel=consignment&komisant=${u.consignor?.id}`} className="line-clamp-2 break-words text-sm font-medium leading-tight text-accent hover:underline" title={u.consignor?.name}>{u.consignor?.name}</Link>
                         {profile.can_see_prices && u.payout_amount !== null && <span className="block text-xs text-muted">w komisie {money(u.payout_amount)}</span>}
                       </>
                     ) : (
-                      <span className="text-muted">– {OWNER_TYPE.own}</span>
+                      <span className="text-sm text-muted">– {OWNER_TYPE.own}</span>
                     )}
                     <span className="block text-xs text-muted">{PURCHASE_FORM[u.purchase_form]}</span>
                   </td>
                   <td className="whitespace-nowrap text-right tabular-nums">
-                    {shopPrice(u) !== null ? money(shopPrice(u)) : u.price_error ? (
+                    {shopPrice(u) !== null ? <b>{money(shopPrice(u))}</b> : u.price_error ? (
                       <span className="group relative inline-block cursor-help" tabIndex={0} aria-label={`Błąd ceny: ${u.price_error}`}>
                         <span className="rounded bg-rose-100 px-1.5 py-0.5 text-xs font-bold text-bad">BŁĄD</span>
                         <span role="tooltip" className="pointer-events-none absolute right-0 top-full z-30 mt-1 hidden w-72 whitespace-normal rounded-md border border-line bg-white p-2 text-left text-xs font-normal text-ink shadow-lg group-hover:block group-focus:block">{u.price_error}</span>
                       </span>
                     ) : "–"}
+                    {profile.can_see_prices && <span className="block text-xs text-muted">zakup {u.purchase_price !== null ? money(u.purchase_price) : "–"}</span>}
                   </td>
-                  {profile.can_see_prices && <td className="whitespace-nowrap text-right tabular-nums">{money(u.purchase_price)}</td>}
-                  <td className="whitespace-nowrap text-muted">{dateOnly(u.received_at)}</td>
-                  <td className="whitespace-nowrap text-right">
+                  <td className="text-right">
                     <div className="flex flex-col items-end gap-1">
-                      {(() => {
-                        const c = u.contract_id ? contractById.get(u.contract_id) : undefined;
-                        const stage = c ? contractStage(c) : null;
-                        if (c && isSettled(stage)) return <ContractDone c={c} stage={stage!} label={`${c.counterparty ?? "umowa"} ✓`} />;
-                        if (c && stage && stage !== "dead") return <ContractInProgress c={c} stage={stage} />;
-                        if (u.owner_type === "consignment" && ["sold", "shipped"].includes(u.status)) return <ConsignorWaiting />;
-                        return <Link href={`/sprzedaz/umowa?sztuka=${u.id}&back=${encodeURIComponent(returnTo)}`} className={MISSING_BTN}>Dodaj umowę</Link>;
-                      })()}
-                      <a href={`/api/metka?ids=${u.id}`} target="_blank" rel="noreferrer" className="btn-secondary whitespace-nowrap px-2.5 py-1 text-xs">Wydrukuj metkę</a>
+                      <span className="text-xs text-muted">{dateOnly(u.received_at)}</span>
+                      {c && isSettled(stage) ? <ContractDone c={c} stage={stage!} label={`${c.counterparty ?? "umowa"} ✓`} />
+                        : c && stage && stage !== "dead" ? <ContractInProgress c={c} stage={stage} />
+                        : u.owner_type === "consignment" && ["sold", "shipped"].includes(u.status) ? <ConsignorWaiting />
+                        : <Link href={`/sprzedaz/umowa?sztuka=${u.id}&back=${encodeURIComponent(returnTo)}`} className={MISSING_BTN}>Dodaj umowę</Link>}
+                      <a href={`/metka?ids=${u.id}`} target="_blank" rel="noreferrer" className="btn-secondary whitespace-nowrap px-2.5 py-1 text-xs">Wydrukuj metkę</a>
                     </div>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
