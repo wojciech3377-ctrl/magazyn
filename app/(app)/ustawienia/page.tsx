@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { diagnoseStock } from "@/lib/stock-diagnose";
 import { requireProfile } from "@/lib/auth";
 import { dateTime } from "@/lib/labels";
 import { Notice, PageHeader, Pill } from "@/components/ui";
@@ -77,7 +78,8 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
         const compare = sp.porownaj === "1" ? await safe(() => compareStock(db)) : null;
         const { data: last } = await db.from("sync_log").select("job, ok, message, created_at").in("job", ["stock", "auto-catalog"]).order("created_at", { ascending: false }).limit(1).maybeSingle();
         const { data: purge } = await supabase.rpc("purge_non_shopify", { p_dry_run: true });
-        return { master, shopLocs, plan, compare, last, purge: purge as { units: number; kept: number; variants: number } | null };
+        const diag = sp.sprawdz && sp.sprawdz.trim().length >= 2 ? await safe(() => diagnoseStock(db, sp.sprawdz!.trim())) : null;
+        return { master, shopLocs, plan, compare, last, diag, purge: purge as { units: number; kept: number; variants: number } | null };
       })()
     : null;
   // Stan webhooków („na żywo”) każdego sklepu.
@@ -294,6 +296,43 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
           )}
 
           {tab === "stany" && stock && (
+          <section id="sprawdz" className="card space-y-3 p-4">
+            <h2 className="h2">Sprawdź produkt: Shopify ↔ Magazyn</h2>
+            <p className="text-sm text-muted">Wpisz nazwę albo SKU – zobaczysz stan każdego rozmiaru w Shopify, liczbę sztuk w aplikacji i powód różnicy.</p>
+            <form method="get" className="flex flex-wrap gap-2">
+              <input type="hidden" name="zakladka" value="stany" />
+              <input className="input w-96" name="sprawdz" defaultValue={sp.sprawdz} placeholder="np. Balenciaga Track Black" />
+              <button className="btn">Sprawdź</button>
+            </form>
+            {stock.diag?.error && <Notice tone="error">{stock.diag.error}</Notice>}
+            {stock.diag?.data && (
+              <div className="overflow-x-auto">
+                {stock.diag.data.errors.map((e) => <p key={e} className="text-sm text-bad">{e}</p>)}
+                <table className="table">
+                  <thead><tr><th>Sklep · produkt Shopify</th><th>Rozmiar</th><th>Shopify</th><th className="text-right">W aplikacji</th><th>Dlaczego</th></tr></thead>
+                  <tbody>
+                    {!stock.diag.data.rows.length && <tr><td colSpan={5} className="py-6 text-center text-muted">Shopify nie znalazł takich produktów.</td></tr>}
+                    {stock.diag.data.rows.map((r, i) => {
+                      const shopQty = r.shopify.filter((x) => x.mapped).reduce((a, x) => a + Math.max(0, x.qty), 0);
+                      const diff = r.tracked && shopQty !== r.units;
+                      return (
+                        <tr key={i} className={diff ? "bg-rose-50" : ""}>
+                          <td className="text-sm">{r.store} · {r.product}<span className="block text-xs text-muted">{r.status.toLowerCase()}{r.tags.length ? ` · tagi: ${r.tags.join(", ")}` : ""}</span></td>
+                          <td className="text-sm">{r.variant}{r.sku && <span className="block font-mono text-xs text-muted">{r.sku}</span>}</td>
+                          <td className="text-sm">{r.shopify.length ? r.shopify.map((x) => <span key={x.location} className={`block ${x.mapped ? "" : "text-warn"}`}>{x.location}: <b>{x.qty}</b>{x.mapped ? "" : " (nieprzypisana)"}</span>) : "–"}</td>
+                          <td className="text-right font-semibold tabular-nums">{r.appVariantId ? r.units : "–"}</td>
+                          <td className="text-xs">{r.reasons.length ? r.reasons.join(" · ") : <span className="text-ok">zgodne</span>}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+          )}
+
+          {tab === "stany" && stock && (
           <section className="card space-y-5 p-4">
             <div>
               <h2 className="h2 mb-1">Główny magazyn</h2>
@@ -445,7 +484,8 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
                 <div><label className="label" htmlFor="s-city">Miasto</label><input id="s-city" className="input" name="city" defaultValue={sender.city} /></div>
                 <div><label className="label" htmlFor="s-email">E-mail</label><input id="s-email" className="input" type="email" name="email" defaultValue={sender.email} /></div>
                 <div><label className="label" htmlFor="s-phone">Telefon</label><input id="s-phone" className="input" name="phone" defaultValue={sender.phone} /></div>
-                <div><label className="label" htmlFor="s-point">Nadanie InPost</label><input id="s-point" className="input font-mono" name="inpost_send_point" defaultValue={sender.inpost_send_point} placeholder="any_apm = dowolny paczkomat" /></div>
+                <div><label className="label" htmlFor="s-point">Nadanie InPost (zawsze z punktu)</label><input id="s-point" className="input font-mono" name="inpost_send_point" defaultValue={sender.inpost_send_point} placeholder="any_apm = dowolny paczkomat" /></div>
+                <div><label className="label" htmlFor="s-dpd">Nadanie DPD (zawsze z punktu)</label><input id="s-dpd" className="input font-mono" name="dpd_send_point" defaultValue={sender.dpd_send_point} placeholder="any_parcel_shop = dowolny punkt DPD Pickup" /></div>
                 <div className="md:col-span-2"><label className="label" htmlFor="s-iban">Konto do wypłat pobrań (opcjonalnie)</label><input id="s-iban" className="input font-mono" name="cod_iban" defaultValue={sender.cod_iban} placeholder="puste = konto ustawione w Furgonetce" /></div>
                 <div className="flex items-end"><SubmitButton>Zapisz nadawcę</SubmitButton></div>
               </form>

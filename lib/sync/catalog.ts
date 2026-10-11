@@ -79,13 +79,18 @@ export async function upsertShopifyProducts(db: SupabaseClient, store: Store, al
   if (e1) throw e1;
   const productIdByGid = new Map(existingLinks!.map((l) => [l.shopify_product_id as string, l.product_id as string]));
 
-  // Produkty z tym samym SKU modelu dodane wcześniej z drugiego sklepu.
+  // Produkty z tym samym SKU modelu dodane wcześniej z DRUGIEGO sklepu (ten sam model w dwóch sklepach).
+  // W jednym sklepie osobne produkty Shopify z tym samym SKU (np. każda używana para osobno) to osobne rzeczy –
+  // nie łączymy ich, bo stan liczyłby się raz zamiast osobno dla każdej.
   const skusToFind = products.filter((p) => !productIdByGid.has(p.id)).map(styleSku).filter((s): s is string => !!s);
   const productIdBySku = new Map<string, string>();
   if (skusToFind.length) {
     const { data, error } = await db.from("products").select("id, style_sku").in("style_sku", skusToFind);
     if (error) throw error;
-    for (const r of data!) productIdBySku.set(r.style_sku as string, r.id as string);
+    const ids = data!.map((r) => r.id as string);
+    const { data: taken } = ids.length ? await db.from("product_store_links").select("product_id").eq("store_id", store.id).in("product_id", ids) : { data: [] };
+    const takenHere = new Set((taken ?? []).map((t) => t.product_id as string));
+    for (const r of data!) if (!takenHere.has(r.id as string)) productIdBySku.set(r.style_sku as string, r.id as string);
   }
 
   let created = 0;
@@ -93,7 +98,8 @@ export async function upsertShopifyProducts(db: SupabaseClient, store: Store, al
     const sku = styleSku(p);
     const id = productIdByGid.get(p.id) ?? (sku ? productIdBySku.get(sku) : undefined) ?? crypto.randomUUID();
     if (!productIdByGid.has(p.id) && !(sku && productIdBySku.has(sku))) created++;
-    if (sku && !productIdBySku.has(sku)) productIdBySku.set(sku, id); // duplikaty w jednej paczce
+    // Dopasowanie po SKU z innego sklepu wykorzystane – kolejny produkt z tym SKU w tym sklepie dostaje własny.
+    if (sku && productIdBySku.get(sku) === id) productIdBySku.delete(sku);
     productIdByGid.set(p.id, id);
     return {
       id,
@@ -286,4 +292,36 @@ export async function detachDeletedShopifyProducts(db: SupabaseClient) {
     out[store.name] = missing.length;
   }
   return out;
+}
+
+/**
+ * Rozdzielenie produktów Shopify z tym samym SKU, które w jednym sklepie zostały połączone w jeden produkt aplikacji:
+ * pierwszy zostaje, pozostałe dostają własny produkt i rozmiary (stan każdego liczy się osobno przy kolejnym odczycie stanów).
+ */
+export async function splitSameStoreDuplicates(db: SupabaseClient, limit = 20) {
+  const { data, error } = await db.rpc("duplicate_store_products", { p_limit: limit });
+  if (error) {
+    if (/duplicate_store_products/.test(error.message)) return { split: 0, skipped: "brak migracji 0033" };
+    throw error;
+  }
+  const groups = (data ?? []) as { store_id: string; product_id: string; shopify_product_ids: string[] }[];
+  if (!groups.length) return { split: 0 };
+  const { data: stores } = await db.from("stores").select("*").in("id", [...new Set(groups.map((g) => g.store_id))]);
+  let split = 0;
+  for (const g of groups) {
+    const store = (stores ?? []).find((s) => s.id === g.store_id) as Store | undefined;
+    if (!store?.shopify_domain) continue;
+    for (const gid of g.shopify_product_ids.slice(1)) {
+      const product = await getProduct(store.shopify_domain, store.code, gid).catch(() => null);
+      if (!product) continue;
+      const variantGids = product.variants.nodes.map((v) => v.id);
+      for (let i = 0; i < variantGids.length; i += 100) {
+        await db.from("variant_store_links").delete().eq("store_id", store.id).in("shopify_variant_id", variantGids.slice(i, i + 100));
+      }
+      await db.from("product_store_links").delete().eq("store_id", store.id).eq("shopify_product_id", gid);
+      await upsertShopifyProducts(db, store, [product]);
+      split++;
+    }
+  }
+  return { split };
 }

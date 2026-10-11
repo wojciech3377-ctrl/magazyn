@@ -3,7 +3,7 @@ import { errorMessage } from "@/lib/errors";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getInventoryStockPage, listNewestProductIds } from "@/lib/integrations/base";
 import { productsUpdatedSince } from "@/lib/integrations/shopify";
-import { detachDeletedShopifyProducts, upsertShopifyProducts, type Store } from "./catalog";
+import { detachDeletedShopifyProducts, splitSameStoreDuplicates, upsertShopifyProducts, type Store } from "./catalog";
 import { upsertBaseProducts } from "./base-catalog";
 import { syncStock } from "./shopify-stock";
 
@@ -147,9 +147,11 @@ export async function runAutoCatalog(db: SupabaseClient, force = false) {
   // Produkty usunięte w Shopify i rozmiary bez śledzenia stanu → „brak w Shopify”; ich sztuki bez historii znikają
   // (z umową / sprzedażą – zostają z oznaczeniem). Duże porcje zatwierdza się przyciskiem w Ustawieniach.
   const deleted = await detachDeletedShopifyProducts(db).catch((e) => `błąd: ${errorMessage(e)}`);
+  // Osobne produkty z tym samym SKU w jednym sklepie (np. używane pary) → osobne produkty w aplikacji.
+  const split = await splitSameStoreDuplicates(db, force ? 200 : 25).catch((e) => `błąd: ${errorMessage(e)}`);
   const { data: purged, error: purgeErr } = await db.rpc("purge_non_shopify", { p_dry_run: false, p_max: 100 });
   const base = await syncNewBaseProducts(db);
   // Stany wyłącznie ze Shopify (albo z aplikacji do Shopify) – Base nie wpływa na liczbę sztuk.
   const stock = await syncStock(db);
-  return { shopify, deleted, base, stock, notInShopify: purgeErr ? purgeErr.message : purged };
+  return { shopify, deleted, split, base, stock, notInShopify: purgeErr ? purgeErr.message : purged };
 }

@@ -299,3 +299,24 @@ export async function cancelPackages(db: SupabaseClient, packageIds: string[]) {
     }
   }
 }
+
+export type PriceQuote = { service: string; service_id: number | null; available: boolean; price: number | null; errors: string[] };
+
+/** Wycena przesyłki u kilku przewoźników naraz (bez tworzenia przesyłki). Niedostępny przewoźnik to available: false. */
+export async function calculatePrices(db: SupabaseClient, services: string[], pkg: Omit<NewPackage, "service_id">): Promise<PriceQuote[]> {
+  const res = await furgonetkaFetch(db, "/packages/calculate-price", { method: "POST", body: { services: { service: services }, package: pkg } });
+  const body = await json<{ services_prices?: unknown[] } | unknown[]>(res);
+  const list = (Array.isArray(body) ? body : body.services_prices ?? []) as Record<string, unknown>[];
+  return list.map((q) => {
+    const pricing = (q.pricing ?? {}) as Record<string, unknown>;
+    const gross = Number(pricing.price_gross ?? pricing.price ?? NaN);
+    const errs = (Array.isArray(q.errors) ? q.errors : []) as { message?: string; path?: string }[];
+    return {
+      service: String(q.service ?? ""),
+      service_id: q.service_id !== undefined && q.service_id !== null ? Number(q.service_id) : null,
+      available: q.available !== false && Number.isFinite(gross),
+      price: Number.isFinite(gross) ? gross : null,
+      errors: errs.map((e) => [e.path, e.message].filter(Boolean).join(": ")).filter(Boolean),
+    };
+  });
+}

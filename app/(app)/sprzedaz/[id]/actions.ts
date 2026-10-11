@@ -7,9 +7,9 @@ import { errorMessage } from "@/lib/errors";
 import { adjustStock, type StockChange } from "@/lib/stock";
 import type { LineItem } from "@/lib/sync/shop-orders";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { accountServices, cancelPackages, createPackage, deletePackage, furgonetkaConnection, getPackage, orderPackages, type Address, type NewPackage } from "@/lib/integrations/furgonetka";
+import { accountServices, calculatePrices, cancelPackages, createPackage, deletePackage, furgonetkaConnection, getPackage, orderPackages, type Address, type NewPackage } from "@/lib/integrations/furgonetka";
 import { cancelShopifyOrder, fulfillWithTracking, getOrder, refundShopifyLines, type CancelReason } from "@/lib/integrations/shopify";
-import { getSender, LOCKER_SIZES, SERVICE_LABEL, type ServiceKey } from "@/lib/orders/sender";
+import { carrierOf, getSender, lockerOnly, LOCKER_SIZES, SERVICE_LABEL, toPoint, type ServiceKey } from "@/lib/orders/sender";
 import { refreshOrderStatus, saveShopifyOrders, syncFurgonetkaShipments } from "@/lib/sync/shop-orders";
 
 export type LabelState = { error?: string; ok?: string; warning?: string; shipmentId?: string; tracking?: string } | null;
@@ -30,21 +30,13 @@ function normalizePostcode(code: string, country: string) {
   return country === "PL" && /^\d{5}$/.test(c) ? `${c.slice(0, 2)}-${c.slice(2)}` : code.trim();
 }
 
-/** Etykieta z poziomu zamówienia: przesyłka w Furgonetce (InPost / DPD), nadanie, numer do Shopify. */
-export async function createLabel(_: LabelState, fd: FormData): Promise<LabelState> {
-  const { profile } = await requireProfile();
-  const db = createAdminClient();
-  const orderId = str(fd, "order_id");
-  const { data: order } = await db.from("orders").select("*, store:stores(code, shopify_domain)").eq("id", orderId).maybeSingle();
-  if (!order) return { error: "Nie ma takiego zamówienia." };
-  if (order.cancelled_at) return { error: "Zamówienie jest anulowane." };
-  if (!(await furgonetkaConnection(db))) return { error: "Aplikacja nie jest połączona z Furgonetką (Ustawienia → Wysyłka)." };
-
-  const service = str(fd, "service") as ServiceKey;
-  if (!(service in SERVICE_LABEL)) return { error: "Wybierz przewoźnika." };
-  const carrier = service === "dpd" ? "dpd" : "inpost";
-  const locker = service === "inpost_locker";
-
+/**
+ * Dane przesyłki z formularza etykiety. Nadanie zawsze w punkcie: InPost – paczkomat (any_apm albo kod z Ustawień),
+ * DPD – punkt DPD Pickup (any_parcel_shop albo kod). Doręczenie: adres, paczkomat InPost, punkt albo paczkomat DPD.
+ */
+async function buildPackage(db: ReturnType<typeof createAdminClient>, fd: FormData, service: ServiceKey, reference: string, forQuote = false) {
+  const carrier = carrierOf(service);
+  const point = toPoint(service);
   const country = (str(fd, "country_code") || "PL").toUpperCase();
   const receiver: Address = {
     name: str(fd, "name"),
@@ -56,21 +48,24 @@ export async function createLabel(_: LabelState, fd: FormData): Promise<LabelSta
     email: str(fd, "email") || null,
     phone: normalizePhone(str(fd, "phone")) || null,
   };
-  const point = str(fd, "point").toUpperCase();
-  if (!receiver.name) return { error: "Podaj odbiorcę." };
-  if (!receiver.phone) return { error: "Podaj telefon odbiorcy." };
-  if (locker) {
-    if (!point) return { error: "Podaj kod paczkomatu (np. WAW253M)." };
-    if (!receiver.email) return { error: "Do paczkomatu potrzebny jest e-mail odbiorcy." };
-    receiver.point = point;
+  const code = str(fd, "point").toUpperCase();
+  if (!forQuote) {
+    if (!receiver.name) return { error: "Podaj odbiorcę." };
+    if (!receiver.phone) return { error: "Podaj telefon odbiorcy." };
+  }
+  if (point) {
+    if (!code) return { error: service === "inpost_locker" ? "Podaj kod paczkomatu (np. WAW253M)." : "Podaj kod punktu / paczkomatu DPD (np. PL11033)." };
+    if (!forQuote && !receiver.email) return { error: "Do punktu i paczkomatu potrzebny jest e-mail odbiorcy." };
+    receiver.point = code;
   } else if (!receiver.street || !receiver.postcode || !receiver.city) {
     return { error: "Podaj pełny adres odbiorcy." };
   }
 
   const weight = num(fd, "weight") || 1;
-  const size = str(fd, "size") as keyof typeof LOCKER_SIZES;
-  const preset = LOCKER_SIZES[size];
-  if (locker && !preset) return { error: "Wybierz wielkość: Skrytka A, B albo C." };
+  const size = str(fd, "size");
+  const preset = size in LOCKER_SIZES ? LOCKER_SIZES[size as keyof typeof LOCKER_SIZES] : undefined;
+  if (lockerOnly(service) && !preset) return { error: "Wybierz wielkość: Skrytka A, B albo C." };
+  if (!preset && size !== "custom") return { error: "Wybierz wielkość paczki." };
   if (preset && weight > preset.maxKg) return { error: `${preset.label}: waga do ${preset.maxKg} kg.` };
   const dims = preset
     ? { width: preset.width, depth: preset.depth, height: preset.height }
@@ -89,7 +84,59 @@ export async function createLabel(_: LabelState, fd: FormData): Promise<LabelSta
     country_code: "PL",
     email: sender.email || null,
     phone: normalizePhone(sender.phone) || null,
+    point: carrier === "inpost" ? sender.inpost_send_point || "any_apm" : sender.dpd_send_point || "any_parcel_shop",
   };
+  const body: Omit<NewPackage, "service_id"> & { service_id?: number } = {
+    pickup,
+    receiver,
+    type: "package",
+    // Furgonetka przyjmuje w numerze referencyjnym tylko litery, cyfry i myślniki.
+    user_reference_number: reference.replace(/[^\p{L}\p{N}-]/gu, "").slice(0, 30),
+    parcels: [{ width: dims.width, depth: dims.depth, height: dims.height, weight, ...(value > 0 ? { value } : {}), description: str(fd, "description") || undefined }],
+    additional_services: cod > 0
+      ? { cod: { amount: cod, express: false, ...(sender.cod_iban ? { iban: sender.cod_iban.replace(/\s/g, ""), name: sender.company } : {}) } }
+      : {},
+  };
+  return { body, carrier };
+}
+
+export type QuoteState = { prices: Partial<Record<ServiceKey, { price: number | null; note?: string }>>; error?: string } | null;
+
+/** Ceny przesyłki dla każdej usługi (wycena w Furgonetce, bez tworzenia przesyłki). */
+export async function quoteLabel(fd: FormData): Promise<QuoteState> {
+  await requireProfile();
+  const db = createAdminClient();
+  if (!(await furgonetkaConnection(db))) return { prices: {}, error: "Furgonetka nie jest połączona." };
+  const keys = Object.keys(SERVICE_LABEL) as ServiceKey[];
+  const prices: NonNullable<QuoteState>["prices"] = {};
+  await Promise.all(keys.map(async (k) => {
+    const built = await buildPackage(db, fd, k, "WYCENA", true);
+    if ("error" in built) { prices[k] = { price: null, note: built.error }; return; }
+    try {
+      const q = (await calculatePrices(db, [built.carrier], built.body)).find((x) => x.service === built.carrier) ?? null;
+      prices[k] = q?.available && q.price !== null ? { price: q.price } : { price: null, note: q?.errors[0] ?? "niedostępne" };
+    } catch (e) {
+      prices[k] = { price: null, note: errorMessage(e) };
+    }
+  }));
+  return { prices };
+}
+
+/** Etykieta z poziomu zamówienia: przesyłka w Furgonetce (InPost / DPD), nadanie, numer do Shopify. */
+export async function createLabel(_: LabelState, fd: FormData): Promise<LabelState> {
+  const { profile } = await requireProfile();
+  const db = createAdminClient();
+  const orderId = str(fd, "order_id");
+  const { data: order } = await db.from("orders").select("*, store:stores(code, shopify_domain)").eq("id", orderId).maybeSingle();
+  if (!order) return { error: "Nie ma takiego zamówienia." };
+  if (order.cancelled_at) return { error: "Zamówienie jest anulowane." };
+  if (!(await furgonetkaConnection(db))) return { error: "Aplikacja nie jest połączona z Furgonetką (Ustawienia → Wysyłka)." };
+
+  const service = str(fd, "service") as ServiceKey;
+  if (!(service in SERVICE_LABEL)) return { error: "Wybierz przewoźnika." };
+  const built = await buildPackage(db, fd, service, String(order.number));
+  if ("error" in built) return { error: built.error };
+  const { body, carrier } = built;
 
   let services;
   try {
@@ -99,23 +146,11 @@ export async function createLabel(_: LabelState, fd: FormData): Promise<LabelSta
   }
   const svc = services.find((s) => s.service === carrier);
   if (!svc) return { error: `Na koncie Furgonetki nie ma usługi ${carrier.toUpperCase()}.` };
-
-  const body: NewPackage = {
-    pickup: carrier === "inpost" ? { ...pickup, point: sender.inpost_send_point || "any_apm" } : pickup,
-    receiver,
-    service_id: svc.id,
-    type: "package",
-    // Furgonetka przyjmuje w numerze referencyjnym tylko litery, cyfry i myślniki.
-    user_reference_number: String(order.number).replace(/[^\p{L}\p{N}-]/gu, "").slice(0, 30),
-    parcels: [{ width: dims.width, depth: dims.depth, height: dims.height, weight, ...(value > 0 ? { value } : {}), description: str(fd, "description") || undefined }],
-    additional_services: cod > 0
-      ? { cod: { amount: cod, express: false, ...(sender.cod_iban ? { iban: sender.cod_iban.replace(/\s/g, ""), name: sender.company } : {}) } }
-      : {},
-  };
+  (body as NewPackage).service_id = svc.id;
 
   let packageId: string;
   try {
-    const pkg = await createPackage(db, body);
+    const pkg = await createPackage(db, body as NewPackage);
     packageId = String(pkg.package_id);
   } catch (e) {
     return { error: errorMessage(e) };

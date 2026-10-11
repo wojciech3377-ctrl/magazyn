@@ -130,6 +130,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
         <label className="flex items-center gap-2"><SelectAllNamed name="zamowienia" /> zaznacz wszystkie</label>
         <button className="btn-secondary px-3 py-1.5 text-sm">Pobierz umowy zaznaczonych (ZIP)</button>
       </form>
+      <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={{ q: sp.q, status: tab || undefined }} top />
       <div className="card overflow-x-auto lg:overflow-visible">
         <table className="table">
           <thead><tr><th className="w-8" /><th>Data</th><th>Zamówienie</th><th>Produkty</th><th>Wysyłka</th><th>Płatność</th><th>Status</th><th /></tr></thead>
@@ -290,6 +291,7 @@ async function SaleLines({ sp, page }: { sp: Record<string, string | undefined>;
         <button className="btn">Filtruj</button>
       </form>
 
+      <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={{ widok: "linie", q: sp.q, status: sp.status }} top />
       <div className="card overflow-x-auto">
         <table className="table">
           <thead><tr><th>Data</th><th>Zamówienie</th><th>Produkt</th><th>Sztuka</th><th>Status</th><th>Umowa</th><th>Zmień sztukę przy pakowaniu</th><th /></tr></thead>
@@ -364,6 +366,7 @@ async function PosList({ page, q }: { page: number; q: string }) {
         <button className="btn">Szukaj</button>
         {q && <Link className="btn-secondary" href="/sprzedaz?widok=stacjonarna">Wyczyść</Link>}
       </form>
+      <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={{ widok: "stacjonarna", q: q || undefined }} top />
       <div className="card overflow-x-auto">
         <table className="table">
           <thead><tr><th>Data</th><th>Numer</th><th>Przedmioty</th><th>Sklep</th><th>Płatność</th><th className="text-right">Kwota</th><th>Stan</th></tr></thead>

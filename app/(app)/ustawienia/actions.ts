@@ -197,6 +197,7 @@ export async function saveSender(formData: FormData) {
     email: f("email"),
     phone: f("phone"),
     inpost_send_point: !point || point === "ANY_APM" ? "any_apm" : point,
+    dpd_send_point: !f("dpd_send_point") || f("dpd_send_point").toLowerCase() === "any_parcel_shop" ? "any_parcel_shop" : f("dpd_send_point").toUpperCase(),
     cod_iban: f("cod_iban").replace(/\s/g, ""),
   };
   if (!value.street || !value.postcode || !value.city) return done("Podaj adres nadawcy.", "blad");

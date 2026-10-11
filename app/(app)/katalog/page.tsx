@@ -64,6 +64,7 @@ export default async function KatalogPage({ searchParams }: { searchParams: Prom
           <input className="input w-80" name="q" defaultValue={sp.q} placeholder="Szukaj: nazwa, SKU modelu, SKU z Base, EAN" />
           <button className="btn">Szukaj</button>
         </form>
+        <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={{ q: sp.q }} top />
         <div className="card overflow-x-auto">
           <table className="table">
             <thead><tr><th>Produkt</th><th>Sklepy</th><th>Rozmiary (sztuk na stanie)</th></tr></thead>
@@ -145,6 +146,7 @@ async function Links({ sp, page, storeName, stores, isAdmin }: {
         ))}
       </div>
       <p className="mb-3 text-sm text-muted">Te rozmiary nie mają odpowiednika w Base, więc przyjęcie dostawy nie podniesie ich stanu. Zatwierdź podpowiedź albo wpisz SKU lub ID produktu z Base.</p>
+      <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={{ widok: "powiazania", sklep: sp.sklep }} top />
       <div className="card overflow-x-auto">
         <table className="table">
           <thead><tr><th>Produkt</th><th>Rozmiar</th><th>Sklep</th><th>Podpowiedź z Base</th><th>Przypisz ręcznie</th></tr></thead>

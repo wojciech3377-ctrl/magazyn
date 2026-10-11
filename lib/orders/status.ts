@@ -159,8 +159,10 @@ export function detectPickupPoint(
 }
 
 /** Jaki przewoźnik i usługa wynikają z metody wysyłki ze sklepu. */
-export function guessService(method: string | null | undefined): "inpost_locker" | "inpost_courier" | "dpd" | null {
+export function guessService(method: string | null | undefined): "inpost_locker" | "inpost_courier" | "dpd" | "dpd_point" | "dpd_locker" | null {
   const m = method ?? "";
+  if (/dpd/i.test(m) && /paczkomat|locker|automat|station/i.test(m)) return "dpd_locker";
+  if (/dpd/i.test(m) && /punkt|pickup|point|odbi[oó]r/i.test(m)) return "dpd_point";
   if (/dpd/i.test(m)) return "dpd";
   if (/inpost/i.test(m) && /kurier|courier/i.test(m)) return "inpost_courier";
   if (/paczkomat|parcel locker|locker/i.test(m)) return "inpost_locker";

@@ -85,6 +85,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
         actions={
           <>
             {profile.role === "admin" && <form action={runAutoCatalogNow}><SubmitButton className="btn-secondary" pendingText="Sprawdzam…">Sprawdź nowe produkty i stany</SubmitButton></form>}
+            {profile.role === "admin" && filters.q && <Link className="btn-secondary" href={`/ustawienia?zakladka=stany&sprawdz=${encodeURIComponent(filters.q)}#sprawdz`}>Porównaj „{filters.q.slice(0, 20)}” ze Shopify</Link>}
             <Link className="btn-secondary" href={`/api/eksport/sztuki${qs ? `?${qs}` : ""}`}>Eksport CSV</Link>
             <Link className="btn" href="/dostawa">Przyjmij dostawę</Link>
           </>
@@ -160,6 +161,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
       <form action={bulkAction}>
         <input type="hidden" name="returnTo" value={returnTo} />
         <input type="hidden" name="wroc" value={returnTo} />
+        <Pagination page={page} total={count} perPage={PER_PAGE} params={filterParams} top />
         <div className="card overflow-x-auto xl:overflow-visible">
           <table className="table [&_td]:px-2 [&_th]:px-2">
             <thead>
@@ -170,13 +172,14 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
                 <th><SortLink k="kod">Kod</SortLink></th>
                 <th><SortLink k="lokalizacja">Miejsce</SortLink> · <SortLink k="status">status</SortLink></th>
                 <SortTh k="komisant">Komisant</SortTh>
-                <th className="text-right"><SortLink k="cena">Cena</SortLink>{profile.can_see_prices && <> · <SortLink k="zakup">zakup</SortLink></>}</th>
+                <SortTh k="cena" right>Cena</SortTh>
+                {profile.can_see_prices && <SortTh k="zakup" right>Zakup</SortTh>}
                 <th className="text-right"><SortLink k="przyjeta">Przyjęta</SortLink> · umowa</th>
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 && (
-                <tr><td colSpan={8} className="py-10 text-center text-muted">Brak sztuk dla tych filtrów.</td></tr>
+                <tr><td colSpan={9} className="py-10 text-center text-muted">Brak sztuk dla tych filtrów.</td></tr>
               )}
               {rows.map((u) => {
                 const sku = u.variant.links.find((l) => l.store_id === u.location.store_id && l.base_sku)?.base_sku ?? u.variant.links.find((l) => l.base_sku)?.base_sku ?? null;
@@ -190,7 +193,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
                       <Thumb src={u.variant.product.image_url} alt="" />
                       <span className="min-w-0">
                         <span className="line-clamp-2 font-medium leading-tight hover:underline">{u.variant.product.title}</span>
-                        <span className="block truncate text-xs text-muted" title={u.variant.product.style_sku ?? ""}>{u.variant.product.style_sku ?? "bez SKU"}</span>
+                        <span className="block break-all text-xs text-muted">{u.variant.product.style_sku ?? "bez SKU"}</span>
                         {u.shop_missing && (
                           <span className="mt-0.5 flex flex-wrap gap-1">
                             <span className="rounded bg-rose-100 px-1.5 py-0.5 text-[11px] font-semibold text-bad" title="Tego rozmiaru nie ma w żadnym sklepie Shopify">brak w Shopify</span>
@@ -232,8 +235,8 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
                         <span role="tooltip" className="pointer-events-none absolute right-0 top-full z-30 mt-1 hidden w-72 whitespace-normal rounded-md border border-line bg-white p-2 text-left text-xs font-normal text-ink shadow-lg group-hover:block group-focus:block">{u.price_error}</span>
                       </span>
                     ) : "–"}
-                    {profile.can_see_prices && <span className="block text-xs text-muted">zakup {u.purchase_price !== null ? money(u.purchase_price) : "–"}</span>}
                   </td>
+                  {profile.can_see_prices && <td className="whitespace-nowrap text-right tabular-nums">{money(u.purchase_price)}</td>}
                   <td className="text-right">
                     <div className="flex flex-col items-end gap-1">
                       <span className="text-xs text-muted">{dateOnly(u.received_at)}</span>

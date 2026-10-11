@@ -120,6 +120,7 @@ export default async function UmowyPage({ searchParams }: { searchParams: Promis
         <button className="btn">Filtruj</button>
       </form>
 
+      <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={{ kategoria: tab || undefined, q: sp.q, typ: sp.typ, plik: sp.plik }} top />
       <div className="card overflow-x-auto">
         <table className="table">
           <thead><tr><th>Nr</th><th>Od kogo</th><th>Stan</th><th /><th>Typ</th><th>Data</th>{profile.can_see_prices && <th className="text-right">Kwota</th>}<th>Produkty</th><th>Plik</th></tr></thead>
