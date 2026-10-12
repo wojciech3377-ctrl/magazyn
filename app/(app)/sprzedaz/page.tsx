@@ -109,7 +109,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
       {lastShop && !lastShop.ok && <div className="mb-4"><Notice tone="error">Odczyt zamówień z Shopify nie udał się: {lastShop.message}</Notice></div>}
       {lastBase && !lastBase.ok && <div className="mb-4"><Notice tone="error">Przypisanie sztuk (Base) nie udało się: {lastBase.message}</Notice></div>}
       {lastShip && !lastShip.ok && <div className="mb-4"><Notice tone="error">Odczyt przesyłek z Furgonetki nie udał się: {lastShip.message}</Notice></div>}
-      {!!problems && <div className="mb-4"><Notice tone="error">{problems} {problems === 1 ? "linia zamówienia nie ma" : "linii zamówień nie ma"} sztuki na stanie. <Link className="underline" href="/sprzedaz?widok=linie&status=no_unit">Pokaż</Link> i przypisz sztukę skanem albo wygeneruj umowę.</Notice></div>}
+      {!!problems && <div className="mb-4"><Notice tone="error">{problems} {problems === 1 ? "linia zamówienia nie ma" : "linii zamówień nie ma"} sztuki na stanie. <Link className="font-medium underline" href="/sprzedaz?widok=linie&status=no_unit">Pokaż {problems === 1 ? "ją" : "je"}</Link> i przypisz sztukę skanem albo wygeneruj umowę.</Notice></div>}
 
       <nav className="mb-4 flex flex-wrap gap-1 border-b border-line text-sm" aria-label="Status zamówień">
         {ORDER_TABS.map((t, i) => (
@@ -258,10 +258,12 @@ async function SaleLines({ sp, page }: { sp: Record<string, string | undefined>;
   const status = sp.status ?? "";
   let query = supabase
     .from("sales")
-    .select(`${SALE_SELECT}, order:orders(status)`, { count: "exact" })
+    // „Brak sztuki” liczy tylko zamówienia jeszcze niewysłane (tak jak komunikat w Zamówieniach).
+    .select(`${SALE_SELECT}, order:orders${status === "no_unit" ? "!inner" : ""}(status)`, { count: "exact" })
     .order("sold_at", { ascending: false })
     .range((page - 1) * PER_PAGE, page * PER_PAGE - 1);
-  if (status) query = query.eq("status", status);
+  if (status === "no_unit") query = query.eq("status", status).not("order.status", "in", `(${[...FINISHED].join(",")})`);
+  else if (status) query = query.eq("status", status);
   else query = query.neq("status", "unmatched");
   if (sp.q) query = query.ilike("order_ref", `%${sp.q.replace(/[%,()]/g, "")}%`);
 

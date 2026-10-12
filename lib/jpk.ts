@@ -197,8 +197,8 @@ async function docsFor(db: SupabaseClient, orders: Order[], posIds: string[]) {
   const [rb, rp, ib, ip] = await Promise.all([
     inChunks<Receipt>(baseIds, (part) => db.from("receipts").select(RECEIPT_FIELDS).in("base_order_id", part as number[]).order("issued_at")),
     inChunks<Receipt>(posIds, (part) => db.from("receipts").select(RECEIPT_FIELDS).in("pos_order_id", part as string[]).order("issued_at")),
-    inChunks<InvoiceRow>(orders.map((o) => o.id), (part) => db.from("invoices").select(INVOICE_FIELDS).in("order_id", part as string[]).neq("kind", "receipt").not("status", "in", "(rejected,cancelled)")),
-    inChunks<InvoiceRow>(posIds, (part) => db.from("invoices").select(INVOICE_FIELDS).in("pos_order_id", part as string[]).neq("kind", "receipt").not("status", "in", "(rejected,cancelled)")),
+    inChunks<InvoiceRow>(orders.map((o) => o.id), (part) => db.from("invoices").select(INVOICE_FIELDS).in("order_id", part as string[]).neq("kind", "receipt").in("status", KSEF_SENT)),
+    inChunks<InvoiceRow>(posIds, (part) => db.from("invoices").select(INVOICE_FIELDS).in("pos_order_id", part as string[]).neq("kind", "receipt").in("status", KSEF_SENT)),
   ]);
   const byBase = new Map<number, Receipt>();
   const byPos = new Map<string, Receipt>();
@@ -216,6 +216,8 @@ async function docsFor(db: SupabaseClient, orders: Order[], posIds: string[]) {
 }
 
 const INVOICE_FIELDS = "id, number, issue_date, order_id, pos_order_id, kind";
+/** Do JPK trafiają tylko faktury wysłane do KSeF (przyjęte albo w trakcie przyjmowania); paragony PAR nigdy. */
+const KSEF_SENT = ["accepted", "sending"];
 
 type InvoiceItemRow = { id: string; name: string; total_gross: number; vat: string; invoice: InvoiceRow; unit: Unit };
 
@@ -244,7 +246,7 @@ export async function loadJpkLines(db: SupabaseClient, opts: { from: Date; to: D
     db.from("receipts").select("base_order_id, pos_order_id").gte("issued_at", from).lt("issued_at", to).limit(10000),
     db.from("orders").select("id").gte("ordered_at", from).lt("ordered_at", to).limit(10000),
     db.from("pos_orders").select("id").gte("created_at", from).lt("created_at", to).limit(10000),
-    db.from("invoices").select(INVOICE_FIELDS).gte("issue_date", fromDay).lt("issue_date", toDay).neq("kind", "receipt").not("status", "in", "(rejected,cancelled)").limit(10000),
+    db.from("invoices").select(INVOICE_FIELDS).gte("issue_date", fromDay).lt("issue_date", toDay).neq("kind", "receipt").in("status", KSEF_SENT).limit(10000),
   ]);
   if (e1 || e2 || e3 || e4) throw e1 ?? e2 ?? e3 ?? e4;
   const invoicesM = (monthInvoices ?? []) as InvoiceRow[];
@@ -273,7 +275,7 @@ export async function loadJpkLines(db: SupabaseClient, opts: { from: Date; to: D
   });
   // Korekty faktur: osobna linia z różnicą (nie pozycje po korekcie).
   const { data: corr } = await db.from("invoices").select("id, number, issue_date, total_gross, correction").eq("kind", "correction")
-    .gte("issue_date", fromDay).lt("issue_date", toDay).not("status", "in", "(rejected,cancelled)").limit(2000);
+    .gte("issue_date", fromDay).lt("issue_date", toDay).in("status", KSEF_SENT).limit(2000);
   const corrIds = new Set((corr ?? []).map((c) => c.id as string));
   const manual = invoicesM.filter((i) => !i.order_id && !i.pos_order_id && !corrIds.has(i.id)).map((i) => i.id);
   const correctionLines: JpkLine[] = (corr ?? []).map((c) => {
