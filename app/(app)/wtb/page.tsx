@@ -67,7 +67,7 @@ export default async function WtbPage({ searchParams }: { searchParams: Promise<
       ) : (
         <form action={updateWtb}>
           <input type="hidden" name="back" value={back} />
-          <div className="sticky top-0 z-20 mb-3 flex flex-wrap items-center gap-2 border-b border-line bg-white/95 py-2 backdrop-blur">
+          <div className="sticky top-14 z-20 lg:top-0 mb-3 flex flex-wrap items-center gap-2 border-b border-line bg-white/95 py-2 backdrop-blur">
             <label className="flex items-center gap-2 text-sm"><SelectAll /> zaznacz wszystkie</label>
             {active ? (
               <>

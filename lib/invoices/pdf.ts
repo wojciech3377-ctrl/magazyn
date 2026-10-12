@@ -155,7 +155,7 @@ export async function renderInvoicePdf(inv: InvoiceForPdf) {
     page.drawText(`Numer konta: ${acc}`, { x: M, y, size: 9, font: bold });
     y -= 14;
   }
-  if (Number(inv.margin_total) > 0) {
+  if (Number(inv.margin_total) > 0 && !isPar) {
     page.drawText("procedura marży - towary używane", { x: M, y, size: 9, font: bold });
     y -= 14;
   }

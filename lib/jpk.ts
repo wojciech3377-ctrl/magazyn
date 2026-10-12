@@ -197,8 +197,8 @@ async function docsFor(db: SupabaseClient, orders: Order[], posIds: string[]) {
   const [rb, rp, ib, ip] = await Promise.all([
     inChunks<Receipt>(baseIds, (part) => db.from("receipts").select(RECEIPT_FIELDS).in("base_order_id", part as number[]).order("issued_at")),
     inChunks<Receipt>(posIds, (part) => db.from("receipts").select(RECEIPT_FIELDS).in("pos_order_id", part as string[]).order("issued_at")),
-    inChunks<InvoiceRow>(orders.map((o) => o.id), (part) => db.from("invoices").select(INVOICE_FIELDS).in("order_id", part as string[]).not("status", "in", "(rejected,cancelled)")),
-    inChunks<InvoiceRow>(posIds, (part) => db.from("invoices").select(INVOICE_FIELDS).in("pos_order_id", part as string[]).not("status", "in", "(rejected,cancelled)")),
+    inChunks<InvoiceRow>(orders.map((o) => o.id), (part) => db.from("invoices").select(INVOICE_FIELDS).in("order_id", part as string[]).neq("kind", "receipt").not("status", "in", "(rejected,cancelled)")),
+    inChunks<InvoiceRow>(posIds, (part) => db.from("invoices").select(INVOICE_FIELDS).in("pos_order_id", part as string[]).neq("kind", "receipt").not("status", "in", "(rejected,cancelled)")),
   ]);
   const byBase = new Map<number, Receipt>();
   const byPos = new Map<string, Receipt>();
@@ -206,14 +206,9 @@ async function docsFor(db: SupabaseClient, orders: Order[], posIds: string[]) {
   const better = (cur: Receipt | undefined, r: Receipt) => !cur || (cur.source === "base" && r.source !== "base");
   for (const r of rb) if (r.base_order_id && better(byBase.get(Number(r.base_order_id)), r)) byBase.set(Number(r.base_order_id), r);
   for (const r of rp) if (r.pos_order_id && better(byPos.get(r.pos_order_id), r)) byPos.set(r.pos_order_id, r);
-  // Paragon (PAR) i późniejsza faktura do tej samej sprzedaży: dokumentem sprzedaży jest paragon.
-  const first = (rows: InvoiceRow[], key: (i: InvoiceRow) => string) => {
-    const m = new Map<string, InvoiceRow>();
-    for (const i of rows) if (!m.has(key(i)) || i.kind === "receipt") m.set(key(i), i);
-    return m;
-  };
-  const invByOrder = first(ib, (i) => i.order_id as string);
-  const invByPos = first(ip, (i) => i.pos_order_id as string);
+  // Paragony PAR (z modułu faktur, bez KSeF) nie trafiają do JPK – liczą się faktury FVM (KSeF) i paragony z kasy / Base.
+  const invByOrder = new Map(ib.map((i) => [i.order_id as string, i]));
+  const invByPos = new Map(ip.map((i) => [i.pos_order_id as string, i]));
   return {
     orderDoc: (o: Order) => receiptDoc(o.base_order_id ? byBase.get(Number(o.base_order_id)) : undefined) ?? invoiceDoc(invByOrder.get(o.id)),
     posDoc: (id: string) => receiptDoc(byPos.get(id)) ?? invoiceDoc(invByPos.get(id)),
@@ -249,7 +244,7 @@ export async function loadJpkLines(db: SupabaseClient, opts: { from: Date; to: D
     db.from("receipts").select("base_order_id, pos_order_id").gte("issued_at", from).lt("issued_at", to).limit(10000),
     db.from("orders").select("id").gte("ordered_at", from).lt("ordered_at", to).limit(10000),
     db.from("pos_orders").select("id").gte("created_at", from).lt("created_at", to).limit(10000),
-    db.from("invoices").select(INVOICE_FIELDS).gte("issue_date", fromDay).lt("issue_date", toDay).not("status", "in", "(rejected,cancelled)").limit(10000),
+    db.from("invoices").select(INVOICE_FIELDS).gte("issue_date", fromDay).lt("issue_date", toDay).neq("kind", "receipt").not("status", "in", "(rejected,cancelled)").limit(10000),
   ]);
   if (e1 || e2 || e3 || e4) throw e1 ?? e2 ?? e3 ?? e4;
   const invoicesM = (monthInvoices ?? []) as InvoiceRow[];

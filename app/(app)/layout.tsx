@@ -1,5 +1,4 @@
 import { requireProfile } from "@/lib/auth";
-import { signOut } from "@/app/login/actions";
 import { Nav } from "./Nav";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -38,25 +37,16 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const [alerts, delivery] = await Promise.all([consignorAlerts(), deliveryAlerts()]);
   return (
     <div className="min-h-screen">
-      <header className="border-b border-line bg-white">
-        <div className="mx-auto flex max-w-7xl min-w-0 flex-col gap-3 px-4 py-3 md:flex-row md:items-center md:justify-between">
-          <div className="flex items-center justify-between gap-6">
-            <span className="font-semibold tracking-tight">Magazyn</span>
-            <form action={signOut} className="md:hidden">
-              <button className="text-sm text-muted hover:text-ink">Wyloguj</button>
-            </form>
-          </div>
-          <Nav badges={{
-            "/komisanci": [{ n: alerts, tone: "red", title: "Zgłoszenia komisantów do obsłużenia" }],
-            "/dostawa": [{ n: delivery.accept, tone: "green", title: "Do akceptacji" }, { n: delivery.transit, tone: "orange", title: "W drodze" }],
-          }} />
-          <form action={signOut} className="hidden items-center gap-3 md:flex">
-            <span className="text-sm text-muted">{profile.full_name || profile.email}</span>
-            <button className="text-sm text-muted hover:text-ink">Wyloguj</button>
-          </form>
-        </div>
-      </header>
-      <main className="mx-auto max-w-7xl px-4 py-6">{children}</main>
+      <Nav
+        user={profile.full_name || profile.email || ""}
+        badges={{
+          "/komisanci": [{ n: alerts, tone: "red", title: "Zgłoszenia komisantów do obsłużenia" }],
+          "/dostawa": [{ n: delivery.accept, tone: "green", title: "Do akceptacji" }, { n: delivery.transit, tone: "orange", title: "W drodze" }],
+        }}
+      />
+      <main className="min-w-0 px-4 py-5 sm:px-6 lg:ml-64 lg:px-8 lg:py-7 print:m-0 print:p-0">
+        <div className="mx-auto max-w-[1500px]">{children}</div>
+      </main>
     </div>
   );
 }

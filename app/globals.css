@@ -1,32 +1,68 @@
 @import "tailwindcss";
 
+/*
+ * Wygląd aplikacji: jasne tło, białe karty z delikatnym cieniem, jeden kolor akcentu (niebieski),
+ * zaokrąglenia 8–12 px. Wszystkie strony korzystają z tych klas (btn, card, input, table…), więc zmiana tutaj
+ * zmienia całą aplikację.
+ */
 @theme {
-  --color-ink: #17232f;
-  --color-muted: #5b6878;
-  --color-line: #e3e8ef;
-  --color-panel: #f6f8fb;
-  --color-accent: #2f5fb3;
-  --color-accent-dark: #234a8f;
-  --color-ok: #1f7a4d;
-  --color-warn: #a35f00;
-  --color-bad: #b42318;
-  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --color-ink: #0f172a;
+  --color-muted: #64748b;
+  --color-line: #e5e9f0;
+  --color-panel: #f4f6fa;
+  --color-canvas: #f6f7fb;
+  --color-accent: #2563eb;
+  --color-accent-dark: #1d4ed8;
+  --color-accent-soft: #eff4ff;
+  --color-ok: #15803d;
+  --color-warn: #b45309;
+  --color-bad: #dc2626;
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  --shadow-card: 0 1px 2px rgb(15 23 42 / 0.04), 0 1px 3px rgb(15 23 42 / 0.04);
+  --shadow-pop: 0 10px 30px -8px rgb(15 23 42 / 0.18), 0 2px 6px rgb(15 23 42 / 0.06);
 }
 
 html { color-scheme: light; }
-body { background: #ffffff; color: var(--color-ink); }
+body { background: var(--color-canvas); color: var(--color-ink); font-feature-settings: "cv11", "ss01"; }
+::selection { background: rgb(37 99 235 / 0.18); }
+
+/* Wydruki (etykiety, listy, metki) – bez tła aplikacji. */
+@media print { body { background: #fff; } }
 
 @layer components {
-  .btn { @apply inline-flex items-center justify-center gap-2 rounded-md bg-accent px-3.5 py-2 text-sm font-medium text-white hover:bg-accent-dark disabled:opacity-50; }
-  .btn-secondary { @apply inline-flex items-center justify-center gap-2 rounded-md border border-line bg-white px-3.5 py-2 text-sm font-medium text-ink hover:bg-panel disabled:opacity-50; }
-  .btn-danger { @apply inline-flex items-center justify-center gap-2 rounded-md border border-bad/30 bg-white px-3.5 py-2 text-sm font-medium text-bad hover:bg-bad/5; }
-  .input { @apply w-full rounded-md border border-line bg-white px-3 py-2 text-sm outline-none focus:border-accent focus:ring-2 focus:ring-accent/15; }
-  .label { @apply mb-1 block text-xs font-medium uppercase tracking-wide text-muted; }
-  .card { @apply rounded-lg border border-line bg-white; }
-  .table { @apply w-full text-left text-sm; }
-  .table th { @apply border-b border-line bg-panel px-3 py-2 text-xs font-medium uppercase tracking-wide text-muted whitespace-nowrap; }
-  .table td { @apply border-b border-line px-3 py-2 align-middle; }
-  .table tr:hover td { @apply bg-panel/60; }
-  .h1 { @apply text-xl font-semibold tracking-tight; }
-  .h2 { @apply text-base font-semibold; }
+  .btn { @apply inline-flex h-9 items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-accent px-3.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-accent-dark focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-1 active:translate-y-px disabled:pointer-events-none disabled:opacity-50; }
+  .btn-secondary { @apply inline-flex h-9 items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-line bg-white px-3.5 text-sm font-medium text-ink shadow-sm transition-colors hover:border-slate-300 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 active:translate-y-px disabled:pointer-events-none disabled:opacity-50; }
+  .btn-ghost { @apply inline-flex h-9 items-center justify-center gap-2 whitespace-nowrap rounded-lg px-3 text-sm font-medium text-muted transition-colors hover:bg-slate-100 hover:text-ink disabled:opacity-50; }
+  .btn-danger { @apply inline-flex h-9 items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-red-200 bg-white px-3.5 text-sm font-medium text-bad shadow-sm transition-colors hover:border-red-300 hover:bg-red-50 disabled:opacity-50; }
+  /* Przyciski z własnym rozmiarem (px-/py- w klasie) nie dostają stałej wysokości. */
+  .btn[class*="py-"], .btn-secondary[class*="py-"], .btn-danger[class*="py-"] { height: auto; }
+
+  .input { @apply w-full rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink shadow-[inset_0_1px_1px_rgb(15_23_42/0.03)] outline-none transition placeholder:text-slate-400 hover:border-slate-300 focus:border-accent focus:ring-4 focus:ring-accent/10 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-muted; }
+  select.input { @apply cursor-pointer pr-8; }
+  .label { @apply mb-1.5 block text-[13px] font-medium text-slate-600; }
+
+  .card { @apply rounded-xl border border-line bg-white shadow-(--shadow-card); }
+
+  .table { @apply w-full border-separate border-spacing-0 text-left text-sm; }
+  .table th { @apply whitespace-nowrap border-b border-line bg-slate-50/80 px-3 py-2.5 text-xs font-medium text-muted; }
+  .table td { @apply border-b border-slate-100 px-3 py-2.5 align-middle; }
+  .table tbody tr:last-child td { @apply border-b-0; }
+  .table tbody tr:hover td { @apply bg-slate-50/70; }
+  .card > .table th:first-child, .card > .table td:first-child { @apply pl-4; }
+  .card > .table th:last-child, .card > .table td:last-child { @apply pr-4; }
+
+  .h1 { @apply text-2xl font-semibold tracking-tight text-ink; }
+  .h2 { @apply text-[15px] font-semibold tracking-tight text-ink; }
+
+  /* Zakładki jako przełącznik (np. Sprzedaż: Zamówienia / Stacjonarna / Faktury / JPK). */
+  .segmented { @apply inline-flex flex-wrap gap-1 rounded-xl border border-line bg-white p-1 shadow-(--shadow-card); }
+  .segmented > a, .segmented > button { @apply rounded-lg px-3 py-1.5 text-sm font-medium text-muted transition-colors hover:bg-slate-100 hover:text-ink; }
+  .segmented > [aria-current="page"] { @apply bg-ink text-white hover:bg-ink hover:text-white; }
+
+  details > summary { @apply cursor-pointer select-none; }
+  dialog::backdrop { background: rgb(15 23 42 / 0.4); backdrop-filter: blur(2px); }
 }
+
+/* Cienkie paski przewijania w tabelach i menu. */
+* { scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }

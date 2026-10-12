@@ -119,7 +119,7 @@ export async function Jpk({ sp }: { sp: Record<string, string | undefined> }) {
       <form id="jpk" action="/api/jpk" method="post">
         <input type="hidden" name="okres" value={custom ? `${fromDay}_${toDay}` : month.key} />
         <input type="hidden" name="back" value={`/sprzedaz?${qs}`} />
-        <div className="sticky top-0 z-20 mb-2 flex flex-wrap items-center gap-3 border-b border-line bg-white/95 py-2 text-sm backdrop-blur">
+        <div className="sticky top-14 z-20 lg:top-0 mb-2 flex flex-wrap items-center gap-3 border-b border-line bg-white/95 py-2 text-sm backdrop-blur">
           <label className="flex items-center gap-2"><SelectAllNamed name="l" /> zaznacz wszystkie ({lines.length})</label>
           <span className="text-muted">{range.label} · razem {money(total)}</span>
           <div className="ml-auto flex flex-wrap gap-2">

@@ -30,10 +30,10 @@ export default async function KatalogPage({ searchParams }: { searchParams: Prom
       {profile.role === "admin" && <SyncPanel stores={stores ?? []} />}
       {linkErrors?.[0] && <div className="mb-4"><Notice tone="error">{linkErrors[0].message}</Notice></div>}
 
-      <div className="mb-4 flex gap-1 text-sm">
-        <Link href="/katalog" className={`rounded-md px-3 py-1.5 ${tab === "produkty" ? "bg-ink text-white" : "text-muted hover:bg-panel"}`}>Produkty</Link>
-        <Link href="/katalog?widok=powiazania" className={`rounded-md px-3 py-1.5 ${tab === "powiazania" ? "bg-ink text-white" : "text-muted hover:bg-panel"}`}>Bez powiązania z Base ({unlinked ?? 0})</Link>
-      </div>
+      <nav className="segmented mb-5" aria-label="Katalog">
+        <Link href="/katalog" aria-current={tab === "produkty" ? "page" : undefined}>Produkty</Link>
+        <Link href="/katalog?widok=powiazania" aria-current={tab === "powiazania" ? "page" : undefined}>Bez powiązania z Base ({unlinked ?? 0})</Link>
+      </nav>
 
       {tab === "produkty" ? <Products sp={sp} page={page} /> : <Links sp={sp} page={page} storeName={storeName} stores={stores ?? []} isAdmin={profile.role === "admin"} />}
     </>

@@ -62,8 +62,8 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
       if (t.key) c = c.eq("status", t.key);
       return c;
     })),
-    // Dostarczone, zwrócone i anulowane zamówienia nie są już problemem braku sztuki.
-    supabase.from("sales").select("id, order:orders!inner(status)", { count: "exact", head: true }).eq("status", "no_unit").not("order.status", "in", "(delivered,returned,cancelled)"),
+    // Wysłane, dostarczone, zwrócone i anulowane zamówienia nie są już problemem braku sztuki.
+    supabase.from("sales").select("id, order:orders!inner(status)", { count: "exact", head: true }).eq("status", "no_unit").not("order.status", "in", "(shipped,delivered,returned,cancelled)"),
     supabase.from("sync_log").select("job, ok, message, created_at").in("job", ["base-orders", "shopify-orders", "furgonetka"]).order("created_at", { ascending: false }).limit(12),
   ]);
   const lastOf = (job: string) => (logs ?? []).find((l) => l.job === job);
@@ -167,7 +167,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
                     <div className="mt-0.5 flex flex-wrap gap-1 font-mono text-xs">
                       {oSales.map((s, i) => s.unit
                         ? <Link key={i} className="relative z-10 text-accent hover:underline" href={`/magazyn/${s.unit.id}`}>{s.unit.code}</Link>
-                        : s.status === "no_unit" && status !== "delivered" && status !== "returned" && status !== "cancelled" ? <Pill key={i} tone="red">brak sztuki</Pill> : null)}
+                        : s.status === "no_unit" && !FINISHED.has(status) ? <Pill key={i} tone="red">brak sztuki</Pill> : null)}
                     </div>
                   </td>
                   <td className="text-sm">
@@ -258,7 +258,7 @@ async function SaleLines({ sp, page }: { sp: Record<string, string | undefined>;
   const status = sp.status ?? "";
   let query = supabase
     .from("sales")
-    .select(SALE_SELECT, { count: "exact" })
+    .select(`${SALE_SELECT}, order:orders(status)`, { count: "exact" })
     .order("sold_at", { ascending: false })
     .range((page - 1) * PER_PAGE, page * PER_PAGE - 1);
   if (status) query = query.eq("status", status);
@@ -306,7 +306,9 @@ async function SaleLines({ sp, page }: { sp: Record<string, string | undefined>;
                   </td>
                   <td>{variant ? <>{variant.product.title} · <b>{variant.option}</b></> : <span className="text-muted">{s.product_name}</span>}</td>
                   <td className="whitespace-nowrap"><UnitCell unit={s.unit as unknown as SaleUnit} /></td>
-                  <td><Pill tone={s.status === "assigned" ? "green" : s.status === "cancelled" ? "slate" : "red"}>{SALE_STATUS[s.status]}</Pill></td>
+                  <td>{s.status === "no_unit" && FINISHED.has((s.order as unknown as { status: string } | null)?.status ?? "")
+                    ? <Pill tone="slate">zamówienie wysłane</Pill>
+                    : <Pill tone={s.status === "assigned" ? "green" : s.status === "cancelled" ? "slate" : "red"}>{SALE_STATUS[s.status]}</Pill>}</td>
                   <td className="whitespace-nowrap"><SaleContract saleId={s.id} status={s.status} hasVariant={!!s.variant_id} unit={s.unit as unknown as SaleUnit} pending={pendingBySale.get(s.id)} /></td>
                   <td>{s.status !== "cancelled" && s.status !== "unmatched" && <SwapForm saleId={s.id} />}</td>
                   <td>{s.variant_id && <WtbButton saleId={s.id} compact />}</td>
@@ -321,14 +323,19 @@ async function SaleLines({ sp, page }: { sp: Record<string, string | undefined>;
   );
 }
 
+/** Zamówienia wysłane / zakończone – brak sztuki z magazynu nie jest już problemem (także w JPK). */
+const FINISHED = new Set(["shipped", "delivered", "returned", "cancelled"]);
+
 function Tabs({ active }: { active: "orders" | "lines" | "pos" | "faktury" | "jpk" }) {
-  const cls = (on: boolean) => `rounded-md px-3 py-1.5 ${on ? "bg-ink text-white" : "text-muted hover:bg-panel"}`;
+  const cur = (on: boolean) => (on ? ("page" as const) : undefined);
   return (
-    <div className="mb-4 flex flex-wrap gap-1 text-sm">
-      <Link href="/sprzedaz" className={cls(active === "orders")}>Zamówienia</Link>
-      <Link href="/sprzedaz?widok=stacjonarna" className={cls(active === "pos")}>Sprzedaż stacjonarna</Link>
-      <Link href="/sprzedaz?widok=faktury" className={cls(active === "faktury")}>Faktury</Link>
-      <Link href="/sprzedaz?widok=jpk" className={cls(active === "jpk" || active === "lines")}>JPK</Link>
+    <div className="mb-5">
+      <nav className="segmented" aria-label="Sprzedaż">
+        <Link href="/sprzedaz" aria-current={cur(active === "orders")}>Zamówienia</Link>
+        <Link href="/sprzedaz?widok=stacjonarna" aria-current={cur(active === "pos")}>Sprzedaż stacjonarna</Link>
+        <Link href="/sprzedaz?widok=faktury" aria-current={cur(active === "faktury")}>Faktury i paragony</Link>
+        <Link href="/sprzedaz?widok=jpk" aria-current={cur(active === "jpk" || active === "lines")}>JPK</Link>
+      </nav>
     </div>
   );
 }
