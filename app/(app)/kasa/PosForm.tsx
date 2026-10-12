@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useRef, useState, useTransition } from "react";
-import { finishPosOrder, pickUnitForVariant, scanUnit, searchOwnProducts, searchUnits, type OwnProduct, type PosUnit, type ScanChoice } from "./actions";
+import { finishPosOrder, pickUnitForVariant, scanUnit, searchCatalog, searchOwnProducts, searchUnits, type CatalogHit, type CatalogSize, type OwnProduct, type PosUnit, type ScanChoice } from "./actions";
 
 type UnitLine = PosUnit & { kind: "unit"; key: string; priceInput: string };
 type CustomLine = { kind: "custom"; key: string; name: string; ptu: string; qtyInput: string; priceInput: string; product_id: string | null; save: boolean; note: string };
@@ -28,6 +28,21 @@ export function PosForm({ stores, printer, ptu, defaultPtu }: { stores: { id: st
   const [busy, start] = useTransition();
   const [manual, setManual] = useState({ open: false, name: "", price: "", qty: "1", ptu: defaultPtu, save: false });
   const scanRef = useRef<HTMLInputElement>(null);
+  const priceRef = useRef<HTMLInputElement>(null);
+  // Katalog w ręcznym dodawaniu: wpisywana nazwa przeszukuje modele ze Shopify i własne produkty.
+  const [catalogQ, setCatalogQ] = useState("");
+  const [catalog, setCatalog] = useState<{ q: string; products: CatalogHit[]; own: OwnProduct[] } | null>(null);
+  const [catalogBusy, startCatalog] = useTransition();
+
+  useEffect(() => {
+    const q = catalogQ.trim();
+    if (q.length < 2) { setCatalog(null); return; }
+    const t = setTimeout(() => startCatalog(async () => {
+      const [products, own] = await Promise.all([searchCatalog(q, storeId), searchOwnProducts(q)]);
+      setCatalog({ q, products, own });
+    }), 300);
+    return () => clearTimeout(t);
+  }, [catalogQ, storeId]);
 
   // Wpisywanie nazwy: podpowiedzi na żywo (od 3 znaków, gdy to nie wygląda na kod ze skanera).
   useEffect(() => {
@@ -48,6 +63,23 @@ export function PosForm({ stores, printer, ptu, defaultPtu }: { stores: { id: st
     setMessage({ tone: "ok", text: `Dodano ${u.code} · ${u.title} ${u.option}` });
     setScan("");
     setHits(null);
+    setCatalogQ("");
+  }
+
+  /** Rozmiar z katalogu: jest na stanie → najstarsza sztuka z magazynu; nie ma → pozycja spoza magazynu z ceną z katalogu. */
+  function pickCatalog(p: CatalogHit, sz: CatalogSize) {
+    if (sz.inStock > 0) {
+      start(async () => {
+        const r = await pickUnitForVariant(sz.variantId, storeId, unitIds);
+        if (r.unit) addUnit(r.unit);
+        else setMessage({ tone: "error", text: r.error ?? "Brak sztuki." });
+      });
+      return;
+    }
+    setCatalogQ("");
+    setManual((m) => ({ ...m, open: true, name: `${p.title} ${sz.option}`.slice(0, 120), price: sz.price !== null ? String(sz.price) : "" }));
+    setMessage({ tone: "ok", text: `${p.title} ${sz.option} – brak na stanie. Sprawdź cenę i stawkę PTU, potem „Dodaj do koszyka”.` });
+    setTimeout(() => priceRef.current?.focus(), 0);
   }
 
   function addOwn(p: OwnProduct) {
@@ -56,6 +88,7 @@ export function PosForm({ stores, printer, ptu, defaultPtu }: { stores: { id: st
     setMessage({ tone: "ok", text: `Dodano ${p.name}` });
     setScan("");
     setHits(null);
+    setCatalogQ("");
   }
 
   function addManual() {
@@ -63,6 +96,7 @@ export function PosForm({ stores, printer, ptu, defaultPtu }: { stores: { id: st
     if (!(num(manual.price) > 0)) return setMessage({ tone: "error", text: "Wpisz cenę pozycji." });
     setLines((prev) => [...prev, { kind: "custom", key: crypto.randomUUID(), name: manual.name.trim(), ptu: manual.ptu, qtyInput: manual.qty || "1", priceInput: manual.price, product_id: null, save: manual.save, note: manual.save ? "spoza magazynu · zapisze się jako własny produkt" : "spoza magazynu" }]);
     setManual({ open: true, name: "", price: "", qty: "1", ptu: manual.ptu, save: false });
+    setCatalogQ("");
     setMessage({ tone: "ok", text: "Dodano pozycję spoza magazynu." });
   }
 
@@ -169,21 +203,62 @@ export function PosForm({ stores, printer, ptu, defaultPtu }: { stores: { id: st
 
           <div className="rounded-xl border border-dashed border-line">
             <button type="button" className="flex w-full items-center justify-between px-3 py-2.5 text-left text-sm font-medium text-ink" onClick={() => setManual((m) => ({ ...m, open: !m.open }))} aria-expanded={manual.open}>
-              Dodaj ręcznie pozycję spoza magazynu
-              <span className="text-xs font-normal text-muted">{manual.open ? "schowaj" : "np. towar na zamówienie, usługa"}</span>
+              Dodaj ręcznie – z katalogu albo spoza magazynu
+              <span className="text-xs font-normal text-muted">{manual.open ? "schowaj" : "szukaj w katalogu, towar na zamówienie, usługa"}</span>
             </button>
             {manual.open && (
               <div className="space-y-3 border-t border-line p-3">
                 <div className="grid gap-2 sm:grid-cols-[1fr_7rem_5rem_9rem]">
-                  <input className="input" value={manual.name} onChange={(e) => setManual({ ...manual, name: e.target.value })} placeholder="Nazwa na paragonie" aria-label="Nazwa" maxLength={120}
-                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addManual(); } }} />
-                  <input className="input tabular-nums" inputMode="decimal" value={manual.price} onChange={(e) => setManual({ ...manual, price: e.target.value })} placeholder="Cena zł" aria-label="Cena"
+                  <input className="input" value={manual.name} onChange={(e) => { setManual({ ...manual, name: e.target.value }); setCatalogQ(e.target.value); }} placeholder="Szukaj w katalogu albo wpisz nazwę" aria-label="Nazwa albo wyszukiwanie w katalogu" maxLength={120}
+                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addManual(); } if (e.key === "Escape") setCatalogQ(""); }} autoComplete="off" />
+                  <input ref={priceRef} className="input tabular-nums" inputMode="decimal" value={manual.price} onChange={(e) => setManual({ ...manual, price: e.target.value })} placeholder="Cena zł" aria-label="Cena"
                     onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addManual(); } }} />
                   <input className="input tabular-nums" inputMode="decimal" value={manual.qty} onChange={(e) => setManual({ ...manual, qty: e.target.value })} aria-label="Ilość" title="Ilość" />
                   <select className="input" value={manual.ptu} onChange={(e) => setManual({ ...manual, ptu: e.target.value })} aria-label="Stawka PTU">
                     {ptu.map((p) => <option key={p.letter} value={p.letter}>PTU {p.label}</option>)}
                   </select>
                 </div>
+                {catalogBusy && <p className="text-xs text-muted">Szukam w katalogu…</p>}
+                {catalog && catalogQ.trim() && (
+                  catalog.products.length || catalog.own.length ? (
+                    <div className="max-h-96 space-y-2 overflow-y-auto rounded-xl border border-line bg-slate-50/60 p-2">
+                      <div className="flex items-center justify-between px-1 text-xs text-muted">
+                        <span>Katalog – kliknij rozmiar. Na stanie: dodaje sztukę z magazynu; brak: uzupełnia nazwę i cenę.</span>
+                        <button type="button" className="hover:text-ink" onClick={() => setCatalogQ("")}>zamknij</button>
+                      </div>
+                      {catalog.own.map((o) => (
+                        <div key={o.id} className="flex items-center gap-3 rounded-lg border border-line bg-white px-3 py-2">
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm font-medium">{o.name}</span>
+                            <span className="text-xs text-muted">własny produkt · PTU {ptuText(o.ptu)}{o.track_stock ? ` · stan ${o.stock}` : ""}</span>
+                          </span>
+                          <span className="text-sm tabular-nums">{o.price !== null ? fmt(o.price) : "–"}</span>
+                          <button type="button" className="btn-secondary px-2.5 py-1 text-xs" onClick={() => addOwn(o)}>Dodaj</button>
+                        </div>
+                      ))}
+                      {catalog.products.map((p) => (
+                        <div key={p.productId} className="rounded-lg border border-line bg-white p-2.5">
+                          <div className="mb-2 flex items-center gap-2.5">
+                            {p.image ? <img src={`${p.image}${p.image.includes("?") ? "&" : "?"}width=96`} alt="" className="h-9 w-9 shrink-0 rounded-md border border-line bg-white object-contain" /> : <span className="h-9 w-9 shrink-0 rounded-md bg-slate-100" />}
+                            <span className="min-w-0">
+                              <span className="block truncate text-sm font-medium">{p.title}</span>
+                              <span className="text-xs text-muted">{p.sku ?? "bez SKU"} · na stanie {p.sizes.reduce((n, x) => n + x.inStock, 0)} szt.</span>
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {p.sizes.map((sz) => (
+                              <button type="button" key={sz.variantId} onClick={() => pickCatalog(p, sz)} title={sz.sku ?? undefined}
+                                className={`rounded-lg border px-2 py-1 text-left text-xs transition-colors ${sz.inStock > 0 ? "border-emerald-300 bg-emerald-50 hover:border-emerald-500" : "border-line hover:border-accent"}`}>
+                                <b className="text-sm">{sz.option}</b>
+                                <span className="block tabular-nums text-muted">{sz.price !== null ? fmt(sz.price) : "bez ceny"} · {sz.inStock > 0 ? `${sz.inStock} szt.` : "brak"}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : !catalogBusy && <p className="text-xs text-muted">Nie ma w katalogu „{catalog.q}” – dodasz ją jako własną pozycję.</p>
+                )}
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <label className="flex items-center gap-2 text-sm text-muted"><input type="checkbox" checked={manual.save} onChange={(e) => setManual({ ...manual, save: e.target.checked })} /> zapisz jako własny produkt (będzie w wyszukiwaniu)</label>
                   <button type="button" className="btn-secondary" onClick={addManual}>Dodaj do koszyka</button>

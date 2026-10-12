@@ -57,6 +57,58 @@ export async function searchOwnProducts(q: string): Promise<OwnProduct[]> {
   return [...new Map(all.map((p) => [p.id, { ...p, price: p.price === null ? null : Number(p.price) }])).values()];
 }
 
+export type CatalogSize = { variantId: string; option: string; price: number | null; inStock: number; sku: string | null };
+export type CatalogHit = { productId: string; title: string; image: string | null; sku: string | null; sizes: CatalogSize[] };
+
+/**
+ * Wyszukiwarka katalogu w Kasie (ręczne dodawanie): modele ze Shopify po nazwie (wszystkie słowa), SKU albo EAN,
+ * z rozmiarami, ceną w wybranym sklepie i liczbą sztuk na stanie.
+ */
+export async function searchCatalog(q: string, storeId: string): Promise<CatalogHit[]> {
+  const { supabase } = await requireProfile();
+  const text = q.trim().replace(/[,()*%\\"']/g, " ").replace(/\s+/g, " ").trim();
+  if (text.length < 2) return [];
+  let byTitle = supabase.from("products").select("id").order("updated_at", { ascending: false }).limit(10);
+  for (const w of text.split(" ").slice(0, 6)) byTitle = byTitle.ilike("title", `%${w}%`);
+  const [title, style, links, eans] = await Promise.all([
+    byTitle,
+    supabase.from("products").select("id").ilike("style_sku", `%${text}%`).limit(10),
+    supabase.from("variant_store_links").select("variant:variants(product_id)").or(`sku.ilike.%${text}%,base_sku.ilike.%${text}%`).limit(40),
+    supabase.from("variants").select("product_id").eq("ean", text).limit(5),
+  ]);
+  // Najpierw dokładniejsze trafienia (EAN, SKU), potem po nazwie.
+  const ids = [...new Set([
+    ...(eans.data ?? []).map((v) => v.product_id as string),
+    ...(links.data ?? []).map((l) => (l.variant as unknown as { product_id: string } | null)?.product_id).filter((x): x is string => !!x),
+    ...(style.data ?? []).map((p) => p.id as string),
+    ...(title.data ?? []).map((p) => p.id as string),
+  ])].slice(0, 10);
+  if (!ids.length) return [];
+  const { data: products } = await supabase.from("products")
+    .select("id, title, image_url, style_sku, variants(id, option, links:variant_store_links(store_id, price, sku))")
+    .in("id", ids);
+  type P = { id: string; title: string; image_url: string | null; style_sku: string | null; variants: { id: string; option: string; links: { store_id: string; price: number | null; sku: string | null }[] }[] };
+  const list = (products ?? []) as unknown as P[];
+  const variantIds = list.flatMap((p) => p.variants.map((v) => v.id));
+  const counts = new Map<string, number>();
+  for (let i = 0; i < variantIds.length; i += 300) {
+    const { data } = await supabase.from("variant_stock_totals").select("variant_id, in_stock").in("variant_id", variantIds.slice(i, i + 300));
+    for (const r of data ?? []) counts.set(r.variant_id as string, Number(r.in_stock));
+  }
+  const collator = new Intl.Collator("pl", { numeric: true });
+  const order = new Map(ids.map((id, i) => [id, i]));
+  return list
+    .sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
+    .map((p) => ({
+      productId: p.id, title: p.title, image: p.image_url, sku: p.style_sku,
+      sizes: p.variants.map((v) => {
+        const own = v.links.find((l) => l.store_id === storeId);
+        const any = own?.price != null ? own : v.links.find((l) => l.price !== null);
+        return { variantId: v.id, option: v.option, price: any?.price != null ? Number(any.price) : null, inStock: counts.get(v.id) ?? 0, sku: own?.sku ?? v.links[0]?.sku ?? null };
+      }).sort((x, y) => collator.compare(x.option, y.option)),
+    }));
+}
+
 export type ScanChoice = { variantId: string; title: string; option: string; inStock: number };
 
 /** Najstarsza wolna sztuka rozmiaru: najpierw własne, potem komis; najpierw z lokalizacji sklepu. */

@@ -7,6 +7,9 @@ import { ConfirmSubmit } from "@/components/ConfirmSubmit";
 import { AddPrinterForm, RegenerateKeyForm } from "./PrinterKeyForms";
 import { deletePrinter, saveFiscalSettings, testPrinter, togglePrinter } from "./fiscal-actions";
 
+/** Wersja programu „Drukarka Magazyn” w agent/drukarka (0.2.0: sterownik ELZAB). */
+const AGENT_VERSION = "0.2.0";
+
 type Printer = { id: string; name: string; active: boolean; last_seen_at: string | null; last_status: Record<string, string> | null; created_at: string };
 type Job = { id: string; number: number; source: string; status: string; total: number; receipt_number: string | null; error: string | null; created_at: string; pos_order_id: string | null; order_id: string | null; printer: { name: string } | null };
 
@@ -30,7 +33,7 @@ export async function FiscalSettings() {
           <h2 className="h2">Drukarka fiskalna</h2>
           <p className="mt-1 text-sm text-muted">
             Paragony z Kasy („Zakończ i wystaw paragon”) i z zamówień („Drukuj paragon”) trafiają do kolejki. Program „Drukarka Magazyn” na komputerze z Windows
-            przy drukarce pobiera je co 2 sekundy, drukuje i odsyła numer paragonu. 
+            przy drukarce pobiera je co 2 sekundy, drukuje i odsyła numer paragonu. Obsługuje drukarki ELZAB (np. Zeta Online) przez sieć (Wi‑Fi / kabel) albo port COM.
           </p>
         </div>
         <ol className="grid gap-3 text-sm md:grid-cols-3">
@@ -50,6 +53,7 @@ export async function FiscalSettings() {
                     <td className="text-sm">
                       {online(p) ? <Pill tone="green">połączony</Pill> : p.last_seen_at ? <Pill tone="red">brak kontaktu</Pill> : <Pill tone="amber">jeszcze nie zainstalowany</Pill>}
                       {p.last_seen_at && <span className="block text-xs text-muted">ostatnio {dateTime(p.last_seen_at)}{p.last_status?.komputer ? ` · ${p.last_status.komputer}` : ""}{p.last_status?.wersja ? ` · v${p.last_status.wersja}` : ""}</span>}
+                      {p.last_status?.wersja && p.last_status.wersja < AGENT_VERSION && <span className="mt-1 block text-xs font-medium text-warn">Jest nowa wersja programu – <a className="underline" href="/api/program-drukarki">pobierz</a> i uruchom Zainstaluj.bat ponownie.</span>}
                     </td>
                     <td className="text-sm">
                       {p.last_status?.polaczenie ? <span className={String(p.last_status.polaczenie).startsWith("błąd") ? "text-bad" : ""}>{p.last_status.polaczenie}</span> : <span className="text-muted">–</span>}
