@@ -39,10 +39,20 @@ function cameraError(e: unknown) {
  * Skaner kodów kreskowych i QR aparatem telefonu (pełny ekran). Czyta kody sztuk (CODE128), EAN, UPC, QR.
  * `continuous` – zostaje otwarty i czyta kolejne kody (inwentaryzacja, kasa); inaczej zamyka się po pierwszym.
  */
-export function BarcodeScanner({ onResult, onClose, continuous, title = "Skanuj kod" }: { onResult: (code: string) => void; onClose: () => void; continuous?: boolean; title?: string }) {
+export function BarcodeScanner({ onResult, onClose, continuous, skip, title = "Skanuj kod" }: {
+  onResult: (code: string) => void;
+  onClose: () => void;
+  continuous?: boolean;
+  /** Poprzednio zeskanowany kod – pomijany (aparat często wciąż na niego patrzy po ponownym otwarciu). */
+  skip?: string;
+  title?: string;
+}) {
   const stage = useRef<HTMLDivElement>(null);
   const controls = useRef<IScannerControls | null>(null);
   const last = useRef<{ code: string; at: number }>({ code: "", at: 0 });
+  // Kody przyjęte w tym otwarciu skanera – drugi raz ten sam kod nie jest liczony (trzeba nakierować na kolejny).
+  const seen = useRef<Set<string>>(new Set(skip ? [skip.toUpperCase()] : []));
+  const [notice, setNotice] = useState<string | null>(null);
   const result = useRef(onResult);
   useEffect(() => { result.current = onResult; }, [onResult]);
   const [error, setError] = useState<string | null>(null);
@@ -80,9 +90,17 @@ export function BarcodeScanner({ onResult, onClose, continuous, title = "Skanuj 
             const code = res.getText().trim();
             if (!code) return;
             const now = Date.now();
-            // Ten sam kod przed aparatem – nie liczymy go kilka razy pod rząd.
-            if (code === last.current.code && now - last.current.at < 2500) return;
+            if (seen.current.has(code.toUpperCase())) {
+              // Ten sam przedmiot co wcześniej – czekamy na kolejny kod.
+              if (code !== last.current.code || now - last.current.at > 2500) {
+                last.current = { code, at: now };
+                setNotice(`${code} już zeskanowany – nakieruj na kolejny kod`);
+              }
+              return;
+            }
             last.current = { code, at: now };
+            seen.current.add(code.toUpperCase());
+            setNotice(null);
             beep();
             if (continuous) {
               setFlash(code);
@@ -113,6 +131,12 @@ export function BarcodeScanner({ onResult, onClose, continuous, title = "Skanuj 
       document.body.style.overflow = prev;
     };
   }, [continuous]);
+
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(null), 2200);
+    return () => clearTimeout(t);
+  }, [notice]);
 
   useEffect(() => {
     if (!flash) return;
@@ -148,6 +172,7 @@ export function BarcodeScanner({ onResult, onClose, continuous, title = "Skanuj 
 
       <div className="relative mt-auto space-y-3 px-4 pb-[max(1.5rem,env(safe-area-inset-bottom))] text-center">
         {flash && <div className="mx-auto w-fit max-w-full truncate rounded-full bg-emerald-500 px-4 py-2 font-mono text-sm font-semibold shadow-lg">✓ {flash}</div>}
+        {notice && !flash && <div className="mx-auto w-fit max-w-full rounded-full bg-amber-400 px-4 py-2 text-sm font-semibold text-black shadow-lg">{notice}</div>}
         {error ? (
           <div className="mx-auto max-w-sm rounded-2xl bg-white p-4 text-left text-sm text-ink shadow-lg">
             <p className="font-semibold">Aparat niedostępny</p>

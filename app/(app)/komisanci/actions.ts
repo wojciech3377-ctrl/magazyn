@@ -51,8 +51,10 @@ export async function createConsignorAccount(formData: FormData) {
   const { data, error } = await db.auth.admin.createUser({ email, password, email_confirm: true, user_metadata: { kind: "consignor", consignor_id: id } });
   if (error || !data.user) back(id, `Nie udało się utworzyć konta: ${error?.message ?? "błąd"}`, false);
   await db.from("consignors").update({ user_id: data.user!.id, email: email }).eq("id", id);
+  // Przy pierwszym logowaniu komisant ustawia własne hasło (bez migracji 0039 – pomijamy).
+  await db.from("consignors").update({ must_change_password: true }).eq("id", id);
   revalidatePath(`/komisanci/${id}`);
-  back(id, `Konto ${email} utworzone. Przekaż komisantowi adres aplikacji i hasło startowe – zaloguje się i zobaczy swój panel.`);
+  back(id, `Konto ${email} utworzone. Przekaż komisantowi adres aplikacji i hasło startowe – przy pierwszym logowaniu ustawi własne hasło.`);
 }
 
 /** Zablokowanie dostępu: konto komisanta jest usuwane (dane i historia komisu zostają). */
@@ -78,7 +80,8 @@ export async function resetConsignorPassword(formData: FormData) {
   if (!c?.user_id) back(id, "Komisant nie ma konta.", false);
   const { error } = await db.auth.admin.updateUserById(c!.user_id as string, { password });
   if (error) back(id, error.message, false);
-  back(id, "Hasło zmienione.");
+  await db.from("consignors").update({ must_change_password: true }).eq("id", id);
+  back(id, "Hasło tymczasowe ustawione – komisant po zalogowaniu ustawi własne hasło.");
 }
 
 /** Wypłata dla komisanta (przelew) – zmniejsza kwotę do wypłaty. Kwota ujemna = korekta. */

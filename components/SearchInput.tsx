@@ -27,17 +27,42 @@ export const SearchInput = forwardRef<HTMLInputElement, Props>(function SearchIn
   const inner = useRef<HTMLInputElement>(null);
   useImperativeHandle(ref, () => inner.current!);
   const [scanning, setScanning] = useState(false);
+  const [skip, setSkip] = useState<string | undefined>();
+  const lastScanned = useRef<string | undefined>(undefined);
+  const before = useRef<{ value: string; scanned: boolean }>({ value: "", scanned: false });
 
-  function handle(code: string) {
-    if (!continuous) setScanning(false);
-    if (onScan) return onScan(code);
+  /** Wpisuje wartość do pola tak, jak gdyby wpisała ją osoba (działa też w polach sterowanych przez React). */
+  function setValue(value: string) {
     const el = inner.current;
     if (!el) return;
-    // Pole niesterowane: wpisz kod i wyślij formularz (np. Magazyn → wyniki dla kodu).
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-    setter?.call(el, code);
+    setter?.call(el, value);
     el.dispatchEvent(new Event("input", { bubbles: true }));
-    el.form?.requestSubmit();
+  }
+
+  /** Aparat: pole czyści się, a poprzedni kod jest pomijany – od razu można skanować kolejny przedmiot. */
+  function openScanner() {
+    const prev = inner.current?.value.trim() || lastScanned.current;
+    before.current = { value: inner.current?.value ?? "", scanned: false };
+    setSkip(prev || undefined);
+    if (inner.current?.value) setValue("");
+    setScanning(true);
+  }
+
+  /** Zamknięcie bez odczytu – w polu wraca to, co było wpisane. */
+  function close() {
+    setScanning(false);
+    if (!before.current.scanned && before.current.value && !inner.current?.value) setValue(before.current.value);
+  }
+
+  function handle(code: string) {
+    lastScanned.current = code;
+    before.current.scanned = true;
+    if (!continuous) setScanning(false);
+    if (onScan) return onScan(code);
+    // Pole niesterowane: wpisz kod i wyślij formularz (np. Magazyn → wyniki dla kodu).
+    setValue(code);
+    inner.current?.form?.requestSubmit();
   }
 
   return (
@@ -56,14 +81,14 @@ export const SearchInput = forwardRef<HTMLInputElement, Props>(function SearchIn
       />
       <button
         type="button"
-        onClick={() => setScanning(true)}
+        onClick={openScanner}
         className={`absolute right-1 top-1/2 flex -translate-y-1/2 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-accent-soft hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${large ? "h-10 w-11" : "h-8 w-9"}`}
         aria-label="Skanuj kod aparatem"
         title="Skanuj kod aparatem"
       >
         <Icon name="camera" className={large ? "h-6 w-6" : "h-5 w-5"} />
       </button>
-      {scanning && <BarcodeScanner continuous={continuous} onResult={handle} onClose={() => setScanning(false)} />}
+      {scanning && <BarcodeScanner continuous={continuous} skip={skip} onResult={handle} onClose={close} />}
     </div>
   );
 });

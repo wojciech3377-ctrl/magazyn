@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { signOut } from "@/app/login/actions";
 import { TableLabels } from "@/components/TableLabels";
 import { createClient } from "@/lib/supabase/server";
@@ -28,7 +29,10 @@ export default async function KomisLayout({ children }: { children: React.ReactN
             <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-accent to-indigo-500 text-white shadow-sm"><Icon name="users" className="h-4 w-4" /></span>
             <span className="truncate font-semibold tracking-tight">{name ? `Panel ${name}` : "Panel komisanta"}</span>
           </span>
-          <form action={signOut}><button className="btn-ghost"><Icon name="logout" className="h-4 w-4" /> Wyloguj</button></form>
+          <div className="flex items-center gap-1">
+            <Link className="btn-ghost" href="/komis/haslo" title="Zmień hasło"><Icon name="key" className="h-4 w-4" /><span className="hidden sm:inline">Hasło</span></Link>
+            <form action={signOut}><button className="btn-ghost"><Icon name="logout" className="h-4 w-4" /> Wyloguj</button></form>
+          </div>
         </div>
       </header>
       <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:py-8">{children}<TableLabels /></main>

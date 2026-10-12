@@ -28,7 +28,11 @@ export type ConsignorShipment = {
 export type ShipAddress = { name: string; street: string; postcode: string; city: string; country: string; phone: string };
 
 /** Zalogowany komisant (albo przekierowanie: pracownik → aplikacja, brak konta → logowanie). */
-export async function requireConsignor() {
+/**
+ * Zalogowany komisant. Konto z hasłem startowym (pierwsze logowanie albo hasło nadane przez nas) najpierw
+ * ustawia własne hasło – wszystkie strony panelu przekierowują na /komis/haslo.
+ */
+export async function requireConsignor(opts: { passwordPage?: boolean } = {}) {
   const supabase = await createClient();
   const { data: auth } = await supabase.auth.getClaims();
   const userId = auth?.claims?.sub;
@@ -39,6 +43,7 @@ export async function requireConsignor() {
     const { data: profile } = await supabase.from("profiles").select("active").eq("id", userId).maybeSingle();
     redirect(profile?.active ? "/magazyn" : "/login?blad=konto");
   }
+  if (!opts.passwordPage && (consignor as { must_change_password?: boolean }).must_change_password) redirect("/komis/haslo");
   return { db, consignor: consignor as Consignor };
 }
 

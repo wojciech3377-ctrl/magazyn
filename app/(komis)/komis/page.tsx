@@ -6,7 +6,7 @@ import { IntakeList, type IntakeCard } from "./IntakeList";
 import { mergeIntakes } from "./intake-actions";
 import { INTAKE_STATUS, ITEM_STATUS, type Intake, type IntakeItem } from "@/lib/intake";
 import { dateOnly, dateTime, money } from "@/lib/labels";
-import { Pill } from "@/components/ui";
+import { Notice, Pill } from "@/components/ui";
 import { ShipRequestForm } from "./ShipRequestForm";
 import { cancelShipmentByConsignor } from "./actions";
 import { consignorTimeline, describeEvent } from "@/lib/history";
@@ -78,6 +78,7 @@ export default async function KomisPage({ searchParams }: { searchParams: Promis
   return (
     <>
       <h1 className="mb-1 text-2xl font-semibold">{consignor.name}</h1>
+      {sp.ok && <div className="mb-4"><Notice tone="ok">{sp.ok}</Notice></div>}
       <p className="mb-5 text-sm text-muted">Twoje rzeczy w komisie, sprzedaż i wypłaty. Rzecz liczy się do wypłaty, gdy wystawimy do niej paragon albo fakturę.</p>
 
       <div className="mb-6 grid gap-3 sm:grid-cols-4">
