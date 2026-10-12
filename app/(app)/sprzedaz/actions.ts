@@ -26,7 +26,7 @@ export async function pullOrdersNow() {
   await requireAdmin();
   const db = createAdminClient();
   const jobs: [string, () => Promise<unknown>][] = [
-    ["shopify-orders", () => syncShopifyOrders(db)],
+    ["shopify-orders", () => syncShopifyOrders(db, 10, 7)],
   ];
   if (furgonetkaConfigured() && (await furgonetkaConnection(db))) jobs.push(["furgonetka", () => syncFurgonetkaShipments(db)]);
   for (const [job, fn] of jobs) {

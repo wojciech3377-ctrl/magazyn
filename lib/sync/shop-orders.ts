@@ -88,11 +88,10 @@ function toRow(storeId: string, o: ShopifyOrder, ex: Exclusions) {
       fulfillments,
       synced_at: new Date().toISOString(),
     },
-    onlyServices: lines.length > 0 && lines.every((l) => l.service),
   };
 }
 
-/** Zapis zamówień Shopify do bazy (bez zamówień składających się wyłącznie z usług, np. napraw). */
+/** Zapis zamówień Shopify do bazy. */
 export async function saveShopifyOrders(db: SupabaseClient, storeId: string, orders: ShopifyOrder[], ex?: Exclusions): Promise<string[]> {
   const exclusions = ex ?? (await loadExclusions(db));
   try {
@@ -115,7 +114,9 @@ export async function saveShopifyOrders(db: SupabaseClient, storeId: string, ord
 }
 
 async function saveOrderBatch(db: SupabaseClient, storeId: string, orders: ShopifyOrder[], exclusions: Exclusions) {
-  const rows = orders.map((o) => toRow(storeId, o, exclusions)).filter((r) => !r.onlyServices).map((r) => r.row);
+  // Wszystkie zamówienia trafiają do aplikacji – także złożone wyłącznie z produktów wykluczonych (usługi itp.);
+  // wykluczone pozycje nie tworzą tylko linii sprzedaży sztuk.
+  const rows = orders.map((o) => toRow(storeId, o, exclusions).row);
   if (!rows.length) return [] as string[];
   // Anulowane w Shopify poza aplikacją (wcześniej nieanulowane u nas) → sprzedane sztuki wracają na stan.
   const { data: before } = await db.from("orders").select("shopify_order_id, cancelled_at").in("shopify_order_id", rows.map((r) => r.shopify_order_id));
@@ -137,7 +138,7 @@ async function saveOrderBatch(db: SupabaseClient, storeId: string, orders: Shopi
 }
 
 /** Odczyt zamówień ze sklepów Shopify zmienionych od ostatniego razu. */
-export async function syncShopifyOrders(db: SupabaseClient, maxPages = 6) {
+export async function syncShopifyOrders(db: SupabaseClient, maxPages = 6, rereadDays = 0) {
   const { data: stores } = await db.from("stores").select("id, code, name, shopify_domain").not("shopify_domain", "is", null);
   const exclusions = await loadExclusions(db);
   const result: Record<string, number | string> = {};
@@ -145,6 +146,11 @@ export async function syncShopifyOrders(db: SupabaseClient, maxPages = 6) {
     const key = `shopify_orders:${s.id}`;
     const { data: st } = await db.from("sync_state").select("value").eq("key", key).maybeSingle();
     let since = (st?.value as { since?: string } | null)?.since ?? new Date(Date.now() - FIRST_RUN_DAYS * 86400_000).toISOString();
+    // Ręczne „Pobierz zamówienia teraz”: ponowny odczyt ostatnich dni (np. zamówienia wcześniej pominięte).
+    if (rereadDays > 0) {
+      const back = new Date(Date.now() - rereadDays * 86400_000).toISOString();
+      if (back < since) since = back;
+    }
     let after: string | null = null;
     let count = 0;
     try {

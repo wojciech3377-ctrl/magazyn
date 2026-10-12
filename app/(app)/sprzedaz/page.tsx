@@ -209,7 +209,9 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
               <tr><td colSpan={7} className="py-10 text-center text-muted">{tab || q ? "Brak zamówień." : "Zamówienia pojawią się po pierwszym odczycie ze Shopify (co 5 minut albo przyciskiem „Pobierz zamówienia teraz”)."}</td></tr>
             )}
             {orders?.map((o) => {
-              const lines = ((o.line_items ?? []) as LineItem[]).map((l, i) => ({ ...l, i })).filter((l) => !l.service);
+              const allLines = ((o.line_items ?? []) as LineItem[]).map((l, i) => ({ ...l, i }));
+              // Pozycje wykluczone z magazynu (usługi itp.) – widoczne, gdy zamówienie ma tylko takie.
+              const lines = allLines.some((l) => !l.service) ? allLines.filter((l) => !l.service) : allLines;
               const pay = paymentLabel(o);
               const oSales = salesBy.get(o.id) ?? [];
               const ship = shipBy.get(o.id);
