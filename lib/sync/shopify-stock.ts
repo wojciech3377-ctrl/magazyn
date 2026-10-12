@@ -23,9 +23,15 @@ export async function shopifyLocations(domain: string, storeCode: string) {
   return data.locations.nodes;
 }
 
-/** Stan „dostępne” każdej pozycji magazynowej w lokalizacji Shopify: inventoryItemId → ilość. */
-export async function readLevels(domain: string, storeCode: string, locationId: string, maxPages = 40) {
-  const out = new Map<string, number>();
+export type Levels = Map<string, number> & { truncated?: boolean };
+
+/**
+ * Stan „dostępne” każdej pozycji magazynowej w lokalizacji Shopify: inventoryItemId → ilość.
+ * Do 200 stron po 250 (50 000 pozycji) – wcześniej 40 stron (10 000) i w dużym sklepie najnowsze produkty
+ * (np. pojedyncze używane pary) nie były w ogóle czytane, więc nie dostawały sztuk.
+ */
+export async function readLevels(domain: string, storeCode: string, locationId: string, maxPages = 200): Promise<Levels> {
+  const out: Levels = new Map<string, number>();
   let after: string | null = null;
   for (let page = 0; page < maxPages; page++) {
     const data: { location: { inventoryLevels: { nodes: { item: { id: string } | null; quantities: { name: string; quantity: number }[] }[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } } } | null } =
@@ -37,6 +43,7 @@ export async function readLevels(domain: string, storeCode: string, locationId: 
     for (const n of levels.nodes) if (n.item) out.set(n.item.id, n.quantities.find((q) => q.name === "available")?.quantity ?? 0);
     if (!levels.pageInfo.hasNextPage) break;
     after = levels.pageInfo.endCursor;
+    if (page === maxPages - 1) out.truncated = true;
   }
   return out;
 }
@@ -102,8 +109,10 @@ export async function reconcileFromShopify(db: SupabaseClient, opts: { force?: b
     // Ten sam rozmiar w dwóch produktach Shopify (duplikat) – liczymy większy stan, nie sumę.
     const best = new Map<string, { variant_id: string; location_id: string; qty: number; count_locations: string[] }>();
     const perItem = new Map<string, number>();
+    let truncated = false;
     for (const [shopLoc, group] of groupByShopLocation(mapped)) {
       const levels = await readLevels(s.shopify_domain, s.code, shopLoc);
+      if (levels.truncated) truncated = true;
       for (const [item, qty] of levels) perItem.set(item, (perItem.get(item) ?? 0) + Math.max(0, qty));
       for (const [item, qty] of levels) {
         const variantId = variantOf.get(item);
@@ -122,7 +131,7 @@ export async function reconcileFromShopify(db: SupabaseClient, opts: { force?: b
       p_remove: true, p_surplus_minutes: opts.force ? 0 : 30, p_history_limit: opts.force ? 100000 : 50,
     });
     if (error) throw error;
-    results[s.name] = data;
+    results[s.name] = { ...(data as object), levels: perItem.size, ...(truncated ? { uwaga: "Shopify ma ponad 50 000 pozycji w lokalizacji – część nie została odczytana" } : {}) };
     // Stan ze Shopify przy rozmiarze (Katalog) – tylko zmienione.
     const rows = [...perItem.entries()].map(([item, qty]) => ({ item, qty }));
     for (let i = 0; i < rows.length; i += 2000) await db.rpc("set_shopify_qty", { p_store_id: s.id, p_rows: rows.slice(i, i + 2000) }).then(() => null, () => null);

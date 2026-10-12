@@ -90,7 +90,7 @@ const RECEIPT_FIELDS = "number, issued_at, base_order_id, pos_order_id, source, 
 
 /** Dokument sprzedaży: paragon (ma pierwszeństwo – faktura do paragonu nie jest osobną sprzedażą) albo faktura. */
 type Doc = { kind: DocKind; number: string | null; date: string; items?: Receipt["items"] };
-type InvoiceRow = { id: string; number: string; issue_date: string; order_id: string | null; pos_order_id: string | null };
+type InvoiceRow = { id: string; number: string; issue_date: string; order_id: string | null; pos_order_id: string | null; kind?: string | null };
 
 /** Data faktury (dzień) jako chwila: północ czasu polskiego. */
 function invoiceInstant(day: string) {
@@ -101,7 +101,7 @@ function invoiceInstant(day: string) {
   return new Date(guess - h * 3600_000).toISOString();
 }
 const receiptDoc = (r: Receipt | undefined): Doc | undefined => (r ? { kind: "receipt", number: r.number, date: r.issued_at, items: r.items } : undefined);
-const invoiceDoc = (i: InvoiceRow | undefined): Doc | undefined => (i ? { kind: "invoice", number: i.number, date: invoiceInstant(i.issue_date) } : undefined);
+const invoiceDoc = (i: InvoiceRow | undefined): Doc | undefined => (i ? { kind: i.kind === "receipt" ? "receipt" : "invoice", number: i.number, date: invoiceInstant(i.issue_date) } : undefined);
 
 type Order = {
   id: string; name: string; ordered_at: string; cancelled_at: string | null; status: string; cod: boolean; financial_status: string | null;
@@ -206,15 +206,21 @@ async function docsFor(db: SupabaseClient, orders: Order[], posIds: string[]) {
   const better = (cur: Receipt | undefined, r: Receipt) => !cur || (cur.source === "base" && r.source !== "base");
   for (const r of rb) if (r.base_order_id && better(byBase.get(Number(r.base_order_id)), r)) byBase.set(Number(r.base_order_id), r);
   for (const r of rp) if (r.pos_order_id && better(byPos.get(r.pos_order_id), r)) byPos.set(r.pos_order_id, r);
-  const invByOrder = new Map(ib.map((i) => [i.order_id as string, i]));
-  const invByPos = new Map(ip.map((i) => [i.pos_order_id as string, i]));
+  // Paragon (PAR) i późniejsza faktura do tej samej sprzedaży: dokumentem sprzedaży jest paragon.
+  const first = (rows: InvoiceRow[], key: (i: InvoiceRow) => string) => {
+    const m = new Map<string, InvoiceRow>();
+    for (const i of rows) if (!m.has(key(i)) || i.kind === "receipt") m.set(key(i), i);
+    return m;
+  };
+  const invByOrder = first(ib, (i) => i.order_id as string);
+  const invByPos = first(ip, (i) => i.pos_order_id as string);
   return {
     orderDoc: (o: Order) => receiptDoc(o.base_order_id ? byBase.get(Number(o.base_order_id)) : undefined) ?? invoiceDoc(invByOrder.get(o.id)),
     posDoc: (id: string) => receiptDoc(byPos.get(id)) ?? invoiceDoc(invByPos.get(id)),
   };
 }
 
-const INVOICE_FIELDS = "id, number, issue_date, order_id, pos_order_id";
+const INVOICE_FIELDS = "id, number, issue_date, order_id, pos_order_id, kind";
 
 type InvoiceItemRow = { id: string; name: string; total_gross: number; vat: string; invoice: InvoiceRow; unit: Unit };
 
@@ -223,7 +229,7 @@ async function manualInvoiceLines(db: SupabaseClient, invoiceIds: string[]) {
   const items = await inChunks<InvoiceItemRow>(invoiceIds, (part) =>
     db.from("invoice_items").select(`id, name, total_gross, vat, invoice:invoices(${INVOICE_FIELDS}), unit:units(${UNIT_FIELDS})`).in("invoice_id", part as string[]));
   return items.map((i): JpkLine => ({
-    key: `i:${i.id}`, source: "shop", kind: "invoice", docNumber: i.invoice.number, docDate: invoiceInstant(i.invoice.issue_date), saleDate: invoiceInstant(i.invoice.issue_date),
+    key: `i:${i.id}`, source: "shop", kind: i.invoice.kind === "receipt" ? "receipt" : "invoice", docNumber: i.invoice.number, docDate: invoiceInstant(i.invoice.issue_date), saleDate: invoiceInstant(i.invoice.issue_date),
     name: i.name, price: Number(i.total_gross), vat: i.unit ? vatOf(i.unit) : i.vat === "23" ? "A" : "F", ...unitPart(i.unit),
     orderLabel: i.invoice.number, orderHref: `/sprzedaz/faktury/${i.invoice.id}`, saleNote: null,
     saleId: null, variantLinked: false, baseOrderId: null, pieceRef: null, pendingContractId: null,

@@ -1,8 +1,10 @@
 "use client";
 
 import { useActionState, useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { createInvoiceAction, lookupNipAction, searchCustomersAction, searchInvoiceItemsAction, type CustomerHit, type InvoiceFormState, type InvoiceItemHit } from "./actions";
+import Link from "next/link";
+import { createInvoiceAction, issueReceiptAction, lookupNipAction, previewReceiptAction, searchCustomersAction, searchInvoiceItemsAction, type CustomerHit, type InvoiceFormState, type InvoiceItemHit, type ReceiptState } from "./actions";
 import type { InvoiceDraft } from "@/lib/invoices/service";
+import { printPdf } from "@/components/PrintPdf";
 
 type Row = { name: string; quantity: string; unit: string; price: string; vat: "23" | "margin"; unit_id?: string | null; sale_id?: string | null; pos_item_id?: string | null; checkVat?: boolean };
 
@@ -10,8 +12,29 @@ const PAYMENTS: [string, string][] = [["card", "Karta / płatność online"], ["
 const pl = (n: number) => new Intl.NumberFormat("pl-PL", { style: "currency", currency: "PLN" }).format(n);
 const num = (v: string) => Number(v.replace(",", ".")) || 0;
 
-export function InvoiceForm({ draft, ksefReady }: { draft: InvoiceDraft; ksefReady: boolean }) {
-  const [state, action, pending] = useActionState<InvoiceFormState, FormData>(createInvoiceAction, null);
+export function InvoiceForm({ draft, ksefReady, receipt = false }: { draft: InvoiceDraft; ksefReady: boolean; receipt?: boolean }) {
+  const [invState, invAction, invPending] = useActionState<InvoiceFormState, FormData>(createInvoiceAction, null);
+  const [parState, parAction, parPending] = useActionState<ReceiptState, FormData>(issueReceiptAction, null);
+  const state = receipt ? parState : invState;
+  const action = receipt ? parAction : invAction;
+  const pending = receipt ? parPending : invPending;
+  // Paragon: po wystawieniu od razu systemowe okno drukowania.
+  const printed = useRef<string | null>(null);
+  useEffect(() => {
+    if (receipt && parState?.id && printed.current !== parState.id) {
+      printed.current = parState.id;
+      printPdf(`/api/faktury/${parState.id}/pdf`);
+    }
+  }, [receipt, parState]);
+  const [preview, setPreview] = useState<{ busy: boolean; url: string | null; error: string | null }>({ busy: false, url: null, error: null });
+  async function showPreview() {
+    if (!formRef.current) return;
+    setPreview({ busy: true, url: null, error: null });
+    const r = await previewReceiptAction(new FormData(formRef.current));
+    if (r.error || !r.pdf) return setPreview({ busy: false, url: null, error: r.error ?? "Nie udało się przygotować podglądu." });
+    const bytes = Uint8Array.from(atob(r.pdf), (c) => c.charCodeAt(0));
+    setPreview({ busy: false, url: URL.createObjectURL(new Blob([bytes], { type: "application/pdf" })), error: null });
+  }
   const [company, setCompany] = useState(!!draft.buyer.company);
   const [paid, setPaid] = useState(draft.paid);
   const formRef = useRef<HTMLFormElement>(null);
@@ -110,6 +133,12 @@ export function InvoiceForm({ draft, ksefReady }: { draft: InvoiceDraft; ksefRea
       {draft.posOrderId && <input type="hidden" name="pos_order_id" value={draft.posOrderId} />}
       {draft.consignorShipmentId && <input type="hidden" name="consignor_shipment_id" value={draft.consignorShipmentId} />}
 
+      {receipt ? (
+        <section className="card border-sky-200 bg-sky-50/60 p-4 text-sm">
+          <b>Paragon dla osoby prywatnej</b> – dokument w formie faktury do druku, bez danych nabywcy. Nie trafia do KSeF.
+          Numer nadawany przy wydruku: <span className="font-mono">PAR/{draft.issueDate.slice(5, 7)}/kolejny</span> (od 1 w każdym miesiącu).
+        </section>
+      ) : (
       <section className="card p-4">
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <h2 className="h2 mr-2">Nabywca</h2>
@@ -161,6 +190,7 @@ export function InvoiceForm({ draft, ksefReady }: { draft: InvoiceDraft; ksefRea
           <label className="flex items-center gap-2 self-end pb-2 text-sm"><input type="checkbox" name="save_customer" value="1" defaultChecked /> Zapisz nabywcę na liście</label>
         </div>
       </section>
+      )}
 
       <section className="card overflow-x-auto p-4">
         <div className="mb-3 flex flex-wrap items-center gap-3">
@@ -219,7 +249,7 @@ export function InvoiceForm({ draft, ksefReady }: { draft: InvoiceDraft; ksefRea
             {PAYMENTS.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
         </div>
-        <div>
+        {!receipt && <div>
           <label className="label">Status płatności</label>
           <div className="flex gap-1">
             {[true, false].map((p) => (
@@ -229,21 +259,57 @@ export function InvoiceForm({ draft, ksefReady }: { draft: InvoiceDraft; ksefRea
               </button>
             ))}
           </div>
-        </div>
-        {paid
+        </div>}
+        {paid || receipt
           ? <div><label className="label" htmlFor="paid_at">Data zapłaty</label><input id="paid_at" className="input" type="date" name="paid_at" defaultValue={draft.paidAt ?? draft.issueDate} /></div>
           : <div><label className="label" htmlFor="due_date">Termin płatności</label><input id="due_date" className="input" type="date" name="due_date" defaultValue={draft.dueDate ?? draft.issueDate} /></div>}
-        <div className="md:col-span-3"><label className="label" htmlFor="notes">Uwagi (na fakturze)</label><input id="notes" className="input" name="notes" defaultValue={draft.notes ?? ""} /></div>
+        <div className="md:col-span-3"><label className="label" htmlFor="notes">Uwagi (na {receipt ? "paragonie" : "fakturze"})</label><input id="notes" className="input" name="notes" defaultValue={draft.notes ?? ""} /></div>
       </section>
 
+      {receipt ? (
+        <div className="space-y-3">
+          {needsCheck && <label className="flex items-center gap-2 text-sm text-warn"><input type="checkbox" name="vat_checked" value="1" /> Sprawdziłem stawki VAT pozycji na pomarańczowo</label>}
+          {(parState?.error || preview.error) && <p className="text-sm text-bad" role="alert">{parState?.error ?? preview.error}</p>}
+          {parState?.id && (
+            <div className="flex flex-wrap items-center gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm" role="status">
+              <span className="font-medium text-ok">Paragon {parState.number} wystawiony – otwiera się wydruk.{parState.note}</span>
+              <button type="button" className="btn-secondary" onClick={() => printPdf(`/api/faktury/${parState.id}/pdf`)}>Drukuj ponownie</button>
+              <Link className="btn-secondary" href={`/sprzedaz/faktury/${parState.id}`}>Otwórz dokument</Link>
+              <a className="text-accent hover:underline" href="/sprzedaz/faktury/nowa?typ=paragon">Nowy paragon</a>
+            </div>
+          )}
+          {!parState?.id && (
+            <div className="flex flex-wrap justify-end gap-2">
+              <button type="button" className="btn-secondary" onClick={showPreview} disabled={preview.busy || pending}>{preview.busy ? "Przygotowuję…" : "Podgląd dokumentu"}</button>
+              <button className="btn" disabled={pending}>{pending ? "Wystawiam…" : "Wydrukuj dokument"}</button>
+            </div>
+          )}
+          {preview.url && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-label="Podgląd paragonu" onClick={() => setPreview({ busy: false, url: null, error: null })}>
+              <div className="flex h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center justify-between border-b border-line px-4 py-2">
+                  <span className="font-medium">Podgląd dokumentu (numer zostanie nadany przy wydruku)</span>
+                  <button type="button" className="text-muted hover:text-ink" onClick={() => setPreview({ busy: false, url: null, error: null })} aria-label="Zamknij">✕</button>
+                </div>
+                <iframe src={preview.url} title="Podgląd paragonu" className="flex-1" />
+                <div className="flex justify-end gap-2 border-t border-line px-4 py-2">
+                  <button type="button" className="btn-secondary" onClick={() => setPreview({ busy: false, url: null, error: null })}>Popraw</button>
+                  <button type="button" className="btn" disabled={pending} onClick={() => { setPreview({ busy: false, url: null, error: null }); formRef.current?.requestSubmit(); }}>Wydrukuj dokument</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
       <div className="flex flex-wrap items-center gap-4">
         {ksefReady
           ? <label className="flex items-center gap-2 text-sm"><input type="checkbox" name="send_ksef" value="1" defaultChecked /> Wyślij od razu do KSeF</label>
           : <span className="text-sm text-warn">KSeF nie jest skonfigurowany – faktura zostanie tylko zapisana.</span>}
         {needsCheck && <label className="flex items-center gap-2 text-sm text-warn"><input type="checkbox" name="vat_checked" value="1" /> Sprawdziłem stawki VAT pozycji na pomarańczowo</label>}
-        {state?.error && <p className="text-sm text-bad" role="alert">{state.error}</p>}
+        {invState?.error && <p className="text-sm text-bad" role="alert">{invState.error}</p>}
         <button className="btn ml-auto" disabled={pending}>{pending ? "Wystawiam…" : "Wystaw fakturę"}</button>
       </div>
+      )}
     </form>
   );
 }

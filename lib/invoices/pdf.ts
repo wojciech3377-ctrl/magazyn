@@ -58,7 +58,8 @@ export async function renderInvoicePdf(inv: InvoiceForPdf) {
   const f = await fonts();
   const regular = await doc.embedFont(f.regular, { subset: true });
   const bold = await doc.embedFont(f.bold, { subset: true });
-  doc.setTitle(`Faktura ${inv.number}`);
+  const isPar = inv.kind === "receipt";
+  doc.setTitle(`${isPar ? "Paragon" : "Faktura"} ${inv.number}`);
   let page: PDFPage = doc.addPage(A4);
   let y = A4[1] - M;
   const text = (t: string, x: number, size = 9, font = regular, color = rgb(0, 0, 0)) => page.drawText(t, { x, y, size, font, color });
@@ -66,7 +67,7 @@ export async function renderInvoicePdf(inv: InvoiceForPdf) {
 
   // Nagłówek
   const isKor = inv.kind === "correction";
-  text(isKor ? `Faktura korygująca ${inv.number}` : `Faktura VAT ${inv.number}`, M, 16, bold);
+  text(isKor ? `Faktura korygująca ${inv.number}` : isPar ? `Paragon ${inv.number}` : `Faktura VAT ${inv.number}`, M, 16, bold);
   const right = A4[0] - M;
   const meta = [`Data wystawienia: ${date(inv.issue_date)}${inv.place ? `, ${inv.place}` : ""}`, `Data sprzedaży: ${date(inv.sale_date)}`];
   meta.forEach((m, i) => page.drawText(m, { x: right - regular.widthOfTextAtSize(m, 9), y: y - i * 12 + 4, size: 9, font: regular }));
@@ -93,7 +94,8 @@ export async function renderInvoicePdf(inv: InvoiceForPdf) {
     y -= 8;
   }
   const y1 = party("SPRZEDAWCA", inv.seller, M);
-  const y2 = party("NABYWCA", inv.buyer, A4[0] / 2 + 10);
+  // Paragon: bez danych nabywcy (osoba prywatna).
+  const y2 = isPar ? y1 : party("NABYWCA", inv.buyer, A4[0] / 2 + 10);
   y = Math.min(y1, y2) - 14;
 
   // Tabela pozycji (przy korekcie: najpierw „przed korektą”, potem „po korekcie”)
@@ -162,8 +164,10 @@ export async function renderInvoicePdf(inv: InvoiceForPdf) {
     y -= 12;
   }
 
-  // Kod QR KSeF (KOD I) – tylko dla faktur przesłanych do KSeF.
-  if (inv.status !== "sending" && inv.status !== "accepted") {
+  // Kod QR KSeF (KOD I) – tylko dla faktur przesłanych do KSeF. Paragon nie trafia do KSeF.
+  if (isPar) {
+    page.drawText("Dokument sprzedaży dla osoby prywatnej (paragon) – bez danych nabywcy, nie jest przesyłany do KSeF.", { x: M, y: Math.min(y - 6, 140), size: 8, font: regular, color: grey });
+  } else if (inv.status !== "sending" && inv.status !== "accepted") {
     page.drawText(inv.status === "cancelled" ? "FAKTURA UNIEWAŻNIONA" : "Faktura nie została jeszcze przyjęta w KSeF – to nie jest dokument do przekazania nabywcy.", { x: M, y: 140, size: 9, font: bold, color: rgb(0.7, 0.1, 0.1) });
   } else if (inv.xml_hash && inv.seller.nip) {
     const link = verificationLink(inv.seller.nip, inv.issue_date, inv.xml_hash);

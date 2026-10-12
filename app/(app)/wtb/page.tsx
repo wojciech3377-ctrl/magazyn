@@ -4,7 +4,9 @@ import { dateOnly } from "@/lib/labels";
 import { Notice, PageHeader } from "@/components/ui";
 import { SelectAll } from "@/components/SelectAll";
 import { WtbAdd } from "./WtbAdd";
-import { editWtbItem, updateWtb } from "./actions";
+import { editWtbGroup, updateWtb } from "./actions";
+import { GroupCheck, WtbEditDialog } from "./WtbControls";
+import { groupWtb } from "@/lib/wtb-group";
 
 const TABS = [
   { key: "", label: "Szukamy", status: "active" },
@@ -16,19 +18,24 @@ export default async function WtbPage({ searchParams }: { searchParams: Promise<
   const { supabase } = await requireProfile();
   const tab = TABS.find((t) => t.key === (sp.widok ?? "")) ?? TABS[0];
   const [{ data: items }, ...counts] = await Promise.all([
-    supabase.from("wtb_items").select("id, title, size, sku, image_url, note, source, order_id, created_at, closed_at").eq("status", tab.status)
+    supabase.from("wtb_items").select("id, title, size, sku, image_url, note, source, order_id, product_id, created_at, closed_at").eq("status", tab.status)
       .order(tab.status === "active" ? "created_at" : "closed_at", { ascending: tab.status === "active" }).limit(500),
     ...TABS.map((t) => supabase.from("wtb_items").select("id", { count: "exact", head: true }).eq("status", t.status)),
   ]);
   const back = tab.key ? `/wtb?widok=${tab.key}` : "/wtb";
   const active = tab.status === "active";
+  const groups = groupWtb(items ?? []);
+  // Wersja podglądu grafiki – zmienia się po każdej zmianie listy (nazwa, rozmiary, pozycje).
+  let h = 0;
+  for (const ch of (items ?? []).map((i) => `${i.id}${i.title}${i.size}${i.sku}`).join("|")) h = (h * 31 + ch.charCodeAt(0)) | 0;
+  const version = `${items?.length ?? 0}-${(h >>> 0).toString(36)}`;
 
   return (
     <>
       <PageHeader
         title="WTB – szukamy"
-        sub="Buty, które chcemy odkupić. Zaznacz pozycje i zrób z nich grafikę „SNEAKERS DEPOT WTB” (do 16 par na jednej grafice, więcej = kilka grafik)."
-        actions={active && items?.length ? <Link className="btn" href="/wtb/grafika">Grafika z całej listy ({items.length})</Link> : null}
+        sub="Buty, które chcemy odkupić – jeden model na karcie z rozmiarami pod spodem. Zaznacz model albo pojedyncze rozmiary i zrób grafikę „SNEAKERS DEPOT WTB” (do 16 modeli na jednej grafice)."
+        actions={active && items?.length ? <Link className="btn" href="/wtb/grafika">Grafika z całej listy ({groups.length} {groups.length === 1 ? "model" : "modeli"})</Link> : null}
       />
       {sp.ok && <div className="mb-4"><Notice tone="ok">{sp.ok}</Notice></div>}
       {sp.blad && <div className="mb-4"><Notice tone="error">{sp.blad}</Notice></div>}
@@ -38,9 +45,9 @@ export default async function WtbPage({ searchParams }: { searchParams: Promise<
           <WtbAdd />
           {!!items?.length && (
             <Link href="/wtb/grafika" className="group block rounded-lg border border-line bg-white p-2 transition hover:border-accent hover:shadow-md" title="Podgląd grafiki z całej listy">
-              <span className="mb-1 block text-xs font-medium text-muted group-hover:text-accent">Podgląd grafiki z całej listy{items.length > 16 ? " (pierwsza z kilku)" : ""} →</span>
+              <span className="mb-1 block text-xs font-medium text-muted group-hover:text-accent">Podgląd grafiki z całej listy{groups.length > 16 ? " (pierwsza z kilku)" : ""} →</span>
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={`/api/wtb?strona=1&v=${items.length}-${items.map((i) => i.id.slice(0, 4)).join("").slice(0, 40)}`} alt="Podgląd grafiki WTB" className="w-full rounded" loading="lazy" />
+              <img src={`/api/wtb?strona=1&v=${version}`} alt="Podgląd grafiki WTB" className="w-full rounded" loading="lazy" />
             </Link>
           )}
         </div>
@@ -72,46 +79,46 @@ export default async function WtbPage({ searchParams }: { searchParams: Promise<
               <button className="btn-secondary" name="to" value="active">Przywróć na listę</button>
             )}
           </div>
-          <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-            {items.map((it) => (
-              <li key={it.id}>
-                <label className="group flex h-full cursor-pointer flex-col rounded-lg border border-line p-2 transition-colors hover:border-accent hover:bg-sky-50 has-[:checked]:border-accent has-[:checked]:bg-sky-50">
-                  <div className="flex items-start justify-between">
-                    <input type="checkbox" name="ids" value={it.id} className="h-4 w-4" aria-label={`Zaznacz ${it.title} ${it.size ?? ""}`} />
-                    <span className="text-xs text-muted">{dateOnly(active ? it.created_at : it.closed_at)}</span>
+          <ul className="grid grid-cols-2 items-start gap-3 sm:grid-cols-3 lg:grid-cols-5">
+            {groups.map((g) => {
+              const first = g.items[0];
+              const notes = [...new Map(g.items.filter((i) => i.note).map((i) => [i.note, i])).values()];
+              return (
+                <li key={g.key} className="flex flex-col rounded-lg border border-line bg-white p-2 transition-colors hover:border-accent has-[:checked]:border-accent has-[:checked]:bg-sky-50">
+                  <div className="flex items-start justify-between gap-2">
+                    <GroupCheck label={g.title} />
+                    <span className="text-xs text-muted">{dateOnly(active ? first.created_at : first.closed_at)}</span>
                   </div>
                   <div className="my-2 flex h-32 items-center justify-center">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    {it.image_url ? <img src={`${it.image_url}${it.image_url.includes("?") ? "&" : "?"}width=300`} alt="" className="max-h-32 object-contain" loading="lazy" /> : <span className="text-xs text-muted">brak zdjęcia</span>}
+                    {g.image_url ? <img src={`${g.image_url}${g.image_url.includes("?") ? "&" : "?"}width=300`} alt="" className="max-h-32 object-contain" loading="lazy" /> : <span className="text-xs text-muted">brak zdjęcia</span>}
                   </div>
-                  <div className="line-clamp-2 text-sm font-medium">{it.title}</div>
-                  <div className="mt-1 flex items-baseline justify-between gap-2">
-                    <span className="text-lg font-bold">{it.size ?? "–"}</span>
-                    <span className="truncate font-mono text-xs text-muted">{it.sku ?? ""}</span>
+                  <div className="line-clamp-2 text-sm font-medium">{g.title}</div>
+                  {g.sku && <div className="truncate font-mono text-xs text-muted">{g.sku}</div>}
+                  <div className="mt-2 flex flex-wrap gap-1" role="group" aria-label={`Rozmiary: ${g.title}`}>
+                    {g.items.map((it) => (
+                      <label key={it.id} className="cursor-pointer rounded-md border border-line bg-white px-2 py-0.5 text-sm font-bold tabular-nums transition-colors hover:border-accent has-[:checked]:border-accent has-[:checked]:bg-accent has-[:checked]:text-white" title="Zaznacz ten rozmiar">
+                        <input type="checkbox" name="ids" value={it.id} className="sr-only" aria-label={`Zaznacz ${g.title} ${it.size ?? ""}`} />
+                        {it.size ?? "bez rozmiaru"}
+                      </label>
+                    ))}
                   </div>
-                  {it.note && <div className="mt-1 text-xs text-muted">{it.order_id ? <Link className="relative z-10 underline" href={`/sprzedaz/${it.order_id}`}>{it.note}</Link> : it.note}</div>}
-                </label>
-                {active && (
-                  <details className="mt-1 rounded-md border border-line bg-white px-2 py-1 text-xs">
-                    <summary className="cursor-pointer text-accent">Zmień nazwę / rozmiar</summary>
-                    <div className="mt-1 space-y-1">
-                      <input className="input py-1 text-xs" name="title" form={`wtb-edit-${it.id}`} defaultValue={it.title} aria-label="Nazwa" />
-                      <div className="flex gap-1">
-                        <input className="input py-1 text-xs" name="size" form={`wtb-edit-${it.id}`} defaultValue={it.size ?? ""} placeholder="rozmiar" aria-label="Rozmiar" />
-                        <input className="input py-1 text-xs" name="sku" form={`wtb-edit-${it.id}`} defaultValue={it.sku ?? ""} placeholder="SKU" aria-label="SKU" />
-                      </div>
-                      <button className="btn-secondary w-full px-2 py-1 text-xs" form={`wtb-edit-${it.id}`}>Zapisz</button>
-                    </div>
-                  </details>
-                )}
-              </li>
-            ))}
+                  {notes.map((it) => (
+                    <div key={it.id} className="mt-1 text-xs text-muted">{it.order_id ? <Link className="underline" href={`/sprzedaz/${it.order_id}`}>{it.note}</Link> : it.note}</div>
+                  ))}
+                  {active && <div className="mt-2 border-t border-line pt-1"><WtbEditDialog formId={`wtb-edit-${g.items[0].id}`} title={g.title} sku={g.sku} sizes={g.items.map((i) => i.size ?? "").filter(Boolean)} /></div>}
+                </li>
+              );
+            })}
           </ul>
         </form>
       )}
       {/* Formularze edycji pozycji (poza główną listą – pola wskazują je atrybutem form). */}
-      {active && items?.map((it) => (
-        <form key={it.id} id={`wtb-edit-${it.id}`} action={editWtbItem} className="hidden"><input type="hidden" name="id" value={it.id} /><input type="hidden" name="back" value={back} /></form>
+      {active && groups.map((g) => (
+        <form key={g.key} id={`wtb-edit-${g.items[0].id}`} action={editWtbGroup} className="hidden">
+          {g.ids.map((id) => <input key={id} type="hidden" name="ids" value={id} />)}
+          <input type="hidden" name="back" value={back} />
+        </form>
       ))}
     </>
   );

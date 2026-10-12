@@ -9,6 +9,8 @@ import { INTAKE_STATUS, PURCHASE_FORM_SHORT, type Intake, type IntakeItem } from
 import { acceptContract, rejectContract } from "../umowy/actions";
 import { decideIntake, offerContract, receiveContractUnits, receiveIntake } from "./intake-actions";
 import { ContractDecision, IntakeDecisionCells } from "./DecisionControls";
+import { cancelTransfer, receiveTransfer } from "./transfer-actions";
+import { ConfirmSubmit } from "@/components/ConfirmSubmit";
 
 type Loc = { id: string; name: string; store_id: string; store: { name: string } | null };
 type IntakeRow = Intake & { items: IntakeItem[]; consignor: { id: string; name: string } | null };
@@ -22,13 +24,14 @@ const BACK = "/dostawa?zakladka=akceptacja";
 
 export async function loadIntakeCounts() {
   const db = createAdminClient();
-  const [a, b, c, d] = await Promise.all([
+  const [a, b, c, d, e] = await Promise.all([
     db.from("consignor_intakes").select("id", { count: "exact", head: true }).eq("status", "review"),
     db.from("contracts").select("id", { count: "exact", head: true }).eq("status", "signed").not("template", "is", null),
     db.from("consignor_intakes").select("id", { count: "exact", head: true }).in("status", ["to_send", "sent"]),
     db.from("units").select("contract_id", { count: "exact", head: true }).eq("status", "in_transit").not("contract_id", "is", null),
+    db.from("stock_transfers").select("id", { count: "exact", head: true }).eq("status", "in_transit"),
   ]);
-  return { accept: (a.count ?? 0) + (b.count ?? 0), transit: (c.count ?? 0) + (d.count ?? 0) };
+  return { accept: (a.count ?? 0) + (b.count ?? 0), transit: (c.count ?? 0) + (d.count ?? 0) + (e.error ? 0 : e.count ?? 0) };
 }
 
 /** Do akceptacji: zgłoszenia komisantów i podpisane umowy – Tak / Nie / Oferta. */
@@ -135,20 +138,65 @@ export async function AcceptTab() {
 export async function TransitTab() {
   const { supabase, profile } = await requireProfile();
   const db = createAdminClient();
-  const [{ data: intakes }, { data: units }, { data: locations }] = await Promise.all([
+  const unitFields = "id, code, contract_id, received_at, variant:variants(option, product:products(title)), contract:contracts(id, number, counterparty, seller_name), location:locations(name)";
+  const [{ data: intakes }, unitsRes, { data: locations }, transfersRes] = await Promise.all([
     db.from("consignor_intakes").select("*, items:consignor_intake_items(*), consignor:consignors(id, name)").in("status", ["to_send", "sent"]).order("sent_at", { nullsFirst: false }),
-    supabase.from("units").select("id, code, contract_id, received_at, variant:variants(option, product:products(title)), contract:contracts(id, number, counterparty, seller_name), location:locations(name)").eq("status", "in_transit").not("contract_id", "is", null).order("received_at").limit(500),
+    // Rzeczy z przesunięć między magazynami mają osobną kartę (niżej).
+    supabase.from("units").select(unitFields).eq("status", "in_transit").not("contract_id", "is", null).is("transfer_id", null).order("received_at").limit(500),
     supabase.from("locations").select("id, name, store_id, store:stores(name)").eq("active", true).order("name"),
+    supabase.from("stock_transfers").select("id, number, note, created_at, from_location_id, to_location_id").eq("status", "in_transit").order("created_at"),
   ]);
+  // Baza bez migracji 0035 (brak kolumny transfer_id) – lista jak wcześniej.
+  const units = unitsRes.error
+    ? (await supabase.from("units").select(unitFields).eq("status", "in_transit").not("contract_id", "is", null).order("received_at").limit(500)).data
+    : unitsRes.data;
+  const transfers = (transfersRes.error ? [] : transfersRes.data ?? []) as { id: string; number: number; note: string | null; created_at: string; from_location_id: string; to_location_id: string }[];
+  const { data: tItems } = transfers.length ? await supabase.from("stock_transfer_items").select("transfer_id, unit_id, received_at").in("transfer_id", transfers.map((t) => t.id)) : { data: [] };
+  const tIds = (tItems ?? []).map((i) => i.unit_id as string);
+  const { data: tUnits } = tIds.length ? await supabase.from("units_list").select("id, code, title, option, status").in("id", tIds) : { data: [] };
+  const unitById = new Map((tUnits ?? []).map((u) => [u.id as string, u as { id: string; code: string; title: string; option: string; status: string }]));
   const locs = (locations ?? []) as unknown as Loc[];
   type TU = { id: string; code: string; contract_id: string; variant: { option: string; product: { title: string } }; contract: { id: string; number: number | null; counterparty: string; seller_name: string | null }; location: { name: string } | null };
   const byContract = new Map<string, TU[]>();
   for (const u of (units ?? []) as unknown as TU[]) byContract.set(u.contract_id, [...(byContract.get(u.contract_id) ?? []), u]);
   const list = (intakes ?? []) as unknown as IntakeRow[];
+  const locName = (id: string) => { const l = locs.find((x) => x.id === id); return l ? `${l.store?.name ?? ""} · ${l.name}` : "–"; };
 
   return (
     <div className="space-y-6">
-      {!list.length && !byContract.size && <p className="text-sm text-muted">Nic nie jest w drodze.</p>}
+      {!list.length && !byContract.size && !transfers.length && <p className="text-sm text-muted">Nic nie jest w drodze.</p>}
+
+      {transfers.map((t) => {
+        const its = (tItems ?? []).filter((i) => i.transfer_id === t.id);
+        const open = its.filter((i) => !i.received_at && unitById.get(i.unit_id as string)?.status === "in_transit");
+        const done = its.length - open.length;
+        return (
+          <div key={t.id} className="card space-y-3 p-4">
+            <form action={receiveTransfer} className="space-y-3">
+              <input type="hidden" name="transfer_id" value={t.id} />
+              <div className="flex flex-wrap items-center gap-2">
+                <Pill tone="green">przesunięcie</Pill>
+                <b>Nr {t.number}</b>
+                <span className="text-sm">{locName(t.from_location_id)} <span className="text-muted">→</span> <b>{locName(t.to_location_id)}</b></span>
+                <span className="text-sm text-muted">wysłane {dateTime(t.created_at)} · {open.length} szt. w drodze{done ? ` · ${done} już przyjęte` : ""}</span>
+                <Link className="ml-auto text-sm text-accent hover:underline" href={`/druk/przesuniecie/${t.id}`} target="_blank">Lista (druk)</Link>
+              </div>
+              {t.note && <p className="rounded bg-panel p-2 text-sm">{t.note}</p>}
+              <ul className="grid gap-1 text-sm sm:grid-cols-2">
+                {open.map((i) => {
+                  const u = unitById.get(i.unit_id as string);
+                  return u ? <li key={u.id}><label className="flex items-center gap-2"><input type="checkbox" name="unit" value={u.id} defaultChecked className="h-4 w-4" /> {u.title} · <b>{u.option}</b> <span className="font-mono text-xs text-muted">{u.code}</span></label></li> : null;
+                })}
+              </ul>
+              <SubmitButton pendingText="Przyjmuję…">Przyjmij zaznaczone</SubmitButton>
+            </form>
+            <form action={cancelTransfer} className="border-t border-line pt-2">
+              <input type="hidden" name="transfer_id" value={t.id} />
+              <ConfirmSubmit className="text-xs text-muted hover:text-bad hover:underline" message={`Anulować przesunięcie nr ${t.number}? Rzeczy jeszcze w drodze wrócą na stan magazynu źródłowego.`}>Anuluj przesunięcie (rzeczy wracają do {locName(t.from_location_id)})</ConfirmSubmit>
+            </form>
+          </div>
+        );
+      })}
       {list.map((i) => {
         const items = [...i.items].sort((a, b) => a.position - b.position).filter((x) => x.status === "accepted");
         const loc = locs.find((l) => l.id === i.location_id);

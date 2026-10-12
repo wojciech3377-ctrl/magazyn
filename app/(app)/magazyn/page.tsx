@@ -89,9 +89,9 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
           <>
             {profile.role === "admin" && <form action={runAutoCatalogNow}><SubmitButton className="btn-secondary" pendingText="Sprawdzam…">Sprawdź nowe produkty i stany</SubmitButton></form>}
             {profile.role === "admin" && filters.q && <Link className="btn-secondary" href={`/ustawienia?zakladka=stany&sprawdz=${encodeURIComponent(filters.q)}#sprawdz`}>Porównaj „{filters.q.slice(0, 20)}” ze Shopify</Link>}
+            <Link className="btn-secondary" href="/magazyn/przesuniecie">Wyślij na inny magazyn</Link>
             <Link className="btn-secondary" href="/magazyn/inwentaryzacja">Inwentaryzacja</Link>
             <Link className="btn-secondary" href={`/api/eksport/sztuki${qs ? `?${qs}` : ""}`}>Eksport CSV</Link>
-            <Link className="btn" href="/dostawa">Przyjmij dostawę</Link>
           </>
         }
       />

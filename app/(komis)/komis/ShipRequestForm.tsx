@@ -54,14 +54,16 @@ export function ShipRequestForm({ units, address, fee }: { units: U[]; address: 
         </table>
       </div>
 
-      {selectable.length > 0 && !open && (
-        <button type="button" className="btn" onClick={() => setOpen(true)}>Zleć wysyłkę do siebie</button>
+      {selectable.length > 0 && (
+        <button type="button" className={open ? "btn-secondary" : "btn"} aria-expanded={open} onClick={() => { setOpen(!open); if (open) setPicked(new Set()); }}>
+          {open ? "✕ Schowaj zlecenie wysyłki" : "Zleć wysyłkę do siebie"}
+        </button>
       )}
+      {!open && state?.ok && <p className="text-sm font-medium text-ok" role="status">{state.ok}</p>}
       {selectable.length > 0 && open && (
         <div className="card space-y-3 p-4">
           <div className="flex flex-wrap items-center gap-3">
             <h3 className="font-medium">Zleć wysyłkę do siebie</h3>
-            <button type="button" className="text-sm text-muted hover:underline" onClick={() => setOpen(false)}>zwiń</button>
             <button type="button" className="text-sm text-accent hover:underline" onClick={() => setPicked(new Set(selectable.map((u) => u.id)))}>zaznacz wszystkie</button>
             <span className="text-sm text-muted">zaznaczono: {picked.size}</span>
           </div>
@@ -102,9 +104,12 @@ export function ShipRequestForm({ units, address, fee }: { units: U[]; address: 
           <input className="input" name="note" placeholder="Uwagi (opcjonalnie)" maxLength={500} />
           {state?.error && <p className="text-sm text-bad" role="alert">{state.error}</p>}
           {state?.ok && <p className="text-sm font-medium text-ok" role="status">{state.ok}</p>}
-          <button className="btn" disabled={pending || !picked.size || (method === "own_label" && !label) || upload.busy}>
-            {pending ? "Wysyłam zlecenie…" : `Zleć wysyłkę (${picked.size} szt.)`}
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button className="btn" disabled={pending || !picked.size || (method === "own_label" && !label) || upload.busy}>
+              {pending ? "Wysyłam zlecenie…" : `Zleć wysyłkę (${picked.size} szt.)`}
+            </button>
+            <button type="button" className="btn-secondary" onClick={() => { setOpen(false); setPicked(new Set()); }}>Schowaj</button>
+          </div>
         </div>
       )}
     </form>

@@ -118,11 +118,17 @@ export async function draftFromPos(db: SupabaseClient, posOrderId: string): Prom
 }
 
 /** Sprawdzenie danych PRZED nadaniem numeru (numer bez dziur, a KSeF odrzuca błędne dane). */
-function validate(company: Awaited<ReturnType<typeof getCompany>>, d: InvoiceDraft) {
+function validate(company: Awaited<ReturnType<typeof getCompany>>, d: InvoiceDraft, receipt = false) {
   const sellerNip = onlyDigits(company.nip);
   if (!company.name || !company.street || !company.city) throw new Error("Uzupełnij nazwę i adres firmy w Ustawieniach (Umowy i dane firmy).");
   if (!nipValid(sellerNip)) throw new Error("NIP firmy w Ustawieniach jest nieprawidłowy.");
   if ((company.bank_account ?? "").replace(/\s/g, "").length < 10) throw new Error("Uzupełnij numer konta bankowego w Ustawieniach → Firma – jest na każdej fakturze.");
+  if (receipt) {
+    // Paragon: bez nabywcy i bez KSeF – tylko daty i pozycje.
+    if (d.issueDate > todayPl() || d.saleDate > todayPl()) throw new Error("Data nie może być z przyszłości.");
+    if (!d.items.length || d.items.some((i) => !i.name.trim() || !(i.unit_price_gross > 0) || !(i.quantity > 0))) throw new Error("Każda pozycja musi mieć nazwę, ilość i cenę.");
+    return;
+  }
   const ksefNip = onlyDigits(process.env.KSEF_NIP);
   if (ksefNip && ksefNip !== sellerNip) throw new Error(`NIP firmy w Ustawieniach (${sellerNip}) różni się od NIP-u KSeF (${ksefNip}).`);
   const country = (d.buyer.country || "PL").toUpperCase();
@@ -209,6 +215,58 @@ export async function issueInvoice(db: SupabaseClient, d: InvoiceDraft, userId: 
   return row;
 }
 
+/** Nabywca na paragonie: osoba prywatna bez danych. */
+export const RECEIPT_BUYER = { name: "Osoba prywatna", nip: null, address1: null, address2: null, country: "PL", email: null, company: false };
+
+function cleanItems(d: InvoiceDraft): InvoiceDraft {
+  return { ...d, items: d.items.map((i) => {
+    const quantity = Math.round(i.quantity * 1000) / 1000;
+    const unit_price_gross = Math.round(i.unit_price_gross * 100) / 100;
+    return { ...i, name: i.name.trim().slice(0, 256), quantity, unit_price_gross, total_gross: Math.round(unit_price_gross * quantity * 100) / 100 };
+  }) };
+}
+
+async function sellerOf(db: SupabaseClient) {
+  const company = await getCompany(db);
+  return { company, seller: { name: company.name, nip: onlyDigits(company.nip), address1: company.street, address2: company.city, country: "PL", email: company.email, bank_account: company.bank_account ?? null } };
+}
+
+/** Paragon (dokument do druku dla osoby prywatnej, w formie faktury): numer PAR/miesiąc/n, bez XML i bez KSeF. */
+export async function issueReceipt(db: SupabaseClient, d: InvoiceDraft, userId: string) {
+  const { company, seller } = await sellerOf(db);
+  d = cleanItems({ ...d, buyer: RECEIPT_BUYER, paid: true });
+  validate(company, d, true);
+  d = { ...d, items: d.items.map(({ checkVat: _c, ...i }) => i) };
+  const t = invoiceTotals(d.items);
+  const { data, error } = await db.rpc("create_invoice", {
+    p_invoice: {
+      kind: "receipt", issue_date: d.issueDate, sale_date: d.saleDate, place: company.city.replace(/^\d{2}-\d{3}\s*/, "") || null, seller, buyer: RECEIPT_BUYER,
+      currency: "PLN", payment_method: d.paymentMethod, paid: true, paid_at: d.paidAt ?? d.issueDate, due_date: null,
+      total_gross: t.total, net_23: t.net23, vat_23: t.vat23, margin_total: t.margin, notes: d.notes, order_id: d.orderId, pos_order_id: d.posOrderId, created_by: userId,
+    },
+    p_items: d.items,
+  });
+  if (error) throw error;
+  const row = (data as { id: string; number: string }[])[0];
+  if (d.orderId) await db.rpc("settle_order_units").then(() => null, () => null);
+  return row;
+}
+
+/** Podgląd paragonu przed wystawieniem (bez numeru). */
+export async function receiptPreview(db: SupabaseClient, d: InvoiceDraft) {
+  const { company, seller } = await sellerOf(db);
+  d = cleanItems({ ...d, buyer: RECEIPT_BUYER, paid: true });
+  validate(company, d, true);
+  const t = invoiceTotals(d.items);
+  const month = d.issueDate.slice(5, 7);
+  return {
+    number: `PAR/${month}/… (podgląd)`, issue_date: d.issueDate, sale_date: d.saleDate, place: company.city.replace(/^\d{2}-\d{3}\s*/, "") || null,
+    seller, buyer: RECEIPT_BUYER, payment_method: d.paymentMethod, paid: true, paid_at: d.paidAt ?? d.issueDate, due_date: null, currency: "PLN",
+    total_gross: t.total, net_23: t.net23, vat_23: t.vat23, margin_total: t.margin, notes: d.notes, ksef_number: null, xml_hash: null, status: "issued", kind: "receipt",
+    items: d.items.map((i, k) => ({ position: k + 1, name: i.name, quantity: i.quantity, unit: i.unit, unit_price_gross: i.unit_price_gross, total_gross: i.total_gross, vat: i.vat })),
+  };
+}
+
 /** Kody odrzucenia, przy których ta sama faktura może być wysłana ponownie (błąd po stronie KSeF / chwilowy). */
 export const KSEF_TRANSIENT = new Set([405, 500, 550]);
 
@@ -217,7 +275,8 @@ export const KSEF_TRANSIENT = new Set([405, 500, 550]);
  * Blokada: tylko faktura „nie wysłana” albo odrzucona z powodu chwilowego może zostać wysłana – nigdy dwa razy naraz.
  */
 export async function sendInvoiceToKsef(db: SupabaseClient, invoiceId: string) {
-  const { data: inv } = await db.from("invoices").select("id, xml, status, ksef_number, ksef_status_code, order_id, pos_order_id").eq("id", invoiceId).maybeSingle();
+  const { data: inv } = await db.from("invoices").select("id, xml, status, ksef_number, ksef_status_code, order_id, pos_order_id, kind").eq("id", invoiceId).maybeSingle();
+  if (inv?.kind === "receipt") throw new Error("Paragon nie trafia do KSeF.");
   if (!inv?.xml) throw new Error("Brak XML faktury.");
   if (inv.ksef_number || inv.status === "accepted") return { status: "accepted" as const, ksefNumber: inv.ksef_number as string };
   if (inv.status === "cancelled") throw new Error("Faktura jest unieważniona.");
@@ -225,7 +284,7 @@ export async function sendInvoiceToKsef(db: SupabaseClient, invoiceId: string) {
     throw new Error("KSeF odrzucił tę fakturę z powodu danych – unieważnij ją i wystaw nową.");
   }
   if (inv.order_id || inv.pos_order_id) {
-    const q = db.from("invoices").select("number").neq("id", inv.id).not("status", "in", "(rejected,cancelled)");
+    const q = db.from("invoices").select("number").neq("id", inv.id).neq("kind", "receipt").not("status", "in", "(rejected,cancelled)");
     const { data: other } = await (inv.order_id ? q.eq("order_id", inv.order_id) : q.eq("pos_order_id", inv.pos_order_id)).limit(1).maybeSingle();
     if (other) throw new Error(`Do tej sprzedaży jest już ważna faktura ${other.number}.`);
   }

@@ -1,6 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { shopifyGraphql } from "@/lib/integrations/shopify";
+import { splitProductGids, type Store } from "@/lib/sync/catalog";
 
 /**
  * „Dlaczego aplikacja pokazuje inny stan niż Shopify?” – dla produktów pasujących do wyszukiwania:
@@ -9,11 +10,11 @@ import { shopifyGraphql } from "@/lib/integrations/shopify";
 export type DiagRow = {
   store: string; product: string; productGid: string; status: string; tags: string[];
   variant: string; sku: string | null; tracked: boolean;
-  shopify: { location: string; qty: number; mapped: boolean }[];
+  shopify: { location: string; locationId: string; qty: number; mapped: boolean }[];
   appVariantId: string | null; shared: number; units: number; waiting: string | null; reasons: string[];
 };
 
-type Q = { products: { nodes: { id: string; title: string; status: string; tags: string[]; variants: { nodes: { id: string; title: string; sku: string | null; inventoryItem: { id: string; tracked: boolean; inventoryLevels: { nodes: { location: { id: string; name: string }; quantities: { quantity: number }[] }[] } } | null }[] } }[] } };
+type Q = { products: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: { id: string; title: string; status: string; tags: string[]; variants: { nodes: { id: string; title: string; sku: string | null; inventoryItem: { id: string; tracked: boolean; inventoryLevels: { nodes: { location: { id: string; name: string }; quantities: { quantity: number }[] }[] } } | null }[] } }[] } };
 
 export async function diagnoseStock(db: SupabaseClient, text: string): Promise<{ rows: DiagRow[]; errors: string[] }> {
   const { data: stores } = await db.from("stores").select("id, name, code, shopify_domain").not("shopify_domain", "is", null);
@@ -21,11 +22,18 @@ export async function diagnoseStock(db: SupabaseClient, text: string): Promise<{
   const rows: DiagRow[] = [];
   const errors: string[] = [];
   for (const st of stores ?? []) {
-    let data: Q;
+    const data: Q = { products: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } };
     try {
-      data = await shopifyGraphql<Q>(st.shopify_domain as string, st.code as string,
-        `query($q: String!) { products(first: 8, query: $q) { nodes { id title status tags variants(first: 30) { nodes { id title sku inventoryItem { id tracked inventoryLevels(first: 5) { nodes { location { id name } quantities(names: ["available"]) { quantity } } } } } } } } }`,
-        { q: text });
+      // Po 4 produkty na zapytanie (limit kosztu zapytania Shopify = 1000), do 40 produktów.
+      let after: string | null = null;
+      for (let page = 0; page < 10; page++) {
+        const part: Q = await shopifyGraphql<Q>(st.shopify_domain as string, st.code as string,
+          `query($q: String!, $after: String) { products(first: 4, query: $q, after: $after) { pageInfo { hasNextPage endCursor } nodes { id title status tags variants(first: 20) { nodes { id title sku inventoryItem { id tracked inventoryLevels(first: 3) { nodes { location { id name } quantities(names: ["available"]) { quantity } } } } } } } } }`,
+          { q: text, after });
+        data.products.nodes.push(...part.products.nodes);
+        if (!part.products.pageInfo.hasNextPage) break;
+        after = part.products.pageInfo.endCursor;
+      }
     } catch (e) {
       errors.push(`${st.name}: ${e instanceof Error ? e.message : String(e)}`);
       continue;
@@ -47,7 +55,7 @@ export async function diagnoseStock(db: SupabaseClient, text: string): Promise<{
       for (const v of p.variants.nodes) {
         const appId = appOf.get(v.id) ?? null;
         const shopify = (v.inventoryItem?.inventoryLevels.nodes ?? []).map((l) => ({
-          location: l.location.name, qty: l.quantities[0]?.quantity ?? 0, mapped: mappedLoc.has(l.location.id.split("/").pop()),
+          location: l.location.name, locationId: l.location.id, qty: l.quantities[0]?.quantity ?? 0, mapped: mappedLoc.has(l.location.id.split("/").pop()),
         }));
         const shopQty = shopify.filter((x) => x.mapped).reduce((s, x) => s + Math.max(0, x.qty), 0);
         const unitCount = appId ? (units ?? []).filter((u) => u.variant_id === appId && storeLocIds.has(u.location_id as string)).length : 0;
@@ -59,7 +67,7 @@ export async function diagnoseStock(db: SupabaseClient, text: string): Promise<{
         if (shopify.some((x) => x.qty > 0 && !x.mapped)) reasons.push("część stanu leży w lokalizacji Shopify nieprzypisanej do lokalizacji aplikacji (Ustawienia → Stany)");
         if (shared > 1) reasons.push(`ten rozmiar był połączony z ${shared - 1} innym(i) produktem(ami) Shopify o tym samym SKU – aplikacja rozdziela je automatycznie przy odczycie katalogu`);
         if (ex) reasons.push(`różnica czeka na potwierdzenie od ${new Date(ex.first_seen_at as string).toLocaleString("pl-PL", { timeZone: "Europe/Warsaw" })} (sztuki dochodzą po ~10 min, znikają po ~30 min)`);
-        if (!reasons.length && appId && shopQty !== unitCount) reasons.push("różnica wyrówna się przy najbliższym odczycie stanów (co 15 min albo „Sprawdź nowe produkty i stany”)");
+        if (!reasons.length && appId && shopQty !== unitCount) reasons.push("odczyt stanów jeszcze tego nie wyrównał – kliknij „Wyrównaj te produkty teraz”");
         rows.push({
           store: st.name as string, product: p.title, productGid: p.id, status: p.status, tags: p.tags, variant: v.title, sku: v.sku,
           tracked: !!v.inventoryItem?.tracked, shopify, appVariantId: appId, shared, units: unitCount, waiting: ex ? String(ex.first_seen_at) : null, reasons,
@@ -68,4 +76,56 @@ export async function diagnoseStock(db: SupabaseClient, text: string): Promise<{
     }
   }
   return { rows, errors };
+}
+
+/**
+ * „Wyrównaj te produkty teraz”: rozdziela połączone produkty Shopify z tym samym SKU i od razu (bez czekania na
+ * potwierdzenie) ustawia liczbę sztuk znalezionych rozmiarów na stan z Shopify. Komisu nie rusza.
+ */
+export async function fixProductStock(db: SupabaseClient, text: string) {
+  const first = await diagnoseStock(db, text);
+  const { data: stores } = await db.from("stores").select("*").not("shopify_domain", "is", null);
+  let split = 0;
+  const sharedVariants = [...new Set(first.rows.filter((r) => r.shared > 1 && r.appVariantId).map((r) => `${r.store}|${r.appVariantId}`))];
+  for (const key of sharedVariants) {
+    const [storeName, variantId] = key.split("|");
+    const store = (stores ?? []).find((s) => s.name === storeName) as Store | undefined;
+    if (!store) continue;
+    const { data: v } = await db.from("variants").select("product_id").eq("id", variantId).maybeSingle();
+    if (!v) continue;
+    const { data: links } = await db.from("product_store_links").select("shopify_product_id").eq("store_id", store.id).eq("product_id", v.product_id);
+    const gids = (links ?? []).map((l) => l.shopify_product_id as string).filter(Boolean)
+      .sort((a, b) => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0));
+    if (gids.length > 1) split += await splitProductGids(db, store, gids);
+  }
+  const { rows, errors } = split ? await diagnoseStock(db, text) : first;
+  const { data: locs } = await db.from("locations").select("id, store_id, shopify_location_id, created_at").eq("active", true).not("shopify_location_id", "is", null).order("created_at");
+  const totals: { store: string; added: number; removed: number }[] = [];
+  for (const st of stores ?? []) {
+    const mine = (locs ?? []).filter((l) => l.store_id === st.id);
+    const byShopLoc = new Map<string, string[]>();
+    for (const l of mine) {
+      const k = String(l.shopify_location_id).split("/").pop()!;
+      byShopLoc.set(k, [...(byShopLoc.get(k) ?? []), l.id as string]);
+    }
+    const best = new Map<string, { variant_id: string; location_id: string; qty: number; count_locations: string[] }>();
+    for (const r of rows.filter((x) => x.store === st.name && x.appVariantId && x.tracked)) {
+      for (const lv of r.shopify) {
+        const group = byShopLoc.get(lv.locationId.split("/").pop()!);
+        if (!group) continue;
+        const key = `${r.appVariantId}|${group[0]}`;
+        const prev = best.get(key);
+        if (!prev || prev.qty < lv.qty) best.set(key, { variant_id: r.appVariantId!, location_id: group[0], qty: Math.max(0, lv.qty), count_locations: group });
+      }
+    }
+    if (!best.size) continue;
+    const { data, error } = await db.rpc("reconcile_stock", {
+      p_rows: [...best.values()], p_limit: 1000, p_source: `Shopify ${st.name}`, p_scope: null,
+      p_confirm_minutes: 0, p_remove: true, p_surplus_minutes: 0, p_history_limit: 1000,
+    });
+    if (error) { errors.push(`${st.name}: ${error.message}`); continue; }
+    const d = data as { created?: number; removed?: number; withdrawn?: number };
+    totals.push({ store: st.name as string, added: d.created ?? 0, removed: (d.removed ?? 0) + (d.withdrawn ?? 0) });
+  }
+  return { split, totals, errors };
 }

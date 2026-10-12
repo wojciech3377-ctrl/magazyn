@@ -188,9 +188,10 @@ export async function Jpk({ sp }: { sp: Record<string, string | undefined> }) {
 export async function Invoices({ sp }: { sp: Record<string, string | undefined> }) {
   const { supabase } = await requireProfile();
   const status = sp.ksef ?? "";
-  let q = supabase.from("invoices").select("id, number, issue_date, buyer, total_gross, status, ksef_number, order:orders(id, name), pos:pos_orders(id, code)")
-    .order("year", { ascending: false }).order("seq", { ascending: false }).limit(300);
-  if (status) q = q.eq("status", status);
+  let q = supabase.from("invoices").select("id, number, issue_date, buyer, total_gross, status, ksef_number, kind, order:orders(id, name), pos:pos_orders(id, code)")
+    .order("issue_date", { ascending: false }).order("created_at", { ascending: false }).limit(300);
+  if (status === "paragon") q = q.eq("kind", "receipt");
+  else if (status) q = q.eq("status", status).neq("kind", "receipt");
   const { data: rows } = await q;
   return (
     <>
@@ -200,10 +201,11 @@ export async function Invoices({ sp }: { sp: Record<string, string | undefined> 
           <select className="input w-56" name="ksef" defaultValue={status} aria-label="Status KSeF">
             <option value="">Wszystkie</option>
             {Object.entries(KSEF_STATUS).map(([k, v]) => <option key={k} value={k}>{v.text}</option>)}
+            <option value="paragon">Paragony (PAR)</option>
           </select>
           <button className="btn-secondary">Pokaż</button>
         </form>
-        <Link className="btn ml-auto" href="/sprzedaz/faktury/nowa">Nowa faktura</Link>
+        <Link className="btn ml-auto" href="/sprzedaz/faktury/nowa">Nowa faktura / paragon</Link>
       </div>
       <div className="card overflow-x-auto">
         <table className="table">
@@ -220,7 +222,7 @@ export async function Invoices({ sp }: { sp: Record<string, string | undefined> 
                   <td className="whitespace-nowrap text-muted">{dateOnly(r.issue_date)}</td>
                   <td>{(r.buyer as { name: string }).name}</td>
                   <td className="text-right tabular-nums">{money(r.total_gross)}</td>
-                  <td><Pill tone={st.tone}>{st.text}</Pill>{r.ksef_number && <span className="block font-mono text-xs text-muted">{r.ksef_number}</span>}</td>
+                  <td>{r.kind === "receipt" ? <Pill tone="slate">paragon – poza KSeF</Pill> : <><Pill tone={st.tone}>{st.text}</Pill>{r.ksef_number && <span className="block font-mono text-xs text-muted">{r.ksef_number}</span>}</>}</td>
                   <td className="text-xs">{order ? <Link className="relative z-10 text-accent hover:underline" href={`/sprzedaz/${order.id}`}>{order.name}</Link> : pos ? <Link className="relative z-10 text-accent hover:underline" href={`/kasa/${pos.id}`}>{pos.code}</Link> : "–"}</td>
                 </tr>
               );

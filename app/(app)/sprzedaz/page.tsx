@@ -62,7 +62,8 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
       if (t.key) c = c.eq("status", t.key);
       return c;
     })),
-    supabase.from("sales").select("id", { count: "exact", head: true }).eq("status", "no_unit"),
+    // Dostarczone, zwrócone i anulowane zamówienia nie są już problemem braku sztuki.
+    supabase.from("sales").select("id, order:orders!inner(status)", { count: "exact", head: true }).eq("status", "no_unit").not("order.status", "in", "(delivered,returned,cancelled)"),
     supabase.from("sync_log").select("job, ok, message, created_at").in("job", ["base-orders", "shopify-orders", "furgonetka"]).order("created_at", { ascending: false }).limit(12),
   ]);
   const lastOf = (job: string) => (logs ?? []).find((l) => l.job === job);
@@ -166,7 +167,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
                     <div className="mt-0.5 flex flex-wrap gap-1 font-mono text-xs">
                       {oSales.map((s, i) => s.unit
                         ? <Link key={i} className="relative z-10 text-accent hover:underline" href={`/magazyn/${s.unit.id}`}>{s.unit.code}</Link>
-                        : s.status === "no_unit" ? <Pill key={i} tone="red">brak sztuki</Pill> : null)}
+                        : s.status === "no_unit" && status !== "delivered" && status !== "returned" && status !== "cancelled" ? <Pill key={i} tone="red">brak sztuki</Pill> : null)}
                     </div>
                   </td>
                   <td className="text-sm">

@@ -255,6 +255,29 @@ export async function runStockNow(formData: FormData) {
   }
 }
 
+/** Ustawienia → Stany → „Sprawdź produkt” → „Wyrównaj te produkty teraz”. */
+export async function fixProductStockNow(formData: FormData) {
+  await requireAdmin();
+  const text = String(formData.get("sprawdz") ?? "").trim().slice(0, 100);
+  const back = (msg: string, tone: "ok" | "blad") => {
+    revalidatePath("/ustawienia");
+    redirect(`/ustawienia?zakladka=stany&sprawdz=${encodeURIComponent(text)}&${tone}=${encodeURIComponent(msg)}#sprawdz`);
+  };
+  if (text.length < 2) back("Wpisz nazwę albo SKU produktu.", "blad");
+  const db = createAdminClient();
+  try {
+    const { fixProductStock } = await import("@/lib/stock-diagnose");
+    const r = await fixProductStock(db, text);
+    const parts = r.totals.map((t) => `${t.store}: dodano ${t.added}, usunięto ${t.removed}`);
+    await db.from("sync_log").insert({ job: "stock", ok: !r.errors.length, message: `Wyrównanie „${text}”: ${JSON.stringify(r)}` });
+    if (r.errors.length) back(r.errors.join(" · "), "blad");
+    back(`Wyrównano ze Shopify.${r.split ? ` Rozdzielono ${r.split} połączonych produktów.` : ""} ${parts.join(" · ") || "Bez zmian."}`, "ok");
+  } catch (e) {
+    unstable_rethrow(e);
+    back(errorMessage(e), "blad");
+  }
+}
+
 export async function saveInvoiceSettings(formData: FormData) {
   const { supabase } = await requireAdmin();
   const { error } = await supabase.from("app_settings").upsert({ key: "invoices", value: { auto_email: formData.get("auto_email") === "1" }, updated_at: new Date().toISOString() });

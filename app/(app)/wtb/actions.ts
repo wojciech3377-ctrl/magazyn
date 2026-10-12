@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { requireProfile } from "@/lib/auth";
 import { errorMessage } from "@/lib/errors";
 import type { LineItem } from "@/lib/sync/shop-orders";
+import { parseSizes } from "@/lib/wtb-group";
 
 export type WtbAddState = { ok?: string; error?: string } | null;
 export type CatalogResult = { productId: string; title: string; sku: string | null; image: string | null; variants: { id: string; option: string }[] };
@@ -83,7 +84,11 @@ export async function addFromCatalog(_: WtbAddState, fd: FormData): Promise<WtbA
   const note = String(fd.get("note") ?? "").trim() || null;
   const { data: p } = await supabase.from("products").select("id, title, image_url, style_sku, variants(id, option)").eq("id", productId).maybeSingle();
   if (!p) return { error: "Wybierz model z katalogu." };
-  const variants = ((p.variants ?? []) as { id: string; option: string }[]).filter((v) => variantIds.includes(v.id));
+  // Rozmiary już szukane (aktywne) dla tego modelu nie są dodawane drugi raz – dopisują się do tej samej karty.
+  const { data: had } = await supabase.from("wtb_items").select("variant_id").eq("product_id", p.id).eq("status", "active");
+  const already = new Set((had ?? []).map((h) => h.variant_id as string | null));
+  const variants = ((p.variants ?? []) as { id: string; option: string }[]).filter((v) => variantIds.includes(v.id) && !already.has(v.id));
+  if (variantIds.length && !variants.length) return { ok: "Te rozmiary już są na liście WTB." };
   const rows = (variants.length ? variants : [null]).map((v) => ({
     title: p.title, size: v?.option ?? null, sku: p.style_sku, image_url: p.image_url, product_id: p.id, variant_id: v?.id ?? null,
     source: "catalog", note, created_by: profile.id,
@@ -99,7 +104,7 @@ export async function addManual(_: WtbAddState, fd: FormData): Promise<WtbAddSta
   const { supabase, profile } = await requireProfile();
   const title = String(fd.get("title") ?? "").trim().slice(0, 200);
   if (!title) return { error: "Wpisz nazwę modelu." };
-  const sizes = String(fd.get("sizes") ?? "").split(/[,;]+/).map((s) => s.trim()).filter(Boolean).slice(0, 30);
+  const sizes = parseSizes(String(fd.get("sizes") ?? ""));
   const sku = String(fd.get("sku") ?? "").trim().slice(0, 60) || null;
   const note = String(fd.get("note") ?? "").trim() || null;
   const rows = (sizes.length ? sizes : [null]).map((size) => ({ title, size, sku, note, source: "manual", created_by: profile.id }));
@@ -135,4 +140,46 @@ export async function editWtbItem(fd: FormData) {
   }).eq("id", id);
   revalidatePath("/wtb");
   redirect(`${back}${back.includes("?") ? "&" : "?"}${error ? "blad" : "ok"}=${encodeURIComponent(error ? errorMessage(error) : "Zapisano zmiany pozycji.")}`);
+}
+
+/** Edycja karty modelu: nazwa i SKU dla wszystkich rozmiarów, lista rozmiarów (nowe dopisane, usunięte zdjęte z listy). */
+export async function editWtbGroup(fd: FormData) {
+  const { supabase, profile } = await requireProfile();
+  const ids = fd.getAll("ids").map(String).filter((x) => /^[0-9a-f-]{36}$/i.test(x)).slice(0, 100);
+  const back = String(fd.get("back") ?? "/wtb");
+  const fail = (m: string) => redirect(`${back}${back.includes("?") ? "&" : "?"}blad=${encodeURIComponent(m)}`);
+  const title = String(fd.get("title") ?? "").trim().slice(0, 200);
+  if (!title) fail("Nazwa nie może być pusta.");
+  const sku = String(fd.get("sku") ?? "").trim().slice(0, 60) || null;
+  const sizes = parseSizes(String(fd.get("sizes") ?? ""));
+  const { data: items } = ids.length ? await supabase.from("wtb_items").select("id, size, product_id, variant_id, image_url, note, source").in("id", ids).eq("status", "active") : { data: [] };
+  if (!items?.length) fail("Nie ma takiej pozycji.");
+  const list = items ?? [];
+  const norm = (s: string | null) => (s ?? "").trim().toLowerCase();
+  const wanted = new Set(sizes.map(norm));
+  const keep = list.filter((i) => (sizes.length ? wanted.has(norm(i.size as string | null)) : true));
+  // Bez rozmiarów: zostaje jedna pozycja bez rozmiaru.
+  const remove = sizes.length ? list.filter((i) => !keep.includes(i)) : list.slice(1);
+  if (!sizes.length && keep.length) keep.splice(1);
+  const haveSizes = new Set(keep.map((i) => norm(i.size as string | null)));
+  const add = sizes.filter((s) => !haveSizes.has(norm(s)));
+  // Rozmiar zmieniony w miejscu (np. jedna pozycja „42” → „43”), zamiast usuwania i dodawania – zachowuje datę i notatkę.
+  while (add.length && remove.length) {
+    const r = remove.shift()!;
+    await supabase.from("wtb_items").update({ size: add.shift(), variant_id: null }).eq("id", r.id);
+  }
+  const base = list[0];
+  let error = (await supabase.from("wtb_items").update({ title, sku }).in("id", list.map((i) => i.id as string))).error;
+  if (!error && remove.length) error = (await supabase.from("wtb_items").update({ status: "cancelled", closed_at: new Date().toISOString() }).in("id", remove.map((i) => i.id as string))).error;
+  if (!error && add.length) {
+    // Rozmiar z katalogu, gdy model jest w katalogu.
+    const { data: vs } = base.product_id ? await supabase.from("variants").select("id, option").eq("product_id", base.product_id) : { data: [] };
+    const vOf = new Map((vs ?? []).map((v) => [norm(v.option as string), v.id as string]));
+    error = (await supabase.from("wtb_items").insert(add.map((size) => ({
+      title, sku, size, image_url: base.image_url, product_id: base.product_id, variant_id: vOf.get(norm(size)) ?? null,
+      source: base.source === "manual" ? "manual" : "catalog", note: base.source === "manual" || base.source === "catalog" ? base.note : null, created_by: profile.id,
+    })))).error;
+  }
+  revalidatePath("/wtb");
+  redirect(`${back}${back.includes("?") ? "&" : "?"}${error ? "blad" : "ok"}=${encodeURIComponent(error ? errorMessage(error) : "Zapisano zmiany modelu.")}`);
 }

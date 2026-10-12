@@ -10,6 +10,7 @@ import { ConfirmSubmit } from "@/components/ConfirmSubmit";
 import { mailConfigured } from "@/lib/mail";
 import { KSEF_TRANSIENT } from "@/lib/invoices/service";
 import { KSEF_STATUS } from "@/lib/invoices/labels";
+import { PrintPdfButton } from "@/components/PrintPdf";
 
 const PAY: Record<string, string> = { cash: "gotówka", card: "karta", transfer: "przelew", mobile: "BLIK / mobilna" };
 
@@ -28,22 +29,24 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
   const buyer = inv.buyer as { name: string; nip?: string | null; address1?: string | null; address2?: string | null; country?: string | null; email?: string | null };
   const order = inv.order as { id: string; name: string } | null;
   const pos = inv.pos as { id: string; code: string } | null;
+  const isPar = inv.kind === "receipt";
 
   return (
     <>
       <PageHeader
-        title={`Faktura ${inv.number}`}
+        title={`${isPar ? "Paragon" : "Faktura"} ${inv.number}`}
         sub={<>{dateOnly(inv.issue_date)} · {buyer.name}{order && <> · <Link className="text-accent hover:underline" href={`/sprzedaz/${order.id}`}>zamówienie {order.name}</Link></>}{pos && <> · <Link className="text-accent hover:underline" href={`/kasa/${pos.id}`}>{pos.code}</Link></>}</>}
         actions={
           <>
-            <a className="btn" href={`/api/faktury/${inv.id}/pdf`} target="_blank" rel="noreferrer">PDF</a>
-            <a className="btn-secondary" href={`/api/faktury/${inv.id}/xml`}>XML</a>
-            {inv.kind !== "correction" && <Link className="btn-secondary" href={`/sprzedaz/faktury/nowa?podobna=${inv.id}`}>Wystaw podobną</Link>}
+            {isPar && <PrintPdfButton url={`/api/faktury/${inv.id}/pdf`}>Wydrukuj dokument</PrintPdfButton>}
+            <a className={isPar ? "btn-secondary" : "btn"} href={`/api/faktury/${inv.id}/pdf`} target="_blank" rel="noreferrer">PDF</a>
+            {!isPar && <a className="btn-secondary" href={`/api/faktury/${inv.id}/xml`}>XML</a>}
+            {inv.kind !== "correction" && <Link className="btn-secondary" href={`/sprzedaz/faktury/nowa?typ=${isPar ? "paragon" : "ksef"}&podobna=${inv.id}`}>Wystaw podobny</Link>}
             {inv.kind !== "correction" && inv.status === "accepted" && inv.ksef_number && <Link className="btn-secondary" href={`/sprzedaz/faktury/${inv.id}/korekta`}>Wystaw korektę</Link>}
             {profile.role === "admin" && !inKsef && (
               <form action={deleteInvoiceAction}>
                 <input type="hidden" name="id" value={inv.id} />
-                <ConfirmSubmit className="btn-danger" message={`Usunąć fakturę ${inv.number}? Nie ma jej w KSeF, więc zniknie całkowicie (sztuki sprzedane tą fakturą wrócą na stan).`}>Usuń</ConfirmSubmit>
+                <ConfirmSubmit className="btn-danger" message={isPar ? `Usunąć paragon ${inv.number}? Sztuki sprzedane tym paragonem wrócą na stan.` : `Usunąć fakturę ${inv.number}? Nie ma jej w KSeF, więc zniknie całkowicie (sztuki sprzedane tą fakturą wrócą na stan).`}>Usuń</ConfirmSubmit>
               </form>
             )}
             <Link className="btn-secondary" href="/sprzedaz?widok=faktury">Wróć</Link>
@@ -60,6 +63,8 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
       )}
       {inKsef && inv.kind !== "correction" && profile.role === "admin" && <p className="mb-4 text-xs text-muted">Faktury przyjętej w KSeF nie można usunąć – KSeF nie pozwala kasować faktur. Zmiany robi się korektą.</p>}
 
+      {isPar && <div className="mb-4"><Notice>Paragon dla osoby prywatnej – dokument do druku bez danych nabywcy. Nie trafia do KSeF.</Notice></div>}
+      {!isPar && <>
       <section className="card mb-5 p-4">
         <div className="flex flex-wrap items-center gap-3">
           <h2 className="h2">KSeF</h2>
@@ -98,6 +103,8 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
           )}
         </div>
       </section>
+
+      </>}
 
       <div className="grid gap-5 lg:grid-cols-3">
         <section className="card p-4">

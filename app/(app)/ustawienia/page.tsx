@@ -9,7 +9,7 @@ import { listWebhooks, shopifyCredentials, WEBHOOK_TOPICS } from "@/lib/integrat
 import { getBuyerSignature, getCompany } from "@/lib/contracts/settings";
 import { getSmtpSettings, mailConfig } from "@/lib/mail";
 import { ContractSettings } from "./ContractSettings";
-import { addExclusion, createUser, deleteExclusion, disconnectFurgonetka, importInitialStock, purgeExcluded, purgeNonShopify, registerWebhooks, runStockNow, saveSmtp, saveInvoiceSettings, saveLocation, saveSender, saveShopifyLocation, saveStockMaster, saveStore, saveUser, checkOmnibus } from "./actions";
+import { addExclusion, createUser, deleteExclusion, disconnectFurgonetka, importInitialStock, purgeExcluded, purgeNonShopify, registerWebhooks, runStockNow, saveSmtp, saveInvoiceSettings, saveLocation, saveSender, saveShopifyLocation, saveStockMaster, saveStore, saveUser, checkOmnibus, fixProductStockNow } from "./actions";
 import { compareStock, getStockMaster, planPushToShopify, shopifyLocations, type ShopifyLocation } from "@/lib/sync/shopify-stock";
 import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/furgonetka";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -304,6 +304,13 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
               <input className="input w-96" name="sprawdz" defaultValue={sp.sprawdz} placeholder="np. Balenciaga Track Black" />
               <button className="btn">Sprawdź</button>
             </form>
+            {stock.diag?.data && stock.diag.data.rows.some((r) => r.reasons.length > 0 && r.tracked) && (
+              <form action={fixProductStockNow} className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm">
+                <input type="hidden" name="sprawdz" value={sp.sprawdz} />
+                <span>Są różnice. Aplikacja może od razu rozdzielić połączone produkty i ustawić liczbę sztuk tych rozmiarów na stan z Shopify (komisu nie rusza).</span>
+                <SubmitButton pendingText="Wyrównuję…">Wyrównaj te produkty teraz</SubmitButton>
+              </form>
+            )}
             {stock.diag?.error && <Notice tone="error">{stock.diag.error}</Notice>}
             {stock.diag?.data && (
               <div className="overflow-x-auto">

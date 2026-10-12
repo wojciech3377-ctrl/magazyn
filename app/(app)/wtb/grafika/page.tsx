@@ -2,6 +2,7 @@ import Link from "next/link";
 import { requireProfile } from "@/lib/auth";
 import { PageHeader } from "@/components/ui";
 import { wtbPages } from "@/lib/wtb";
+import { groupWtb } from "@/lib/wtb-group";
 
 /** Podgląd grafik WTB (po maks. 16 par na grafikę) z przyciskami pobierania. */
 export default async function WtbGrafikaPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
@@ -9,19 +10,20 @@ export default async function WtbGrafikaPage({ searchParams }: { searchParams: P
   const { supabase } = await requireProfile();
   const raw = sp.ids;
   const ids = (Array.isArray(raw) ? raw : raw ? raw.split(",") : []).filter((x) => /^[0-9a-f-]{36}$/i.test(x)).slice(0, 200);
-  let query = supabase.from("wtb_items").select("id");
+  let query = supabase.from("wtb_items").select("id, title, size, sku, image_url, product_id");
   query = ids.length ? query.in("id", ids) : query.eq("status", "active");
   const { data } = await query.order("created_at");
   const found = new Set((data ?? []).map((d) => d.id as string));
   const ordered = ids.length ? ids.filter((id) => found.has(id)) : [...found];
-  const pages = wtbPages(ordered);
+  const groups = groupWtb(ordered.map((id) => data!.find((d) => d.id === id)!));
+  const pages = wtbPages(groups);
   const idsParam = ids.length ? `ids=${ordered.join(",")}&` : "";
 
   return (
     <>
       <PageHeader
         title="Grafika WTB"
-        sub={`${ordered.length} ${ordered.length === 1 ? "para" : "par"} · ${pages.length} ${pages.length === 1 ? "grafika" : "grafiki"} 1080 × 1350`}
+        sub={`${groups.length} ${groups.length === 1 ? "model" : "modeli"} (${ordered.length} ${ordered.length === 1 ? "rozmiar" : "rozmiarów"}) · ${pages.length} ${pages.length === 1 ? "grafika" : "grafiki"} 1080 × 1350`}
         actions={<Link className="btn-secondary" href="/wtb">Wróć do listy</Link>}
       />
       {!pages.length ? <p className="text-muted">Nic nie zaznaczono.</p> : (

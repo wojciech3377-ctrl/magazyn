@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import { requireAdmin, requireProfile } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { errorMessage } from "@/lib/errors";
-import { issueInvoice, refreshKsefStatus, sendInvoiceToKsef, type DraftItem, type InvoiceDraft, type PaymentMethod } from "@/lib/invoices/service";
+import { issueInvoice, issueReceipt, receiptPreview, refreshKsefStatus, sendInvoiceToKsef, type DraftItem, type InvoiceDraft, type PaymentMethod } from "@/lib/invoices/service";
 import { nipValid, onlyDigits } from "@/lib/invoices/xml";
 import { ksefCheck, ksefConfigured } from "@/lib/ksef/client";
 import { lookupNip } from "@/lib/invoices/nip-lookup";
@@ -18,25 +18,115 @@ export type InvoiceFormState = { error?: string } | null;
 const s = (fd: FormData, k: string) => String(fd.get(k) ?? "").trim();
 const isDate = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v);
 
-/** Wystawienie faktury z formularza (i opcjonalnie wysyłka do KSeF). */
-export async function createInvoiceAction(_: InvoiceFormState, fd: FormData): Promise<InvoiceFormState> {
-  const { profile } = await requireProfile();
-  const db = createAdminClient();
-  let items: DraftItem[];
+
+/** Pozycje z formularza faktury / paragonu. */
+function parseItems(fd: FormData): { items: DraftItem[] } | { error: string } {
   try {
-    items = (JSON.parse(s(fd, "items")) as DraftItem[]).map((i) => ({
+    const items = (JSON.parse(s(fd, "items")) as DraftItem[]).map((i) => ({
       name: String(i.name ?? "").trim().slice(0, 256),
       quantity: Math.max(0.001, Number(i.quantity) || 1),
       unit: String(i.unit || "szt.").slice(0, 10),
       unit_price_gross: Math.round(Number(i.unit_price_gross) * 100) / 100,
       total_gross: Math.round(Number(i.unit_price_gross) * (Number(i.quantity) || 1) * 100) / 100,
-      vat: i.vat === "23" ? "23" : "margin",
+      vat: i.vat === "23" ? "23" as const : "margin" as const,
       unit_id: i.unit_id ?? null, sale_id: i.sale_id ?? null, pos_item_id: i.pos_item_id ?? null,
       checkVat: !!(i as { checkVat?: boolean }).checkVat,
     }));
+    return { items };
   } catch {
-    return { error: "Błędne pozycje faktury." };
+    return { error: "Błędne pozycje dokumentu." };
   }
+}
+
+/** Sztuki z magazynu na dokumencie „ręcznym” (bez zamówienia i kasy) – sprzedane i zdjęte ze stanu w Shopify. */
+async function sellManualUnits(db: ReturnType<typeof createAdminClient>, unitIds: string[], docId: string, userId: string, note: string) {
+  if (!unitIds.length) return "";
+  const { data: sold } = await db.from("units").update({ status: "sold", sold_at: new Date().toISOString() })
+    .in("id", unitIds).in("status", ["in_stock", "reserved"]).select("id, variant_id, location_id");
+  if (!sold?.length) return "";
+  await db.from("unit_events").insert(sold.map((u) => ({ unit_id: u.id, type: "sold", data: { invoice_id: docId, note }, created_by: userId })));
+  const r = await adjustStock(db, sold.map((u) => ({ variantId: u.variant_id as string, locationId: u.location_id as string, delta: -1 })));
+  const failed = r.filter((x) => !x.ok);
+  return failed.length ? ` Uwaga: stan w Shopify nie zmieniony (${failed.map((f) => f.message).join("; ")}) – popraw go ręcznie.` : ` Sztuki zdjęte ze stanu (${sold.length}).`;
+}
+
+async function checkManualUnits(db: ReturnType<typeof createAdminClient>, items: DraftItem[], orderId: string | null, posOrderId: string | null) {
+  const ids = !orderId && !posOrderId ? [...new Set(items.map((i) => i.unit_id).filter((x): x is string => !!x))] : [];
+  if (!ids.length) return { ids };
+  const { data: us } = await db.from("units").select("id, code, status").in("id", ids);
+  const bad = (us ?? []).filter((u) => !["in_stock", "reserved"].includes(u.status as string));
+  if (bad.length || (us ?? []).length !== ids.length) return { ids, error: `Sztuka ${bad.map((u) => u.code).join(", ") || "z dokumentu"} nie jest na stanie – nie można jej sprzedać.` };
+  return { ids };
+}
+
+/** Paragon z formularza: szkic bez nabywcy. */
+function receiptDraft(fd: FormData, items: DraftItem[]): InvoiceDraft | { error: string } {
+  if (!items.length) return { error: "Dodaj co najmniej jedną pozycję." };
+  if (items.some((i) => !i.name || !(i.unit_price_gross > 0))) return { error: "Każda pozycja musi mieć nazwę i cenę większą od zera." };
+  const issueDate = s(fd, "issue_date");
+  const saleDate = s(fd, "sale_date") || issueDate;
+  if (!isDate(issueDate) || !isDate(saleDate)) return { error: "Podaj daty wystawienia i sprzedaży." };
+  const method = s(fd, "payment_method") as PaymentMethod;
+  if (!["cash", "card", "transfer", "mobile"].includes(method)) return { error: "Wybierz formę płatności." };
+  return {
+    buyer: { name: "Osoba prywatna", nip: null, address1: null, address2: null, country: "PL", email: null, company: false },
+    issueDate, saleDate, paymentMethod: method, paid: true, paidAt: isDate(s(fd, "paid_at")) ? s(fd, "paid_at") : issueDate, dueDate: null,
+    items, orderId: s(fd, "order_id") || null, posOrderId: s(fd, "pos_order_id") || null, notes: s(fd, "notes") || null,
+  };
+}
+
+export type ReceiptState = { error?: string; id?: string; number?: string; note?: string } | null;
+
+/** „Podgląd dokumentu”: PDF paragonu bez nadawania numeru (base64). */
+export async function previewReceiptAction(fd: FormData): Promise<{ error?: string; pdf?: string }> {
+  await requireProfile();
+  const db = createAdminClient();
+  const parsed = parseItems(fd);
+  if ("error" in parsed) return parsed;
+  const d = receiptDraft(fd, parsed.items);
+  if ("error" in d) return d;
+  try {
+    const { renderInvoicePdf } = await import("@/lib/invoices/pdf");
+    const bytes = await renderInvoicePdf(await receiptPreview(db, d));
+    return { pdf: Buffer.from(bytes).toString("base64") };
+  } catch (e) {
+    return { error: errorMessage(e) };
+  }
+}
+
+/** „Wydrukuj dokument”: wystawia paragon (PAR/miesiąc/n) i zwraca jego id do wydruku. */
+export async function issueReceiptAction(_: ReceiptState, fd: FormData): Promise<ReceiptState> {
+  const { profile } = await requireProfile();
+  const db = createAdminClient();
+  const parsed = parseItems(fd);
+  if ("error" in parsed) return parsed;
+  const d = receiptDraft(fd, parsed.items);
+  if ("error" in d) return d;
+  if (d.orderId || d.posOrderId) {
+    const q = db.from("invoices").select("number").eq("kind", "receipt").not("status", "in", "(rejected,cancelled)");
+    const { data: dup } = await (d.orderId ? q.eq("order_id", d.orderId) : q.eq("pos_order_id", d.posOrderId!)).limit(1).maybeSingle();
+    if (dup) return { error: `Do tej sprzedaży jest już paragon ${dup.number}.` };
+  }
+  const units = await checkManualUnits(db, d.items, d.orderId, d.posOrderId);
+  if (units.error) return { error: units.error };
+  let row: { id: string; number: string };
+  try {
+    row = await issueReceipt(db, d, profile.id);
+  } catch (e) {
+    return { error: errorMessage(e) };
+  }
+  const note = await sellManualUnits(db, units.ids, row.id, profile.id, "sprzedaż na paragon");
+  revalidatePath("/sprzedaz");
+  return { id: row.id, number: row.number, note };
+}
+
+/** Wystawienie faktury z formularza (i opcjonalnie wysyłka do KSeF). */
+export async function createInvoiceAction(_: InvoiceFormState, fd: FormData): Promise<InvoiceFormState> {
+  const { profile } = await requireProfile();
+  const db = createAdminClient();
+  const parsed = parseItems(fd);
+  if ("error" in parsed) return parsed;
+  const items = parsed.items;
   if (!items.length) return { error: "Dodaj co najmniej jedną pozycję." };
   if (items.some((i) => !i.name || !(i.unit_price_gross > 0))) return { error: "Każda pozycja musi mieć nazwę i cenę większą od zera." };
 
@@ -56,7 +146,7 @@ export async function createInvoiceAction(_: InvoiceFormState, fd: FormData): Pr
   const orderId = s(fd, "order_id") || null;
   const posOrderId = s(fd, "pos_order_id") || null;
   if (orderId || posOrderId) {
-    const q = db.from("invoices").select("number").not("status", "in", "(rejected,cancelled)");
+    const q = db.from("invoices").select("number").neq("kind", "receipt").not("status", "in", "(rejected,cancelled)");
     const { data: dup } = await (orderId ? q.eq("order_id", orderId) : q.eq("pos_order_id", posOrderId!)).limit(1).maybeSingle();
     if (dup) return { error: `Do tej sprzedaży jest już faktura ${dup.number}.` };
   }
@@ -65,12 +155,8 @@ export async function createInvoiceAction(_: InvoiceFormState, fd: FormData): Pr
   }
 
   // Faktura „ręczna” ze sztukami z magazynu = sprzedaż: sztuki muszą być na stanie (potem schodzą ze stanu).
-  const manualUnits = !orderId && !posOrderId ? [...new Set(items.map((i) => i.unit_id).filter((x): x is string => !!x))] : [];
-  if (manualUnits.length) {
-    const { data: us } = await db.from("units").select("id, code, status").in("id", manualUnits);
-    const bad = (us ?? []).filter((u) => !["in_stock", "reserved"].includes(u.status as string));
-    if (bad.length || (us ?? []).length !== manualUnits.length) return { error: `Sztuka ${bad.map((u) => u.code).join(", ") || "z faktury"} nie jest na stanie – nie można jej sprzedać fakturą.` };
-  }
+  const units = await checkManualUnits(db, items, orderId, posOrderId);
+  if (units.error) return { error: units.error };
 
   const draft: InvoiceDraft = {
     buyer: { name, nip: nip || null, address1: s(fd, "address1") || null, address2: s(fd, "address2") || null, country, email: s(fd, "email") || null, company },
@@ -89,17 +175,7 @@ export async function createInvoiceAction(_: InvoiceFormState, fd: FormData): Pr
   if (fd.get("save_customer") === "1") await saveCustomer(db, draft.buyer, profile.id);
   const shipmentId = s(fd, "consignor_shipment_id");
   if (/^[0-9a-f-]{36}$/i.test(shipmentId)) await db.from("consignor_shipments").update({ invoice_id: id }).eq("id", shipmentId).is("invoice_id", null);
-  let stockNote = "";
-  if (manualUnits.length) {
-    const { data: sold } = await db.from("units").update({ status: "sold", sold_at: new Date().toISOString() })
-      .in("id", manualUnits).in("status", ["in_stock", "reserved"]).select("id, variant_id, location_id");
-    if (sold?.length) {
-      await db.from("unit_events").insert(sold.map((u) => ({ unit_id: u.id, type: "sold", data: { invoice_id: id, note: "sprzedaż na fakturę" }, created_by: profile.id })));
-      const r = await adjustStock(db, sold.map((u) => ({ variantId: u.variant_id as string, locationId: u.location_id as string, delta: -1 })));
-      const failed = r.filter((x) => !x.ok);
-      stockNote = failed.length ? ` Uwaga: stan w Shopify nie zmieniony (${failed.map((f) => f.message).join("; ")}) – popraw go ręcznie.` : ` Sztuki zdjęte ze stanu (${sold.length}).`;
-    }
-  }
+  const stockNote = await sellManualUnits(db, units.ids, id, profile.id, "sprzedaż na fakturę");
   let msg = "Faktura wystawiona.";
   const toKsef = fd.get("send_ksef") === "1" && ksefConfigured();
   if (toKsef) {

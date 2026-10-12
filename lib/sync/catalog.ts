@@ -319,17 +319,24 @@ export async function splitSameStoreDuplicates(db: SupabaseClient, limit = 20) {
   for (const g of groups) {
     const store = (stores ?? []).find((s) => s.id === g.store_id) as Store | undefined;
     if (!store?.shopify_domain) continue;
-    for (const gid of g.shopify_product_ids.slice(1)) {
-      const product = await getProduct(store.shopify_domain, store.code, gid).catch(() => null);
-      if (!product) continue;
-      const variantGids = product.variants.nodes.map((v) => v.id);
-      for (let i = 0; i < variantGids.length; i += 100) {
-        await db.from("variant_store_links").delete().eq("store_id", store.id).in("shopify_variant_id", variantGids.slice(i, i + 100));
-      }
-      await db.from("product_store_links").delete().eq("store_id", store.id).eq("shopify_product_id", gid);
-      await upsertShopifyProducts(db, store, [product]);
-      split++;
-    }
+    split += await splitProductGids(db, store, g.shopify_product_ids);
   }
   return { split };
+}
+
+/** Pierwszy produkt Shopify zostaje przy produkcie aplikacji, pozostałe (ten sam SKU, ten sam sklep) dostają własne. */
+export async function splitProductGids(db: SupabaseClient, store: Store, gids: string[]) {
+  let split = 0;
+  for (const gid of gids.slice(1)) {
+    const product = await getProduct(store.shopify_domain!, store.code, gid).catch(() => null);
+    if (!product) continue;
+    const variantGids = product.variants.nodes.map((v) => v.id);
+    for (let i = 0; i < variantGids.length; i += 100) {
+      await db.from("variant_store_links").delete().eq("store_id", store.id).in("shopify_variant_id", variantGids.slice(i, i + 100));
+    }
+    await db.from("product_store_links").delete().eq("store_id", store.id).eq("shopify_product_id", gid);
+    await upsertShopifyProducts(db, store, [product]);
+    split++;
+  }
+  return split;
 }

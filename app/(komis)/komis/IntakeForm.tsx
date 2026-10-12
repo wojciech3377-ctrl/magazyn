@@ -9,7 +9,8 @@ type Row = { key: string; variant_id: string | null; title: string; option: stri
 /** Zgłoszenie rzeczy do wysłania do nas: adres (nasza lokalizacja), rzeczy z katalogu albo opisane, kwota komisanta. */
 export function IntakeForm({ locations }: { locations: Loc[] }) {
   const [state, action, pending] = useActionState<IntakeState, FormData>(createIntake, null);
-  const [loc, setLoc] = useState(locations[0]?.id ?? "");
+  const [loc, setLoc] = useState(locations.length === 1 ? locations[0].id : "");
+  const [step, setStep] = useState<1 | 2>(1);
   const [rows, setRows] = useState<Row[]>([]);
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<CatalogHit[]>([]);
@@ -21,7 +22,7 @@ export function IntakeForm({ locations }: { locations: Loc[] }) {
     const t = setTimeout(() => start(async () => setHits(await searchCatalog(q))), 300);
     return () => clearTimeout(t);
   }, [q]);
-  useEffect(() => { if (state?.ok) setRows([]); }, [state]);
+  useEffect(() => { if (state?.ok) { setRows([]); setStep(1); } }, [state]);
 
   const add = (r: Omit<Row, "key">) => setRows((x) => [...x, { ...r, key: crypto.randomUUID() }]);
   const set = (key: string, patch: Partial<Row>) => setRows((x) => x.map((r) => (r.key === key ? { ...r, ...patch } : r)));
@@ -29,14 +30,40 @@ export function IntakeForm({ locations }: { locations: Loc[] }) {
 
   return (
     <form action={action} className="card space-y-4 p-4">
-      <div>
-        <label className="label" htmlFor="intake-loc">Wyślij na adres:</label>
-        <select id="intake-loc" className="input max-w-md" name="location_id" value={loc} onChange={(e) => setLoc(e.target.value)}>
-          {locations.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
-        </select>
-        {address?.address && <p className="mt-1 whitespace-pre-line text-sm text-muted">{address.address}</p>}
-      </div>
+      <ol className="flex flex-wrap gap-2 text-sm" aria-label="Etapy zgłoszenia">
+        {["Dokąd wysyłasz", "Jakie rzeczy"].map((t, i) => (
+          <li key={t} className={`flex items-center gap-2 rounded-full border px-3 py-1 ${step === i + 1 ? "border-accent bg-sky-50 font-medium text-ink" : step > i + 1 ? "border-emerald-300 bg-emerald-50 text-emerald-800" : "border-line text-muted"}`}>
+            <span className={`flex h-5 w-5 items-center justify-center rounded-full text-xs ${step === i + 1 ? "bg-accent text-white" : step > i + 1 ? "bg-emerald-600 text-white" : "bg-panel"}`}>{step > i + 1 ? "✓" : i + 1}</span>{t}
+          </li>
+        ))}
+      </ol>
+      <input type="hidden" name="location_id" value={loc} />
 
+      {step === 1 && (
+        <div className="space-y-3">
+          <p className="font-medium">Krok 1: wybierz, na który adres wyślesz rzeczy</p>
+          {!locations.length && <p className="text-sm text-muted">Nie mamy teraz adresu do przyjęcia rzeczy – napisz do nas.</p>}
+          <div className="grid gap-2 sm:grid-cols-2">
+            {locations.map((l) => (
+              <label key={l.id} className="flex cursor-pointer items-start gap-2 rounded-lg border border-line bg-white p-3 text-sm transition-colors hover:border-accent hover:bg-sky-50 has-[:checked]:border-accent has-[:checked]:bg-sky-50 has-[:checked]:ring-1 has-[:checked]:ring-accent">
+                <input type="radio" name="loc_pick" checked={loc === l.id} onChange={() => setLoc(l.id)} className="mt-1" />
+                <span><b>{l.label}</b>{l.address && <span className="block whitespace-pre-line text-muted">{l.address}</span>}</span>
+              </label>
+            ))}
+          </div>
+          <button type="button" className="btn" disabled={!loc} onClick={() => setStep(2)}>Dalej – wybierz rzeczy →</button>
+        </div>
+      )}
+
+      {step === 2 && address && (
+        <div className="flex flex-wrap items-start justify-between gap-2 rounded-lg border border-emerald-200 bg-emerald-50/60 p-3 text-sm">
+          <span>Wysyłasz na: <b>{address.label}</b>{address.address && <span className="block whitespace-pre-line text-muted">{address.address}</span>}</span>
+          <button type="button" className="text-accent hover:underline" onClick={() => setStep(1)}>zmień adres</button>
+        </div>
+      )}
+
+      {step === 2 && <>
+      <p className="font-medium">Krok 2: dodaj modele, które chcesz wysłać</p>
       <div className="space-y-2">
         <label className="label" htmlFor="intake-q">Dodaj rzecz z naszego katalogu</label>
         <input id="intake-q" className="input max-w-md" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Nazwa modelu, SKU albo EAN" />
@@ -97,6 +124,8 @@ export function IntakeForm({ locations }: { locations: Loc[] }) {
       {state?.ok && <p className="text-sm font-medium text-ok" role="status">{state.ok}</p>}
       <button className="btn" disabled={pending || !rows.length || !loc || rows.some((r) => !r.purchase_form)}>{pending ? "Wysyłam…" : `Wyślij zgłoszenie (${rows.length} szt.)`}</button>
       {rows.some((r) => !r.purchase_form) && <p className="text-xs text-bad">Wybierz rozliczenie (VAT marża albo VAT 23%) przy każdej rzeczy.</p>}
+      </>}
+      {step === 1 && state?.ok && <p className="text-sm font-medium text-ok" role="status">{state.ok}</p>}
     </form>
   );
 }

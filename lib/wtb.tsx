@@ -96,12 +96,12 @@ export async function renderWtbSheet(items: (WtbItem & { img: string | null })[]
               )}
               {single ? (
                 <div style={{ display: "flex", gap: 24, marginTop: 24 }}>
-                  <Box label="ROZMIAR" value={it.size ?? "–"} />
+                  <Box label={it.size?.includes(", ") ? "ROZMIARY" : "ROZMIAR"} value={it.size ?? "–"} />
                   <Box label="SKU" value={it.sku ?? "–"} grow />
                 </div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", marginTop: 6 }}>
-                  <div style={{ display: "flex", fontSize: sizeFont, fontWeight: 700, color: "#0b0b0b", lineHeight: 1.1 }}>{it.size ? `${it.size}` : "–"}</div>
+                  <div style={{ display: "flex", fontSize: fitFont(it.size, sizeFont, cellW - (cols >= 3 ? 20 : 32)), fontWeight: 700, color: "#0b0b0b", lineHeight: 1.1, maxHeight: sizeFont * 1.15, overflow: "hidden" }}>{it.size ? `${it.size}` : "–"}</div>
                   <div style={{ display: "flex", fontSize: skuFont, fontWeight: 700, color: "#6b6b6b", letterSpacing: 1, marginTop: 4, whiteSpace: "nowrap", overflow: "hidden" }}>{it.sku ?? ""}</div>
                 </div>
               )}
@@ -125,8 +125,14 @@ export async function renderWtbSheet(items: (WtbItem & { img: string | null })[]
   );
 }
 
+/** Rozmiar czcionki, przy którym lista rozmiarów („40, 41, 42”) mieści się w jednej linii kafelka (min. 14 px). */
+function fitFont(text: string | null, max: number, width: number) {
+  const len = Math.max(1, (text ?? "–").length);
+  return Math.max(14, Math.min(max, Math.floor(width / (len * 0.62))));
+}
+
 function Box({ label, value, grow }: { label: string; value: string; grow?: boolean }) {
-  const size = value.length > 18 ? 40 : value.length > 12 ? 48 : 60;
+  const size = value.length > 30 ? 30 : value.length > 18 ? 40 : value.length > 12 ? 48 : 60;
   return (
     <div style={{ display: "flex", flexDirection: "column", flexGrow: grow ? 1 : 0, minWidth: 260, border: "4px solid #0b0b0b", borderRadius: 18, padding: "18px 28px" }}>
       <div style={{ display: "flex", fontSize: 26, fontWeight: 700, color: "#6b6b6b", letterSpacing: 3 }}>{label}</div>
