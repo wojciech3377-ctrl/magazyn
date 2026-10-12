@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { createParShippingOrder, type ParShipping } from "@/lib/orders/par-order";
 import { redirect } from "next/navigation";
 import { requireAdmin, requireSection } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -75,7 +76,7 @@ function receiptDraft(fd: FormData, items: DraftItem[]): InvoiceDraft | { error:
   };
 }
 
-export type ReceiptState = { error?: string; id?: string; number?: string; note?: string } | null;
+export type ReceiptState = { error?: string; id?: string; number?: string; note?: string; orderId?: string } | null;
 
 /** „Podgląd dokumentu”: PDF paragonu bez nadawania numeru (base64). */
 export async function previewReceiptAction(fd: FormData): Promise<{ error?: string; pdf?: string }> {
@@ -102,6 +103,8 @@ export async function issueReceiptAction(_: ReceiptState, fd: FormData): Promise
   if ("error" in parsed) return parsed;
   const d = receiptDraft(fd, parsed.items);
   if ("error" in d) return d;
+  const ship = d.orderId || d.posOrderId ? null : readShipping(fd);
+  if (ship && "error" in ship) return ship;
   if (d.orderId || d.posOrderId) {
     const q = db.from("invoices").select("number").eq("kind", "receipt").not("status", "in", "(rejected,cancelled)");
     const { data: dup } = await (d.orderId ? q.eq("order_id", d.orderId) : q.eq("pos_order_id", d.posOrderId!)).limit(1).maybeSingle();
@@ -116,8 +119,36 @@ export async function issueReceiptAction(_: ReceiptState, fd: FormData): Promise
     return { error: errorMessage(e) };
   }
   const note = await sellManualUnits(db, units.ids, row.id, profile.id, "sprzedaż na paragon");
+  // „Wysyłka”: zamówienie do Sprzedaż → Zamówienia (poza JPK), umowy sztuk wracają do niewykorzystanych.
+  let shipNote = "";
+  let orderId: string | undefined;
+  if (ship) {
+    try {
+      const r = await createParShippingOrder(db, { receiptId: row.id, number: row.number, payment: d.paymentMethod, items: d.items, ship });
+      orderId = r.orderId;
+      shipNote = ` Zamówienie do wysyłki utworzone w Sprzedaż → Zamówienia (poza JPK).${r.freedContracts ? ` Umowy wróciły do niewykorzystanych: ${r.freedContracts}.` : ""}`;
+    } catch (e) {
+      shipNote = ` Uwaga: nie udało się utworzyć zamówienia do wysyłki (${errorMessage(e)}).`;
+    }
+  }
   revalidatePath("/sprzedaz");
-  return { id: row.id, number: row.number, note };
+  return { id: row.id, number: row.number, note: note + shipNote, orderId };
+}
+
+/** Dane wysyłki z formularza paragonu (opcja „Wysyłka”). */
+function readShipping(fd: FormData): ParShipping | { error: string } | null {
+  if (fd.get("ship") !== "1") return null;
+  const v = (k: string) => String(fd.get(`ship_${k}`) ?? "").trim();
+  const ship: ParShipping = {
+    storeId: v("store"), name: v("name"), phone: v("phone"), email: v("email") || null, street: v("street"), zip: v("zip"), city: v("city"),
+    country: (v("country") || "PL").toUpperCase().slice(0, 2), method: v("method") || "Kurier", point: v("point") || null, note: v("note") || null,
+  };
+  if (!/^[0-9a-f-]{36}$/.test(ship.storeId)) return { error: "Wybierz sklep, z którego idzie wysyłka." };
+  if (!ship.name || !ship.phone) return { error: "Wysyłka: podaj odbiorcę i telefon." };
+  const locker = /paczkomat/i.test(ship.method);
+  if (locker && !ship.point) return { error: "Wysyłka do paczkomatu: podaj kod paczkomatu (np. WAW123M)." };
+  if (!locker && (!ship.street || !ship.zip || !ship.city)) return { error: "Wysyłka kurierem: podaj ulicę, kod pocztowy i miasto." };
+  return ship;
 }
 
 /** Wystawienie faktury z formularza (i opcjonalnie wysyłka do KSeF). */

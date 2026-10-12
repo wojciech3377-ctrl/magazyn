@@ -1,15 +1,21 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-/** Numer umowy z treści dokumentu, np. „NR00512”, „Umowa nr 190/2026”. */
+/** Numer umowy z treści dokumentu, np. „NR00512”, „Umowa nr 190/2026”, „Nr umowy: UK/12/2026”, „No. 15”. */
 export function findContractNumber(text: string): string | null {
   const t = text.replace(/\s+/g, " ");
   const nr = t.match(/\bNR\s?(\d{3,7})\b/);
   if (nr) return `NR${nr[1]}`;
-  const umowa = t.match(/umow[aęy](?:\s+\S+){0,4}?\s+nr\.?\s*:?\s*([A-Z0-9][A-Z0-9/\-]{1,24})/i);
-  if (umowa) return umowa[1];
-  const numer = t.match(/numer\s+umowy\s*:?\s*([A-Z0-9][A-Z0-9/\-]{1,24})/i);
-  return numer?.[1] ?? null;
+  const patterns = [
+    /umow[aęy](?:\s+\S+){0,4}?\s+(?:nr|numer)\.?\s*:?\s*([A-Z0-9][A-Z0-9/\-.]{0,24})/i,
+    /(?:nr|numer)\.?\s+umowy\s*:?\s*([A-Z0-9][A-Z0-9/\-.]{0,24})/i,
+    /\b(?:nr|no)\.?\s*:?\s*([A-Z]{0,4}[/\-]?\d[A-Z0-9/\-.]{0,20})/i,
+  ];
+  for (const re of patterns) {
+    const m = t.match(re);
+    if (m) return m[1].replace(/[.\-/]+$/, "");
+  }
+  return null;
 }
 
 /** Odczyt numeru z PDF umowy w Storage (skany-zdjęcia bez tekstu → null). */

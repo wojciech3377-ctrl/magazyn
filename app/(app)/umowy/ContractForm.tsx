@@ -4,12 +4,13 @@ import { useActionState, useState } from "react";
 import { createContract } from "./actions";
 import { ContractFileInput } from "@/components/ContractFileInput";
 import { VariantPick } from "@/components/VariantPick";
+import { ContractItemsPicker } from "./ContractItemsPicker";
 
 export function ContractForm({ consignors, defaultUnits, canSeePrices, returnTo = "", saleId = null, saleLabel = null, pickVariantStore = null }: { consignors: { id: string; name: string }[]; defaultUnits: string; canSeePrices: boolean; returnTo?: string; saleId?: string | null; saleLabel?: string | null; pickVariantStore?: string | null }) {
   const [state, action, pending] = useActionState(createContract, null);
   const [type, setType] = useState("purchase");
   return (
-    <form action={action} className="card grid max-w-2xl gap-3 p-4 md:grid-cols-2">
+    <form action={action} className="card grid max-w-3xl gap-3 p-4 md:grid-cols-2">
       <input type="hidden" name="returnTo" value={returnTo} />
       {saleId && <input type="hidden" name="sale_id" value={saleId} />}
       {saleLabel && <p className="rounded-md bg-sky-50 p-2 text-sm md:col-span-2">Umowa do sprzedanego przedmiotu: <b>{saleLabel}</b>. Przedmiot dostanie sztukę w magazynie (sprzedaną) z tą umową; kwota umowy = cena zakupu.</p>}
@@ -34,7 +35,12 @@ export function ContractForm({ consignors, defaultUnits, canSeePrices, returnTo 
           <option value="EUR">EUR</option>
         </select>
       </div>
-      <div className="md:col-span-2">
+      <div>
+        <label className="label" htmlFor="doc_number">Nazwa / numer umowy (do JPK)</label>
+        <input className="input font-mono" id="doc_number" name="doc_number" placeholder="np. NR00512" maxLength={60} />
+        <p className="mt-1 text-xs text-muted">Puste – odczytamy z pliku PDF (skan-zdjęcie bez tekstu trzeba wpisać).</p>
+      </div>
+      <div>
         <label className="label" htmlFor="counterparty">Od kogo (imię i nazwisko / firma)</label>
         <input className="input" id="counterparty" name="counterparty" required />
       </div>
@@ -54,10 +60,7 @@ export function ContractForm({ consignors, defaultUnits, canSeePrices, returnTo 
         </div>
       )}
       <ContractFileInput label="Plik (PDF lub zdjęcie)" />
-      <div className="md:col-span-2">
-        <label className="label" htmlFor="units">Sztuki (kody S000123 lub IMEI, oddzielone spacją lub w liniach)</label>
-        <textarea className="input font-mono" id="units" name="units" rows={3} defaultValue={defaultUnits} />
-      </div>
+      <ContractItemsPicker defaultCodes={defaultUnits.split(/[\s,]+/).filter(Boolean)} />
       <div className="md:col-span-2">
         <label className="label" htmlFor="notes">Notatki</label>
         <input className="input" id="notes" name="notes" />

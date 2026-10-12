@@ -13,7 +13,11 @@ const PAYMENTS: [string, string][] = [["card", "Karta / płatność online"], ["
 const pl = (n: number) => new Intl.NumberFormat("pl-PL", { style: "currency", currency: "PLN" }).format(n);
 const num = (v: string) => Number(v.replace(",", ".")) || 0;
 
-export function InvoiceForm({ draft, ksefReady, receipt = false }: { draft: InvoiceDraft; ksefReady: boolean; receipt?: boolean }) {
+export function InvoiceForm({ draft, ksefReady, receipt = false, stores = [], defaultStore }: { draft: InvoiceDraft; ksefReady: boolean; receipt?: boolean; stores?: { id: string; name: string }[]; defaultStore?: string }) {
+  // Paragon bez zamówienia: opcja „Wysyłka” – zamówienie do Sprzedaż → Zamówienia (poza JPK).
+  const canShip = receipt && !draft.orderId && !draft.posOrderId && stores.length > 0;
+  const [ship, setShip] = useState(false);
+  const [shipMethod, setShipMethod] = useState("Paczkomat InPost");
   const [invState, invAction, invPending] = useActionState<InvoiceFormState, FormData>(createInvoiceAction, null);
   const [parState, parAction, parPending] = useActionState<ReceiptState, FormData>(issueReceiptAction, null);
   const state = receipt ? parState : invState;
@@ -267,6 +271,38 @@ export function InvoiceForm({ draft, ksefReady, receipt = false }: { draft: Invo
         <div className="md:col-span-3"><label className="label" htmlFor="notes">Uwagi (na {receipt ? "paragonie" : "fakturze"})</label><input id="notes" className="input" name="notes" defaultValue={draft.notes ?? ""} /></div>
       </section>
 
+      {canShip && (
+        <section className={`card p-4 ${ship ? "border-accent/40" : ""}`}>
+          <input type="hidden" name="ship" value={ship ? "1" : "0"} />
+          <label className="flex cursor-pointer items-start gap-3">
+            <input type="checkbox" checked={ship} onChange={(e) => setShip(e.target.checked)} className="mt-1 h-4 w-4 accent-[var(--color-accent)]" />
+            <span>
+              <span className="block font-semibold">Wysyłka</span>
+              <span className="block text-sm text-muted">Paragon z wysyłką: zamówienie trafi do Sprzedaż → Zamówienia (etykieta, status), ale <b>nie wejdzie do JPK</b>. Umowy sztuk z paragonu wrócą do niewykorzystanych.</span>
+            </span>
+          </label>
+          {ship && (
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <div><label className="label" htmlFor="ship_store">Sklep</label>
+                <select id="ship_store" className="input" name="ship_store" defaultValue={defaultStore ?? stores[0]?.id}>{stores.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select></div>
+              <div><label className="label" htmlFor="ship_method">Sposób wysyłki</label>
+                <select id="ship_method" className="input" name="ship_method" value={shipMethod} onChange={(e) => setShipMethod(e.target.value)}>
+                  {["Paczkomat InPost", "Kurier InPost", "Kurier DPD", "Kurier DHL", "Odbiór osobisty"].map((m) => <option key={m}>{m}</option>)}
+                </select></div>
+              {/paczkomat/i.test(shipMethod) && <div><label className="label" htmlFor="ship_point">Kod paczkomatu</label><input id="ship_point" className="input font-mono uppercase" name="ship_point" placeholder="np. WAW123M" /></div>}
+              <div><label className="label" htmlFor="ship_name">Odbiorca</label><input id="ship_name" className="input" name="ship_name" autoComplete="name" /></div>
+              <div><label className="label" htmlFor="ship_phone">Telefon</label><input id="ship_phone" className="input" name="ship_phone" inputMode="tel" autoComplete="tel" /></div>
+              <div><label className="label" htmlFor="ship_email">E-mail (opcjonalnie)</label><input id="ship_email" className="input" type="email" name="ship_email" autoComplete="email" /></div>
+              <div className="sm:col-span-2"><label className="label" htmlFor="ship_street">Ulica i numer</label><input id="ship_street" className="input" name="ship_street" autoComplete="address-line1" /></div>
+              <div><label className="label" htmlFor="ship_zip">Kod pocztowy</label><input id="ship_zip" className="input" name="ship_zip" autoComplete="postal-code" placeholder="00-000" /></div>
+              <div><label className="label" htmlFor="ship_city">Miasto</label><input id="ship_city" className="input" name="ship_city" autoComplete="address-level2" /></div>
+              <div><label className="label" htmlFor="ship_country">Kraj</label><input id="ship_country" className="input uppercase" name="ship_country" defaultValue="PL" maxLength={2} /></div>
+              <div className="sm:col-span-2 lg:col-span-3"><label className="label" htmlFor="ship_note">Uwagi do wysyłki</label><input id="ship_note" className="input" name="ship_note" /></div>
+            </div>
+          )}
+        </section>
+      )}
+
       {receipt ? (
         <div className="space-y-3">
           {needsCheck && <label className="flex items-center gap-2 text-sm text-warn"><input type="checkbox" name="vat_checked" value="1" /> Sprawdziłem stawki VAT pozycji na pomarańczowo</label>}
@@ -276,6 +312,7 @@ export function InvoiceForm({ draft, ksefReady, receipt = false }: { draft: Invo
               <span className="font-medium text-ok">Paragon {parState.number} wystawiony – otwiera się wydruk.{parState.note}</span>
               <button type="button" className="btn-secondary" onClick={() => printPdf(`/api/faktury/${parState.id}/pdf`)}>Drukuj ponownie</button>
               <Link className="btn-secondary" href={`/sprzedaz/faktury/${parState.id}`}>Otwórz dokument</Link>
+              {parState.orderId && <Link className="btn" href={`/sprzedaz/${parState.orderId}`}>Zamówienie do wysyłki</Link>}
               <a className="text-accent hover:underline" href="/sprzedaz/faktury/nowa?typ=paragon">Nowy paragon</a>
             </div>
           )}

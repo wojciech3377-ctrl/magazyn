@@ -10,7 +10,7 @@ import { getBuyerSignature, getCompany } from "@/lib/contracts/settings";
 import { getSmtpSettings, mailConfig } from "@/lib/mail";
 import { ContractSettings } from "./ContractSettings";
 import { FiscalSettings } from "./FiscalSettings";
-import { addExclusion, deleteExclusion, disconnectFurgonetka, purgeExcluded, purgeNonShopify, registerWebhooks, runStockNow, saveSmtp, saveInvoiceSettings, saveLocation, saveSender, saveShopifyLocation, saveStockMaster, saveStore, checkOmnibus, fixProductStockNow } from "./actions";
+import { addExclusion, deleteExclusion, disconnectFurgonetka, purgeExcluded, purgeNonShopify, registerWebhooks, runStockNow, saveSmtp, saveInvoiceSettings, saveLocation, saveSender, saveShopifyLocation, saveStockMaster, saveStore, checkOmnibus, saveOrdersDefaultStore, fixProductStockNow } from "./actions";
 import { compareStock, getStockMaster, planPushToShopify, shopifyLocations, type ShopifyLocation } from "@/lib/sync/shopify-stock";
 import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/furgonetka";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -19,6 +19,7 @@ import { appUrl } from "@/lib/app-url";
 import { ksefConfigured, ksefEnv } from "@/lib/ksef/client";
 import { sendTestMailAction, testKsefAction } from "../sprzedaz/faktury/actions";
 import { errorMessage } from "@/lib/errors";
+import { defaultOrderStore } from "@/lib/orders/default-store";
 
 async function safe<T>(fn: () => Promise<T>): Promise<{ data: T | null; error: string | null }> {
   try {
@@ -85,6 +86,7 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
       live.set(st.id, { topics: [...new Set((r.data ?? []).map((w) => w.topic))], error: r.error });
     }
   }
+  const ordersDefault = isAdmin && tab === "sklepy" ? await defaultOrderStore(supabase, (stores ?? []) as { id: string; name: string }[]) : "";
   const { data: invoiceSettings } = isAdmin && tab === "faktury" ? await supabase.from("app_settings").select("value").eq("key", "invoices").maybeSingle() : { data: null };
 
   const mail = isAdmin ? await mailConfig() : null;
@@ -129,6 +131,23 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
               {envStatus.map(([label, ok]) => <Pill key={label} tone={ok ? "green" : "red"}>{label}: {ok ? "ustawione" : "brak"}</Pill>)}
             </div>
             <p className="mt-2 text-xs text-muted">Klucze wpisuje się w Vercel → Settings → Environment Variables (nigdy w czacie ani w kodzie).</p>
+          </section>
+          )}
+
+          {tab === "sklepy" && (
+          <section className="card mb-5 p-4">
+            <h2 className="h2">Zamówienia</h2>
+            <form action={saveOrdersDefaultStore} className="mt-3 flex flex-wrap items-end gap-2">
+              <div>
+                <label className="label" htmlFor="default_store">Sklep pokazywany domyślnie w Sprzedaż → Zamówienia</label>
+                <select id="default_store" className="input sm:w-72" name="default_store" defaultValue={ordersDefault}>
+                  {stores?.map((st) => <option key={st.id} value={st.id}>{st.name}</option>)}
+                  <option value="wszystkie">Wszystkie sklepy</option>
+                </select>
+              </div>
+              <SubmitButton className="btn-secondary">Zapisz</SubmitButton>
+            </form>
+            <p className="mt-2 text-xs text-muted">W Zamówieniach i tak można przełączyć sklep jednym kliknięciem.</p>
           </section>
           )}
 

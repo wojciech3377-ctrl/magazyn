@@ -3,11 +3,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { LineItem } from "@/lib/sync/shop-orders";
 import { matchPieces } from "@/lib/orders/pieces";
 import { contractStage, type ContractStage } from "@/lib/contracts/stage";
+import { isParOrder } from "@/lib/orders/par-order";
 
 /**
- * JPK: wszystkie sprzedaże – zamówienia ze sklepów (pozycje z Shopify) i sprzedaż stacjonarna – z dokumentem
- * sprzedaży (paragon / faktura) albo bez niego. Pomijane są tylko anulowane zamówienia bez dokumentu.
- * Dane zakupu (data, kwota, numer umowy, waluta) pochodzą z umowy sztuki przypisanej do pozycji.
+ * JPK: sprzedaże z dokumentem – faktury wysłane do KSeF, paragony fiskalne do sprzedaży stacjonarnej i do zamówień
+ * ze sklepów. Data i miesiąc = data wystawienia dokumentu. Paragony PAR (bez KSeF) i zamówienia „wysyłka z PAR”
+ * nie wchodzą. Dane zakupu (data, kwota, numer umowy, waluta) pochodzą z umowy sztuki przypisanej do pozycji.
  */
 
 export type DocKind = "receipt" | "invoice";
@@ -105,9 +106,9 @@ const invoiceDoc = (i: InvoiceRow | undefined): Doc | undefined => (i ? { kind: 
 
 type Order = {
   id: string; name: string; ordered_at: string; cancelled_at: string | null; status: string; cod: boolean; financial_status: string | null;
-  base_order_id: number | null; line_items: LineItem[];
+  base_order_id: number | null; line_items: LineItem[]; shopify_order_id: string;
 };
-const ORDER_FIELDS = "id, name, ordered_at, cancelled_at, status, cod, financial_status, base_order_id, line_items";
+const ORDER_FIELDS = "id, name, ordered_at, cancelled_at, status, cod, financial_status, base_order_id, line_items, shopify_order_id";
 
 type Sale = { id: string; order_id: string; variant_id: string | null; status: string; shopify_line_id: string | null; shopify_line_index: number | null; unit: Unit };
 
@@ -273,6 +274,8 @@ export async function loadJpkLines(db: SupabaseClient, opts: { from: Date; to: D
   const posInMonth = new Set((monthPos ?? []).map((p) => p.id as string));
 
   const keepOrders = orders.filter((o) => {
+    // Wysyłka z paragonu PAR – sprzedaż poza JPK.
+    if (isParOrder(o.shopify_order_id)) return false;
     const d = orderDoc(o);
     if (d) return inMonth(d.date);
     return !o.cancelled_at && inMonth(o.ordered_at);
@@ -303,7 +306,9 @@ export async function loadJpkLines(db: SupabaseClient, opts: { from: Date; to: D
     ...(await manualInvoiceLines(db, manual)),
     ...correctionLines,
   ];
-  const filtered = opts.kind === "all" ? lines : opts.kind === "none" ? lines.filter((l) => !l.kind) : lines.filter((l) => l.kind === opts.kind);
+  // JPK = tylko sprzedaże z dokumentem: faktury w KSeF, paragony fiskalne (kasa i zamówienia). „Bez dokumentu” to
+  // osobny podgląd sprzedaży, do których trzeba jeszcze wystawić paragon / fakturę – nie wchodzą do JPK.
+  const filtered = opts.kind === "all" ? lines.filter((l) => !!l.kind) : opts.kind === "none" ? lines.filter((l) => !l.kind) : lines.filter((l) => l.kind === opts.kind);
   return sortLines(filtered);
 }
 

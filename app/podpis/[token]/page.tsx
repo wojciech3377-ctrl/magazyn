@@ -14,7 +14,7 @@ export default async function SignPage({ params }: { params: Promise<{ token: st
   const db = createAdminClient();
   const [company, buyerSignature] = await Promise.all([getCompany(db), getBuyerSignature(db)]);
   const { data: c } = /^[a-f0-9]{32,64}$/.test(token)
-    ? await db.from("contracts").select("id, number, status, sign_expires_at, items, payment_days, seller_name, seller_email").eq("sign_token", token).maybeSingle()
+    ? await db.from("contracts").select("id, number, status, sign_expires_at, items, payment_days, seller_name, seller_email, group_id").eq("sign_token", token).maybeSingle()
     : { data: null };
 
   if (!c || c.status === "cancelled") {
@@ -32,12 +32,28 @@ export default async function SignPage({ params }: { params: Promise<{ token: st
     );
   }
   if (c.status === "accepted") {
+    // Kilka rzeczy = osobna umowa dla każdej (wspólna grupa) – wszystkie do pobrania z tego linku.
+    const groupId = (c.group_id as string | null) ?? c.id;
+    const { data: group } = await db.from("contracts").select("number, sign_token, items").or(`id.eq.${groupId},group_id.eq.${groupId}`).eq("status", "accepted").order("number");
+    const list = (group ?? []).length > 1 ? group! : null;
     return (
       <PublicShell company={company.name}>
         <div className="card mx-auto max-w-lg space-y-3 p-6">
-          <h1 className="h1">Umowa nr {c.number} jest zawarta</h1>
-          <p className="text-sm text-muted">Umowa podpisana przez obie strony. / The agreement has been signed by both parties.</p>
-          <a className="btn" href={`/podpis/pdf/${token}`}>Pobierz umowę (PDF) / Download (PDF)</a>
+          <h1 className="h1">{list ? `Umowy nr ${list.map((g) => g.number).join(", ")} są zawarte` : `Umowa nr ${c.number} jest zawarta`}</h1>
+          <p className="text-sm text-muted">Podpisane przez obie strony{list ? " – osobna umowa dla każdej rzeczy" : ""}. / Signed by both parties{list ? " – a separate agreement for each item" : ""}.</p>
+          {list ? (
+            <ul className="space-y-2">
+              {list.map((g) => {
+                const it = ((g.items ?? []) as { title?: string; option?: string }[])[0];
+                return (
+                  <li key={g.sign_token as string} className="flex items-center justify-between gap-3 rounded-lg border border-line p-3 text-sm">
+                    <span className="min-w-0"><b>Umowa nr {g.number}</b><span className="block truncate text-muted">{[it?.title, it?.option].filter(Boolean).join(" ")}</span></span>
+                    <a className="btn-secondary shrink-0" href={`/podpis/pdf/${g.sign_token}`}>PDF</a>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : <a className="btn" href={`/podpis/pdf/${token}`}>Pobierz umowę (PDF) / Download (PDF)</a>}
         </div>
       </PublicShell>
     );

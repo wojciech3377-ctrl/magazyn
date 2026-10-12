@@ -350,3 +350,12 @@ export async function checkOmnibus() {
   }
   return done(out.join(" ") || "Brak sklepów Shopify.");
 }
+
+/** Sklep pokazywany domyślnie w Sprzedaż → Zamówienia. */
+export async function saveOrdersDefaultStore(formData: FormData) {
+  const { supabase } = await requireAdmin();
+  const v = String(formData.get("default_store") ?? "");
+  const { error } = await supabase.from("app_settings").upsert({ key: "orders", value: { default_store: v || "wszystkie" }, updated_at: new Date().toISOString() });
+  if (error) return done(error.message, "blad");
+  await done("Zapisano domyślny sklep w Zamówieniach.");
+}

@@ -21,6 +21,8 @@ import { ConsignorWaiting, ContractDone, ContractInProgress } from "@/components
 import { classifyShipment, ORDER_STATUS, paymentLabel, type Fulfillment, type OrderStatus } from "@/lib/orders/status";
 import { FilterField, ListToolbar } from "@/components/ListToolbar";
 import { activeFilters, filterChips } from "@/lib/list-params";
+import { defaultOrderStore } from "@/lib/orders/default-store";
+import { isParOrder } from "@/lib/orders/par-order";
 import type { LineItem } from "@/lib/sync/shop-orders";
 
 const PER_PAGE = 100;
@@ -57,15 +59,19 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
   }
   const { supabase, profile } = await requireProfile();
   const tab = ORDER_TABS.some((t) => t.key === sp.status) ? sp.status ?? "" : "";
+  // Sklep: wybrany w przełączniku albo domyślny z Ustawień (bez ustawienia – Sneakers Depot).
+  const { data: storeList } = await supabase.from("stores").select("id, name").order("name");
+  const storeSel = sp.sklep === "wszystkie" || storeList?.some((x) => x.id === sp.sklep) ? sp.sklep! : await defaultOrderStore(supabase, storeList ?? []);
+  const storeId = storeSel === "wszystkie" ? null : storeSel;
 
   const orderSort = ORDER_SORTS[sp.sort ?? ""] ? sp.sort! : "najnowsze";
   let query = supabase
     .from("orders")
-    .select("id, name, ordered_at, receipt_id, customer_name, shipping_method, pickup_point, financial_status, cod, total, outstanding, currency, status, status_detail, line_items, fulfillments, return_status, refunded_amount, refund_pending, refunded_lines, email, phone, shipping_address, note, store:stores(name)", { count: "exact" })
+    .select("id, name, shopify_order_id, ordered_at, receipt_id, customer_name, shipping_method, pickup_point, financial_status, cod, total, outstanding, currency, status, status_detail, line_items, fulfillments, return_status, refunded_amount, refund_pending, refunded_lines, email, phone, shipping_address, note, store:stores(name)", { count: "exact" })
     .order(ORDER_SORTS[orderSort].column, { ascending: ORDER_SORTS[orderSort].asc })
     .range((page - 1) * PER_PAGE, page * PER_PAGE - 1);
   if (tab) query = query.eq("status", tab);
-  if (sp.sklep) query = query.eq("store_id", sp.sklep);
+  if (storeId) query = query.eq("store_id", storeId);
   if (sp.od) query = query.gte("ordered_at", `${sp.od}T00:00:00`);
   if (sp.do) query = query.lte("ordered_at", `${sp.do}T23:59:59`);
   if (sp.platnosc === "pobranie") query = query.eq("cod", true);
@@ -74,22 +80,26 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
   const q = (sp.q ?? "").replace(/[%,()#*]/g, "").trim();
   if (q) query = query.or(`number.ilike.%${q}%,customer_name.ilike.%${q}%,email.ilike.%${q}%`);
 
-  const [{ data: orders, count }, counts, { count: problems }, { data: logs }, { data: storeList }] = await Promise.all([
+  const [{ data: orders, count }, counts, { count: problems }, { data: logs }] = await Promise.all([
     query,
     Promise.all(ORDER_TABS.map((t) => {
       let c = supabase.from("orders").select("id", { count: "exact", head: true });
       if (t.key) c = c.eq("status", t.key);
+      if (storeId) c = c.eq("store_id", storeId);
       return c;
     })),
     // Wysłane, dostarczone, zwrócone i anulowane zamówienia nie są już problemem braku sztuki.
     supabase.from("sales").select("id, order:orders!inner(status)", { count: "exact", head: true }).eq("status", "no_unit").not("order.status", "in", "(shipped,delivered,returned,cancelled)"),
-    supabase.from("sync_log").select("job, ok, message, created_at").in("job", ["base-orders", "shopify-orders", "furgonetka"]).order("created_at", { ascending: false }).limit(12),
-    supabase.from("stores").select("id, name").order("name"),
+    supabase.from("sync_log").select("job, ok, message, created_at").in("job", ["shopify-orders", "furgonetka", "live"]).order("created_at", { ascending: false }).limit(30),
   ]);
   const listParams = { q: sp.q, status: tab || undefined, sklep: sp.sklep, platnosc: sp.platnosc, od: sp.od, do: sp.do, sort: sp.sort };
+  const withStore = (extra: Record<string, string>) => { const q = new URLSearchParams({ ...(sp.sklep ? { sklep: sp.sklep } : {}), ...extra }); return `/sprzedaz${q.size ? `?${q}` : ""}`; };
   const lastOf = (job: string) => (logs ?? []).find((l) => l.job === job);
   const lastShop = lastOf("shopify-orders");
   const lastShip = lastOf("furgonetka");
+  // Problemy z odczytem z ostatnich 30 min (także pominięte pojedyncze zamówienia i odczyt na żywo).
+  const recentError = (logs ?? []).find((l) => !l.ok && l.job !== "furgonetka" && Date.now() - Date.parse(l.created_at) < 30 * 60_000);
+  const cronStale = !lastShop || Date.now() - Date.parse(lastShop.created_at) > 10 * 60_000;
 
   const ids = (orders ?? []).map((o) => o.id);
   const [{ data: receiptJobs }, printer] = await Promise.all([
@@ -133,15 +143,28 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
       />
       <Tabs active="orders" />
       <Flash sp={sp} />
-      {lastShop && !lastShop.ok && <div className="mb-4"><Notice tone="error">Odczyt zamówień z Shopify nie udał się: {lastShop.message}</Notice></div>}
+      {recentError && <div className="mb-4"><Notice tone="error">Odczyt zamówień z Shopify ({dateTime(recentError.created_at)}): {recentError.message}</Notice></div>}
+      {cronStale && profile.role === "admin" && (
+        <div className="mb-4"><Notice tone="error">
+          Zadanie cykliczne nie odczytuje zamówień{lastShop ? ` od ${dateTime(lastShop.created_at)}` : ""} – nowe zamówienia przychodzą tylko wtedy, gdy aplikacja jest otwarta.
+          Uruchom plik <b>supabase/cron.sql</b> w Supabase (SQL Editor) i sprawdź, czy w Vercel jest ustawiony <b>CRON_SECRET</b>. Do tego czasu użyj „Pobierz zamówienia teraz”.
+        </Notice></div>
+      )}
       {lastShip && !lastShip.ok && <div className="mb-4"><Notice tone="error">Odczyt przesyłek z Furgonetki nie udał się: {lastShip.message}</Notice></div>}
       {!!problems && <div className="mb-4"><Notice tone="error">{problems} {problems === 1 ? "linia zamówienia nie ma" : "linii zamówień nie ma"} sztuki na stanie. <Link className="font-medium underline" href="/sprzedaz?widok=linie&status=no_unit">Pokaż {problems === 1 ? "ją" : "je"}</Link> i przypisz sztukę skanem albo wygeneruj umowę.</Notice></div>}
 
+      <div className="-mx-4 mb-3 overflow-x-auto px-4 sm:mx-0 sm:px-0">
+        <nav className="segmented flex-nowrap whitespace-nowrap" aria-label="Sklep">
+          {[...(storeList ?? []).map((x) => ({ id: x.id, name: x.name })), { id: "wszystkie", name: "Wszystkie sklepy" }].map((x) => (
+            <Link key={x.id} href={`/sprzedaz?sklep=${x.id}${tab ? `&status=${tab}` : ""}`} aria-current={storeSel === x.id ? "page" : undefined}>{x.name}</Link>
+          ))}
+        </nav>
+      </div>
       <nav className="-mx-4 mb-4 flex gap-1 overflow-x-auto whitespace-nowrap border-b border-line px-4 text-sm sm:mx-0 sm:flex-wrap sm:px-0" aria-label="Status zamówień">
         {ORDER_TABS.map((t, i) => (
           <Link
             key={t.key}
-            href={`/sprzedaz${t.key ? `?status=${t.key}` : ""}`}
+            href={withStore(t.key ? { status: t.key } : {})}
             className={`-mb-px border-b-2 px-3 py-2 ${tab === t.key ? "border-accent font-medium text-ink" : "border-transparent text-muted hover:text-ink"} ${t.key === "problem" && (counts[i].count ?? 0) > 0 ? "text-bad" : ""}`}
           >
             {t.label} <span className={`ml-1 rounded px-1.5 py-0.5 text-xs tabular-nums ${t.key === "problem" && (counts[i].count ?? 0) > 0 ? "bg-bad text-white" : "bg-panel"}`}>{counts[i].count ?? 0}</span>
@@ -152,25 +175,18 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
       <ListToolbar
         q={sp.q}
         placeholder="Numer zamówienia, klient albo e-mail"
-        hidden={{ status: tab || undefined }}
+        hidden={{ status: tab || undefined, sklep: sp.sklep }}
         sort={{ value: orderSort, options: Object.entries(ORDER_SORTS).map(([value, o]) => ({ value, label: o.label })) }}
         dirParam={null}
-        active={activeFilters(sp, ["sklep", "platnosc", "od", "do"])}
-        resetHref={`/sprzedaz${tab ? `?status=${tab}` : ""}`}
+        active={activeFilters(sp, ["platnosc", "od", "do"])}
+        resetHref={withStore(tab ? { status: tab } : {})}
         chips={filterChips("/sprzedaz", listParams, {
           q: (v) => `„${v}”`,
-          sklep: (v) => storeList?.find((x) => x.id === v)?.name,
           platnosc: (v) => ({ pobranie: "za pobraniem", oplacone: "opłacone", nieoplacone: "nieopłacone" })[v],
           od: (v) => `od ${v}`,
           do: (v) => `do ${v}`,
         })}
       >
-        <FilterField label="Sklep">
-          <select className="input" name="sklep" defaultValue={sp.sklep ?? ""}>
-            <option value="">Wszystkie sklepy</option>
-            {storeList?.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
-          </select>
-        </FilterField>
         <FilterField label="Płatność">
           <select className="input" name="platnosc" defaultValue={sp.platnosc ?? ""}>
             <option value="">Wszystkie</option>
@@ -207,6 +223,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
                     {/* Cały wiersz prowadzi do zamówienia (link rozciągnięty na wiersz); pozostałe linki są nad nim. */}
                     <Link className="font-medium text-accent after:absolute after:inset-0 after:content-[''] hover:underline" href={`/sprzedaz/${o.id}`}>{o.name}</Link>
                     <span className="block text-xs text-muted">{(o.store as unknown as { name: string } | null)?.name ?? ""}</span>
+                    {isParOrder(o.shopify_order_id as string) && <span className="mt-0.5 inline-block rounded bg-violet-100 px-1.5 py-px text-[11px] font-semibold text-violet-800" title="Wysyłka z paragonu PAR – nie wchodzi do JPK">PAR · poza JPK</span>}
                     {o.customer_name && <span className="block text-xs">{o.customer_name}</span>}
                     <OrderPreview o={o as unknown as PreviewOrder} lines={lines} pay={pay} tracking={tracking} />
                   </td>
@@ -242,9 +259,9 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
                   </td>
                   <td style={{ gridArea: "act" }}>
                     <div className="flex flex-col items-start gap-1.5 max-md:flex-row max-md:flex-wrap max-md:items-center max-md:pt-1">
-                      <ContractAction pieces={matchPieces(o.id, (o.line_items ?? []) as LineItem[], oSales, (g) => variantOf.get(g))} saleContract={saleContract} cancelled={status === "cancelled"} back={`/sprzedaz${tab ? `?status=${tab}` : ""}`} />
+                      {!isParOrder(o.shopify_order_id as string) && <ContractAction pieces={matchPieces(o.id, (o.line_items ?? []) as LineItem[], oSales, (g) => variantOf.get(g))} saleContract={saleContract} cancelled={status === "cancelled"} back={`/sprzedaz${tab ? `?status=${tab}` : ""}`} />}
                       {status === "new" && <Link className="btn-secondary relative z-10 whitespace-nowrap px-2.5 py-1 text-xs" href={`/sprzedaz/${o.id}#etykieta`}>Utwórz etykietę</Link>}
-                      {status !== "cancelled" && status !== "returned" && <ReceiptButton orderId={o.id} receiptId={o.receipt_id as number | null} job={jobOf.get(o.id) ?? null} printer={printer} compact />}
+                      {status !== "cancelled" && status !== "returned" && !isParOrder(o.shopify_order_id as string) && <ReceiptButton orderId={o.id} receiptId={o.receipt_id as number | null} job={jobOf.get(o.id) ?? null} printer={printer} compact />}
                       <WtbOrderButton orderId={o.id} inWtb={wtbOrders.has(o.id)} />
                     </div>
                   </td>

@@ -14,10 +14,10 @@ import { isSettled, MISSING_BTN, STAGE_TEXT } from "@/lib/contracts/stage";
 import { ConsignorWaiting } from "@/components/ContractBadges";
 
 const KINDS: { key: "all" | DocKind | "none"; label: string }[] = [
-  { key: "all", label: "Paragony i faktury" },
+  { key: "all", label: "Do JPK: paragony i faktury" },
   { key: "receipt", label: "Paragony" },
   { key: "invoice", label: "Faktury" },
-  { key: "none", label: "Bez dokumentu" },
+  { key: "none", label: "Bez dokumentu (poza JPK)" },
 ];
 
 /**
@@ -100,7 +100,7 @@ export async function Jpk({ sp }: { sp: Record<string, string | undefined> }) {
         <span className="text-xs text-muted sm:ml-auto">Paragony z drukarki fiskalnej i faktury wysłane do KSeF.</span>
       </div>
       {error && <div className="mb-4"><Notice tone="error">{error}</Notice></div>}
-      {kind === "none" && <div className="mb-4"><Notice>Sprzedaże ({range.label}), do których nie ma jeszcze paragonu ani faktury.</Notice></div>}
+      {kind === "none" && <div className="mb-4"><Notice>Sprzedaże ({range.label}), do których nie ma jeszcze paragonu ani faktury w KSeF – nie wchodzą do JPK, dopóki nie wystawisz dokumentu.</Notice></div>}
 
       {/* „Dołącz umowę” w wierszach: przyciski z atrybutem form wysyłają ten formularz. */}
       <form id="jpk-umowa" action={attachContractForPiece}><input type="hidden" name="back" value={`/sprzedaz?${qs}`} /></form>

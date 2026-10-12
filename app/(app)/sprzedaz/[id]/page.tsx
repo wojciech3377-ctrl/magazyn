@@ -6,6 +6,7 @@ import { requireProfile } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { dateTime, money, SALE_STATUS } from "@/lib/labels";
 import { Notice, PageHeader, Pill } from "@/components/ui";
+import { isParOrder } from "@/lib/orders/par-order";
 import { SubmitButton } from "@/components/SubmitButton";
 import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/furgonetka";
 import { classifyShipment, guessService, paymentLabel, type Fulfillment, type OrderStatus } from "@/lib/orders/status";
@@ -48,7 +49,7 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
     : { data: [] };
   const pendingBySale = new Map((pendingContracts ?? []).map((c) => [c.sale_id as string, c as unknown as ContractLite]));
   const furgonetkaReady = furgonetkaConfigured() && !!(await furgonetkaConnection(createAdminClient()));
-  const { data: invoice } = await supabase.from("invoices").select("id, number").eq("order_id", id).not("status", "in", "(rejected,cancelled)").limit(1).maybeSingle();
+  const { data: invoice } = await supabase.from("invoices").select("id, number").eq("order_id", id).neq("kind", "receipt").not("status", "in", "(rejected,cancelled)").limit(1).maybeSingle();
   const [{ data: receiptJob }, printer] = await Promise.all([
     supabase.from("receipt_jobs").select("id, status, receipt_number, error, claimed_at, number").eq("order_id", id).neq("status", "cancelled").order("created_at", { ascending: false }).limit(1).maybeSingle(),
     fiscalPrinterReady(createAdminClient()),
@@ -67,7 +68,9 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
   const loosePieces = order.status === "cancelled" ? [] : matchPieces(order.id, lines, (sales ?? []) as unknown as PieceSale[], (g) => variantOf.get(g)).filter((p) => !p.sale);
   const status = order.status as OrderStatus;
   const activeShipments = (shipments ?? []).filter((s) => classifyShipment(s) !== null);
-  const shopUrl = shopifyAdminUrl(store?.shopify_domain ?? null, order.shopify_legacy_id);
+  const par = isParOrder(order.shopify_order_id as string);
+  const shopUrl = par ? null : shopifyAdminUrl(store?.shopify_domain ?? null, order.shopify_legacy_id);
+  const { data: parDoc } = await supabase.from("invoices").select("id, number").eq("order_id", order.id).eq("kind", "receipt").not("status", "in", "(rejected,cancelled)").limit(1).maybeSingle();
 
   return (
     <>
@@ -76,19 +79,21 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
         sub={<>{store?.name} · {dateTime(order.ordered_at)}</>}
         actions={
           <>
-            {status !== "cancelled" && status !== "returned" && <ReceiptButton orderId={order.id} receiptId={order.receipt_id} job={receiptJob as JobView | null} printer={printer} />}
+            {parDoc && <Link className="btn-secondary" href={`/sprzedaz/faktury/${parDoc.id}`}>Paragon {parDoc.number}</Link>}
+            {!par && status !== "cancelled" && status !== "returned" && <ReceiptButton orderId={order.id} receiptId={order.receipt_id} job={receiptJob as JobView | null} printer={printer} />}
             <WtbOrderButton orderId={order.id} />
             {invoice
               ? <Link className="btn-secondary" href={`/sprzedaz/faktury/${invoice.id}`}>Faktura {invoice.number}</Link>
-              : status !== "cancelled" && <Link className="btn-secondary" href={`/sprzedaz/faktury/nowa?zamowienie=${order.id}`}>Wystaw fakturę</Link>}
+              : status !== "cancelled" && !par && <Link className="btn-secondary" href={`/sprzedaz/faktury/nowa?zamowienie=${order.id}`}>Wystaw fakturę</Link>}
             <a className="btn-secondary" href="#etykieta">Utwórz etykietę</a>
-            <form action={refreshOrder}><input type="hidden" name="id" value={order.id} /><SubmitButton className="btn-secondary" pendingText="Odświeżam…">Odśwież</SubmitButton></form>
+            {!par && <form action={refreshOrder}><input type="hidden" name="id" value={order.id} /><SubmitButton className="btn-secondary" pendingText="Odświeżam…">Odśwież</SubmitButton></form>}
             {shopUrl && <a className="btn-secondary" href={shopUrl} target="_blank" rel="noreferrer">Otwórz w Shopify</a>}
             <Link className="btn-secondary" href="/sprzedaz">Wróć do listy</Link>
           </>
         }
       />
 
+      {par && <div className="mb-4"><Notice>Wysyłka z paragonu {parDoc?.number ?? "PAR"} – zamówienie utworzone w aplikacji (nie w Shopify). <b>Nie wchodzi do JPK</b>, a umowy jego sztuk wróciły do niewykorzystanych.</Notice></div>}
       <div className="mb-5 flex flex-wrap items-center gap-2">
         <OrderStatusPill status={status} />
         {order.status_detail && <span className={`text-sm ${status === "problem" ? "font-medium text-bad" : "text-muted"}`}>{order.status_detail}</span>}

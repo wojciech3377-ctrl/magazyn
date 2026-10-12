@@ -5,7 +5,7 @@ import { Notice, PageHeader } from "@/components/ui";
 import { SelectAll } from "@/components/SelectAll";
 import { WtbAdd } from "./WtbAdd";
 import { editWtbGroup, updateWtb } from "./actions";
-import { GroupCheck, WtbCopyList, WtbEditDialog } from "./WtbControls";
+import { GroupCheck, WtbTile, WtbCopyList, WtbEditDialog } from "./WtbControls";
 import { groupWtb } from "@/lib/wtb-group";
 
 const TABS = [
@@ -90,7 +90,7 @@ export default async function WtbPage({ searchParams }: { searchParams: Promise<
               const first = g.items[0];
               const notes = [...new Map(g.items.filter((i) => i.note).map((i) => [i.note, i])).values()];
               return (
-                <li key={g.key} className="flex flex-col rounded-lg border border-line bg-white p-2 transition-colors hover:border-accent has-[:checked]:border-accent has-[:checked]:bg-sky-50">
+                <WtbTile key={g.key} className="flex flex-col rounded-lg border border-line bg-white p-2 transition-colors hover:border-accent has-[:checked]:border-accent has-[:checked]:bg-sky-50">
                   <div className="flex items-start justify-between gap-2">
                     <GroupCheck label={g.title} />
                     <span className="text-xs text-muted">{dateOnly(active ? first.created_at : first.closed_at)}</span>
@@ -113,7 +113,7 @@ export default async function WtbPage({ searchParams }: { searchParams: Promise<
                     <div key={it.id} className="mt-1 text-xs text-muted">{it.order_id ? <Link className="underline" href={`/sprzedaz/${it.order_id}`}>{it.note}</Link> : it.note}</div>
                   ))}
                   {active && <div className="mt-2 border-t border-line pt-1"><WtbEditDialog formId={`wtb-edit-${g.items[0].id}`} title={g.title} sku={g.sku} sizes={g.items.map((i) => i.size ?? "").filter(Boolean)} /></div>}
-                </li>
+                </WtbTile>
               );
             })}
           </ul>

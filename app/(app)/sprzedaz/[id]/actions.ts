@@ -7,6 +7,7 @@ import { adjustStock, type StockChange } from "@/lib/stock";
 import type { LineItem } from "@/lib/sync/shop-orders";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { accountServices, calculatePrices, cancelPackages, createPackage, deletePackage, furgonetkaConnection, getPackage, orderPackages, type Address, type NewPackage } from "@/lib/integrations/furgonetka";
+import { isShopifyOrder } from "@/lib/orders/par-order";
 import { cancelShopifyOrder, fulfillWithTracking, getOrder, refundShopifyLines, type CancelReason } from "@/lib/integrations/shopify";
 import { carrierOf, getSender, lockerOnly, LOCKER_SIZES, SERVICE_LABEL, toPoint, type ServiceKey } from "@/lib/orders/sender";
 import { refreshOrderStatus, saveShopifyOrders, syncFurgonetkaShipments } from "@/lib/sync/shop-orders";
@@ -186,7 +187,7 @@ export async function createLabel(_: LabelState, fd: FormData): Promise<LabelSta
 
   let warning: string | undefined;
   const store = order.store as { code: string; shopify_domain: string | null } | null;
-  if (fd.get("fulfill") && tracking && store?.shopify_domain) {
+  if (fd.get("fulfill") && tracking && store?.shopify_domain && isShopifyOrder(order.shopify_order_id)) {
     try {
       const note = await fulfillWithTracking(store.shopify_domain, store.code, order.shopify_order_id, {
         number: tracking, url: trackingUrl, company: carrier === "dpd" ? "DPD" : "InPost",
@@ -212,7 +213,7 @@ export async function refreshOrder(fd: FormData) {
   const { data: order } = await db.from("orders").select("id, store_id, shopify_order_id, store:stores(code, shopify_domain)").eq("id", id).maybeSingle();
   if (!order) return;
   const store = order.store as unknown as { code: string; shopify_domain: string | null } | null;
-  if (store?.shopify_domain) {
+  if (store?.shopify_domain && isShopifyOrder(order.shopify_order_id)) {
     const fresh = await getOrder(store.shopify_domain, store.code, order.shopify_order_id);
     if (fresh) await saveShopifyOrders(db, order.store_id, [fresh]);
   }
@@ -277,7 +278,7 @@ export async function cancelOrderAction(_: OrderOpState, fd: FormData): Promise<
   const { data: claimed } = await db.from("orders").update({ cancelled_at: new Date().toISOString() }).eq("id", order.id).is("cancelled_at", null).select("id");
   if (!claimed?.length) return { error: "Zamówienie jest już anulowane." };
 
-  if (order.store?.shopify_domain) {
+  if (order.store?.shopify_domain && isShopifyOrder(order.shopify_order_id)) {
     try {
       await cancelShopifyOrder(order.store.shopify_domain, order.store.code, order.shopify_order_id, {
         reason, refund: !!fd.get("refund"), notify: !!fd.get("notify"), note: str(fd, "note") || "Anulowane w aplikacji magazynowej",
@@ -305,7 +306,7 @@ export async function cancelOrderAction(_: OrderOpState, fd: FormData): Promise<
   await releaseSales((sales ?? []).map((s) => s.id), str(fd, "units") !== "check", notes);
 
   await db.from("orders").update({ cancelled_at: new Date().toISOString(), status: "cancelled", status_detail: null, status_changed_at: new Date().toISOString() }).eq("id", order.id);
-  if (order.store?.shopify_domain) {
+  if (order.store?.shopify_domain && isShopifyOrder(order.shopify_order_id)) {
     // Zwrot pieniędzy przy anulowaniu (stan „zwrot w toku” / „zwrócone”) od razu na liście.
     const fresh = await getOrder(order.store.shopify_domain, order.store.code, order.shopify_order_id).catch(() => null);
     if (fresh) await saveShopifyOrders(db, order.store_id, [fresh]).catch(() => null);
@@ -342,7 +343,7 @@ export async function returnOrderAction(_: OrderOpState, fd: FormData): Promise<
   const notes: string[] = [];
   let summary = "";
 
-  if (order.store?.shopify_domain) {
+  if (order.store?.shopify_domain && isShopifyOrder(order.shopify_order_id)) {
     try {
       const r = await refundShopifyLines(order.store.shopify_domain, order.store.code, order.shopify_order_id,
         picked.map((p) => ({ lineItemId: p.line.id, quantity: p.qty })),
@@ -378,7 +379,7 @@ export async function returnOrderAction(_: OrderOpState, fd: FormData): Promise<
     await releaseSales(saleIds, goods !== "check", notes);
   }
 
-  if (order.store?.shopify_domain) {
+  if (order.store?.shopify_domain && isShopifyOrder(order.shopify_order_id)) {
     // Odświeżenie po zwrocie nie może zgłosić błędu – zwrot już się wykonał (ponowne wysłanie zwróciłoby drugi raz).
     const fresh = await getOrder(order.store.shopify_domain, order.store.code, order.shopify_order_id).catch(() => null);
     if (fresh) await saveShopifyOrders(createAdminClient(), order.store_id, [fresh]).catch((e) => notes.push(`Odświeżenie zamówienia: ${errorMessage(e)}`));

@@ -2,11 +2,37 @@
 
 import { useRef, useState } from "react";
 
+/**
+ * Kafelek modelu: kliknięcie w dowolne miejsce kafelka zaznacza (albo odznacza) wszystkie jego rozmiary.
+ * Rozmiary, linki i przyciski w środku działają po swojemu.
+ */
+export function WtbTile({ children, className }: { children: React.ReactNode; className?: string }) {
+  return (
+    <li
+      className={`cursor-pointer select-none ${className ?? ""}`}
+      onClick={(e) => {
+        const t = e.target as HTMLElement;
+        if (t.closest("label, input, button, a, dialog, select, textarea")) return;
+        const li = e.currentTarget;
+        const boxes = [...li.querySelectorAll<HTMLInputElement>('input[type="checkbox"][name="ids"]')];
+        const on = !boxes.every((c) => c.checked);
+        boxes.forEach((c) => (c.checked = on));
+        const group = li.querySelector<HTMLInputElement>('input[data-group-check]');
+        if (group) group.checked = on;
+        li.closest("form")?.dispatchEvent(new Event("change", { bubbles: true }));
+      }}
+    >
+      {children}
+    </li>
+  );
+}
+
 /** Zaznacza / odznacza wszystkie rozmiary jednej karty modelu. */
 export function GroupCheck({ label }: { label: string }) {
   return (
     <input
       type="checkbox"
+      data-group-check=""
       className="h-4 w-4"
       aria-label={`Zaznacz wszystkie rozmiary: ${label}`}
       title="Zaznacz wszystkie rozmiary"

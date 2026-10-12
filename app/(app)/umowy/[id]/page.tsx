@@ -102,6 +102,15 @@ export default async function ContractPage({ params, searchParams }: { params: P
               {c.consignor && <Field label="Komisant">{(c.consignor as { name: string }).name}</Field>}
             </div>
             {c.notes && <p className="mt-3 text-sm text-muted">{c.notes}</p>}
+            {!c.template && (c.items ?? []).length > 0 && (
+              <div className="mt-3 border-t border-line pt-3">
+                <div className="label">Rzeczy z katalogu na umowie</div>
+                <ul className="flex flex-wrap gap-1.5">
+                  {(c.items as { title: string; option: string }[]).map((i, k) => <li key={k} className="rounded-full border border-accent/30 bg-accent-soft px-2.5 py-0.5 text-sm">{i.title} · <b>{i.option}</b></li>)}
+                </ul>
+                <p className="mt-1.5 text-xs text-muted">Gdy rzecz przyjdzie do magazynu, dopnij jej sztukę poniżej (kod albo IMEI).</p>
+              </div>
+            )}
           </section>}
 
           {/* Umowa z szablonu ma pozycje u góry; tu tylko sztuki w magazynie, które z niej powstały. */}

@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { redirect } from "next/navigation";
 import { requireAdmin, requireSection } from "@/lib/auth";
 import { parseAmount, uploadedFile } from "@/lib/contracts/upload";
@@ -35,9 +36,23 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
     if (!counterparty) return { error: "Podaj, z kim jest umowa." };
     const type = String(formData.get("type") ?? "purchase");
     const file = uploadedFile(formData);
+    // Rzeczy z katalogu (jeszcze bez sztuki w magazynie) – zapisane w umowie, sztuki przypiszesz później.
+    let catalogItems: { title: string; option: string; qty: number; price: number; variant_id: string }[] = [];
+    try {
+      const raw = JSON.parse(String(formData.get("catalog_items") ?? "[]")) as { variant_id?: string }[];
+      const vids = [...new Set(raw.map((r) => String(r.variant_id ?? "")).filter((v) => /^[0-9a-f-]{36}$/.test(v)))].slice(0, 50);
+      const { data: vs } = vids.length ? await supabase.from("variants").select("id, option, product:products(title)").in("id", vids) : { data: [] };
+      catalogItems = raw.map((r) => (vs ?? []).find((v) => v.id === r.variant_id)).filter((v): v is NonNullable<typeof v> => !!v)
+        .map((v) => ({ title: (v.product as unknown as { title: string }).title, option: v.option as string, qty: 1, price: 0, variant_id: v.id as string }));
+    } catch {
+      catalogItems = [];
+    }
+    const docNumber = String(formData.get("doc_number") ?? "").trim().slice(0, 60) || null;
     const { data, error } = await supabase.from("contracts").insert({
       type,
       counterparty,
+      doc_number: docNumber,
+      ...(catalogItems.length ? { items: catalogItems } : {}),
       consignor_id: type === "consignment" ? String(formData.get("consignor_id") ?? "") || null : null,
       contract_date: String(formData.get("contract_date") ?? "") || null,
       amount: parseAmount(formData.get("amount")),
@@ -48,7 +63,8 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
     }).select("id").single();
     if (error) throw error;
     id = data.id;
-    await fillContractNumber(supabase, id);
+    // Numer nie wpisany → odczyt z pliku PDF (klucz serwera – plik w prywatnym magazynie).
+    if (!docNumber) await fillContractNumber(createAdminClient(), id);
     const saleId = String(formData.get("sale_id") ?? "");
     if (saleId) {
       const { error: attachErr } = await supabase.rpc("attach_sale_unit", { p_sale_id: saleId, p_contract_id: id, p_purchase_price: parseAmount(formData.get("amount")), p_variant_id: String(formData.get("variant_id") ?? "") || null });
@@ -217,19 +233,39 @@ export async function acceptContract(formData: FormData) {
     .eq("id", id).eq("status", "signed").select("id, source, items");
   if (!accepted?.length) redirect(withMsg(target, "blad", "Zatwierdzić można tylko umowę podpisaną przez sprzedającego."));
 
+  // Każda rzecz dostaje osobną umowę z własnym numerem (bez migracji 0040 – jedna umowa jak dotąd).
+  const split = await supabase.rpc("split_contract", { p_contract_id: id });
+  const ids = (split.error ? [id] : (split.data as string[] | null) ?? [id]);
+  const msgs: string[] = [ids.length > 1 ? `Umowa zatwierdzona i podzielona na ${ids.length} umowy – osobna dla każdej rzeczy.` : "Umowa zatwierdzona."];
+
   // Umowa z ogólnego linku czeka jeszcze na przypisanie pozycji do katalogu; pozostałe od razu tworzą sztuki.
-  const msgs: string[] = ["Umowa zatwierdzona."];
-  const items = (accepted[0].items ?? []) as { unit_id?: string; variant_id?: string }[];
-  if (items.every((i) => i.unit_id || i.variant_id)) {
-    const fin = await supabase.rpc("finalize_contract", { p_contract_id: id });
-    if (fin.error) msgs.push(`Sztuki: ${fin.error.message}`);
-    else if (fin.data.created_units) msgs.push(`${fin.data.created_units} szt. „w drodze”.`);
-  } else msgs.push("Przypisz pozycje do katalogu, żeby utworzyć sztuki.");
+  const { data: group } = await supabase.from("contracts").select("id, number, items").in("id", ids);
+  let created = 0;
+  let unlinked = false;
+  const errors: string[] = [];
+  for (const g of group ?? []) {
+    const items = (g.items ?? []) as { unit_id?: string; variant_id?: string }[];
+    if (items.every((i) => i.unit_id || i.variant_id)) {
+      const fin = await supabase.rpc("finalize_contract", { p_contract_id: g.id });
+      if (fin.error) errors.push(`Sztuki (nr ${g.number}): ${fin.error.message}`);
+      else created += Number(fin.data?.created_units ?? 0);
+    } else unlinked = true;
+  }
+  if (created) msgs.push(`${created} szt. „w drodze”.`);
+  if (unlinked) msgs.push("Przypisz pozycje do katalogu, żeby utworzyć sztuki.");
+  msgs.push(...errors);
 
   const { deliverAcceptedContract } = await import("@/lib/contracts/store");
-  const d = await deliverAcceptedContract(id);
+  let emailed = 0;
+  let pdfError: string | undefined;
+  for (const cid of ids) {
+    const d = await deliverAcceptedContract(cid);
+    if (d.error) pdfError = d.error;
+    else if (d.emailed) emailed++;
+  }
+  const d = { error: pdfError };
   if (d.error) msgs.push(`PDF: ${d.error}`);
-  else msgs.push(d.emailed ? "Sprzedający dostał umowę e-mailem." : "Sprzedający pobierze umowę ze swojego linku.");
+  else msgs.push(emailed ? `Sprzedający dostał ${emailed > 1 ? `${emailed} umowy` : "umowę"} e-mailem.` : "Sprzedający pobierze umowy ze swojego linku.");
   revalidatePath(`/umowy/${id}`);
   revalidatePath("/dostawa");
   redirect(withMsg(target, d.error ? "blad" : "ok", msgs.join(" ")));
@@ -359,4 +395,24 @@ export async function decideConsignorInvoice(formData: FormData) {
   revalidatePath(`/umowy/${id}`);
   revalidatePath("/umowy");
   redirect(`/umowy/${id}?ok=${encodeURIComponent((accept ? "Faktura zatwierdzona." : "Faktura odrzucona – komisant może wgrać nową.") + mailNote)}`);
+}
+
+export type NoContractUnit = { id: string; code: string; identifier: string | null; title: string; option: string; status: string; store: string | null; image: string | null };
+
+/** Rzeczy w sklepie bez umowy (na stanie, zarezerwowane, w drodze) – do wyboru przy nowej umowie. */
+export async function searchUnitsWithoutContract(q: string): Promise<NoContractUnit[]> {
+  const { supabase } = await requireSection("umowy", "dostawa");
+  const text = q.trim().replace(/[,()*%\\]/g, " ").trim();
+  let query = supabase.from("units_list").select("id, code, identifier, title, option, status, store_name, image_url")
+    .is("contract_id", null).in("status", ["in_stock", "reserved", "in_transit"]).order("received_at", { ascending: false }).limit(30);
+  if (text.length >= 2) {
+    for (const w of text.split(/\s+/).slice(0, 4)) {
+      query = query.or(`title.ilike.%${w}%,code.ilike.%${w}%,identifier.ilike.%${w}%,style_sku.ilike.%${w}%,option.ilike.${w}`);
+    }
+  }
+  const { data } = await query;
+  return (data ?? []).map((u) => ({
+    id: u.id as string, code: u.code as string, identifier: (u.identifier as string | null) ?? null, title: u.title as string, option: u.option as string,
+    status: u.status as string, store: (u.store_name as string | null) ?? null, image: (u.image_url as string | null) ?? null,
+  }));
 }

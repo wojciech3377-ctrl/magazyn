@@ -12,6 +12,7 @@ const GROUPS: { title: string; links: NavLink[] }[] = [
   {
     title: "Codzienna praca",
     links: [
+      { href: "/do-zrobienia", label: "Do zrobienia", icon: "check" },
       { href: "/magazyn", label: "Magazyn", icon: "box" },
       { href: "/dostawa", label: "Przyjęcie dostawy", icon: "truck" },
       { href: "/kasa", label: "Kasa", icon: "cash" },

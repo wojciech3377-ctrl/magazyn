@@ -38,7 +38,7 @@ export function describeEvent(e: HistoryEvent, forConsignor = false): { title: s
       return { title: "Zamieniona przy pakowaniu", detail: null, tone: "slate" };
     case "contract":
       return d.contract_id ? { title: forConsignor ? "Dokument (umowa / faktura) dołączony" : "Umowa przypisana", detail: typeof d.note === "string" && !forConsignor ? d.note : null, tone: "green" }
-        : { title: forConsignor ? "Dokument odpięty" : "Umowa odpięta", detail: null, tone: "slate" };
+        : { title: forConsignor ? "Dokument odpięty" : "Umowa odpięta", detail: typeof d.note === "string" && !forConsignor ? d.note : null, tone: "slate" };
     case "consignor_returned":
       return { title: forConsignor ? "Wysłana do Ciebie" : "Oddana komisantowi", detail: null, tone: "slate" };
     case "shipment_requested":

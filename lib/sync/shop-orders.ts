@@ -93,8 +93,28 @@ function toRow(storeId: string, o: ShopifyOrder, ex: Exclusions) {
 }
 
 /** Zapis zamówień Shopify do bazy (bez zamówień składających się wyłącznie z usług, np. napraw). */
-export async function saveShopifyOrders(db: SupabaseClient, storeId: string, orders: ShopifyOrder[], ex?: Exclusions) {
+export async function saveShopifyOrders(db: SupabaseClient, storeId: string, orders: ShopifyOrder[], ex?: Exclusions): Promise<string[]> {
   const exclusions = ex ?? (await loadExclusions(db));
+  try {
+    return await saveOrderBatch(db, storeId, orders, exclusions);
+  } catch (e) {
+    if (orders.length <= 1) throw new Error(`${orders[0]?.name ?? "zamówienie"}: ${errorMessage(e)}`);
+    // Jedno wadliwe zamówienie (np. anulowane z nietypową sztuką) nie może blokować pozostałych – zapis po jednym.
+    const ids: string[] = [];
+    const errors: string[] = [];
+    for (const o of orders) {
+      try {
+        ids.push(...(await saveOrderBatch(db, storeId, [o], exclusions)));
+      } catch (err) {
+        errors.push(`${o.name}: ${errorMessage(err)}`);
+      }
+    }
+    if (errors.length) await db.from("sync_log").insert({ job: "shopify-orders", ok: false, message: `Pominięte zamówienia: ${errors.join("; ")}` });
+    return ids;
+  }
+}
+
+async function saveOrderBatch(db: SupabaseClient, storeId: string, orders: ShopifyOrder[], exclusions: Exclusions) {
   const rows = orders.map((o) => toRow(storeId, o, exclusions)).filter((r) => !r.onlyServices).map((r) => r.row);
   if (!rows.length) return [] as string[];
   // Anulowane w Shopify poza aplikacją (wcześniej nieanulowane u nas) → sprzedane sztuki wracają na stan.

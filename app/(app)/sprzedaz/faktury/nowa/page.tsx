@@ -5,6 +5,7 @@ import { PageHeader, Notice } from "@/components/ui";
 import { draftFromConsignorShipment, draftFromInvoice, draftFromOrder, draftFromPos, todayPl, type InvoiceDraft } from "@/lib/invoices/service";
 import { ksefConfigured } from "@/lib/ksef/client";
 import { InvoiceForm } from "../InvoiceForm";
+import { defaultOrderStore } from "@/lib/orders/default-store";
 
 const UUID = /^[0-9a-f-]{36}$/i;
 
@@ -51,6 +52,9 @@ export default async function NewInvoicePage({ searchParams }: { searchParams: P
     issueDate: todayPl(), saleDate: todayPl(), paymentMethod: "transfer", paid: false, paidAt: null, dueDate: todayPl(),
     items: [], orderId: null, posOrderId: null, notes: null,
   };
+  const { data: stores } = await db.from("stores").select("id, name").order("name");
+  const storeList = (stores ?? []) as { id: string; name: string }[];
+  const defaultStore = await defaultOrderStore(db, storeList);
   if (receipt) draft = { ...draft, paid: true, paidAt: draft.paidAt ?? draft.issueDate, dueDate: null, paymentMethod: sp.zamowienie || sp.kasa ? draft.paymentMethod : "cash" };
   return (
     <>
@@ -60,7 +64,7 @@ export default async function NewInvoicePage({ searchParams }: { searchParams: P
         actions={<Link className="btn-secondary" href="/sprzedaz?widok=faktury">Wróć</Link>}
       />
       {existing && <div className="mb-4"><Notice tone="error">Do tej sprzedaży jest już {receipt ? "paragon" : "faktura"} <Link className="underline" href={`/sprzedaz/faktury/${existing.id}`}>{existing.number}</Link>.</Notice></div>}
-      <InvoiceForm draft={draft} ksefReady={ksefConfigured()} receipt={receipt} />
+      <InvoiceForm draft={draft} ksefReady={ksefConfigured()} receipt={receipt} stores={storeList} defaultStore={defaultStore} />
     </>
   );
 }
