@@ -24,6 +24,7 @@ const PATHS: Record<string, string> = {
   check: "m5 12 5 5 9-10",
   flash: "M13 3 5 13h6l-1 8 8-10h-6l1-8Z",
   lock: "M7 11V8a5 5 0 0 1 10 0v3M6 11h12v9H6z",
+  repeat: "M17 2l4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 0 1-3 3H3",
 };
 
 export type IconName = keyof typeof PATHS;

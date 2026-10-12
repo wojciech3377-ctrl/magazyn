@@ -4,10 +4,11 @@ import { useActionState, useEffect, useRef, useState } from "react";
 import { Icon } from "@/components/icons";
 import { SubmitButton } from "@/components/SubmitButton";
 import { addTask, deleteTask, toggleTask, updateTask, type TaskState } from "./actions";
+import { REPEATS, type Repeat } from "./repeat";
 
 export type Person = { id: string; name: string; initials: string; color: string };
 export type Task = {
-  id: string; title: string; notes: string | null; assignees: string[]; due_date: string | null; priority: "low" | "normal" | "high";
+  id: string; title: string; notes: string | null; assignees: string[]; start_date?: string | null; due_date: string | null; repeat?: Repeat | null; priority: "low" | "normal" | "high";
   done_at: string | null; done_by: string | null; created_by: string | null; created_at: string;
 };
 
@@ -45,16 +46,35 @@ function AssigneePicker({ people, initial = [] }: { people: Person[]; initial?: 
   );
 }
 
+const todayPl = () => new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Warsaw" });
+const dayLabel = (d: string) => new Date(`${d}T12:00:00`).toLocaleDateString("pl-PL", { day: "numeric", month: "short" });
+
 function Fields({ people, t }: { people: Person[]; t?: Task }) {
+  const [start, setStart] = useState(t?.start_date ?? todayPl());
+  const [repeat, setRepeat] = useState<Repeat>(t?.repeat ?? "none");
   return (
     <div className="space-y-3">
-      <div className="grid gap-3 sm:grid-cols-[1fr_10rem_10rem]">
+      <div className="grid gap-3 sm:grid-cols-[1fr_11rem]">
         <input className="input" name="title" defaultValue={t?.title} placeholder="Co jest do zrobienia?" aria-label="Zadanie" required maxLength={300} autoFocus={!t} />
-        <input className="input" type="date" name="due_date" defaultValue={t?.due_date ?? ""} aria-label="Termin" />
         <select className="input" name="priority" defaultValue={t?.priority ?? "normal"} aria-label="Priorytet">
           {Object.entries(PRIORITY).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
       </div>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <label className="block"><span className="mb-1 block text-xs font-medium text-muted">Od</span>
+          <input className="input" type="date" name="start_date" value={start} onChange={(e) => setStart(e.target.value)} required /></label>
+        <label className="block"><span className="mb-1 block text-xs font-medium text-muted">Do (termin, opcjonalnie)</span>
+          <input className="input" type="date" name="due_date" defaultValue={t?.due_date ?? ""} min={start} /></label>
+        <label className="col-span-2 block sm:col-span-1"><span className="mb-1 block text-xs font-medium text-muted">Powtarzaj</span>
+          <span className="relative block">
+            <Icon name="repeat" className={`pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 ${repeat !== "none" ? "text-accent" : "text-slate-400"}`} />
+            <select className={`input pl-9 ${repeat !== "none" ? "border-accent/50 text-accent" : ""}`} name="repeat" value={repeat} onChange={(e) => setRepeat(e.target.value as Repeat)}>
+              {REPEATS.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
+            </select>
+          </span>
+        </label>
+      </div>
+      {repeat !== "none" && <p className="-mt-1 text-xs text-muted">Po oznaczeniu jako zrobione pojawi się kolejne zadanie ({REPEATS.find((r) => r.key === repeat)?.short}).</p>}
       <textarea className="input min-h-16" name="notes" defaultValue={t?.notes ?? ""} placeholder="Szczegóły (opcjonalnie)" aria-label="Szczegóły" maxLength={2000} />
       <AssigneePicker people={people} initial={t?.assignees} />
     </div>
@@ -92,7 +112,7 @@ export function AddTask({ people }: { people: Person[] }) {
 export function TaskItem({ t, people, canDelete, doneByName, authorName }: { t: Task; people: Person[]; canDelete: boolean; doneByName: string | null; authorName: string | null }) {
   const [edit, setEdit] = useState(false);
   const done = !!t.done_at;
-  const today = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Warsaw" });
+  const today = todayPl();
   const overdue = !done && !!t.due_date && t.due_date < today;
   const isToday = !done && t.due_date === today;
   const who = t.assignees.map((id) => people.find((p) => p.id === id)).filter((p): p is Person => !!p);
@@ -131,11 +151,15 @@ export function TaskItem({ t, people, canDelete, doneByName, authorName }: { t: 
         <span className={`block font-medium leading-snug ${done ? "text-muted line-through" : ""}`}>{t.title}</span>
         {t.notes && <span className={`mt-0.5 block whitespace-pre-line text-sm ${done ? "text-slate-400" : "text-muted"}`}>{t.notes}</span>}
         <span className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
-          {t.due_date && (
+          {(t.start_date || t.due_date) && (
             <span className={overdue ? "font-semibold text-bad" : isToday ? "font-semibold text-warn" : ""}>
-              {overdue ? "po terminie · " : isToday ? "dziś · " : ""}{new Date(`${t.due_date}T12:00:00`).toLocaleDateString("pl-PL", { day: "numeric", month: "short" })}
+              {overdue ? "po terminie · " : isToday ? "termin dziś · " : ""}
+              {t.start_date && t.start_date > today ? `od ${dayLabel(t.start_date)}` : ""}
+              {t.start_date && t.start_date > today && t.due_date ? " " : ""}
+              {t.due_date ? `do ${dayLabel(t.due_date)}` : ""}
             </span>
           )}
+          {t.repeat && t.repeat !== "none" && <span className="inline-flex items-center gap-1 text-accent"><Icon name="repeat" className="h-3.5 w-3.5" />{REPEATS.find((r) => r.key === t.repeat)?.short}</span>}
           {t.priority === "high" && !done && <span className="font-semibold text-bad">pilne</span>}
           <span className="inline-flex items-center gap-1">
             {who.length ? (

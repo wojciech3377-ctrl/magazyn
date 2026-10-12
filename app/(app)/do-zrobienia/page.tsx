@@ -32,6 +32,8 @@ export default async function TodoPage({ searchParams }: { searchParams: Promise
   const tasks = (data ?? []) as Task[];
   const today = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Warsaw" });
   const rank = { high: 0, normal: 1, low: 2 };
+  // Zadanie z datą „od” w przyszłości (np. kolejne powtórzenie) – w „Zaplanowane”.
+  const future = (t: Task) => !!t.start_date && t.start_date > today;
   const sorted = tab === "zrobione" ? tasks : [...tasks].sort((a, b) =>
     Number(!!b.due_date && b.due_date < today) - Number(!!a.due_date && a.due_date < today)
     || rank[a.priority] - rank[b.priority]
@@ -40,9 +42,10 @@ export default async function TodoPage({ searchParams }: { searchParams: Promise
     ? [{ title: "", items: sorted }]
     : [
         { title: "Po terminie", items: sorted.filter((t) => t.due_date && t.due_date < today) },
-        { title: "Na dziś", items: sorted.filter((t) => t.due_date === today) },
-        { title: "Następne", items: sorted.filter((t) => t.due_date && t.due_date > today) },
-        { title: "Bez terminu", items: sorted.filter((t) => !t.due_date) },
+        { title: "Na dziś", items: sorted.filter((t) => t.due_date === today || (!future(t) && !t.due_date && t.repeat && t.repeat !== "none")) },
+        { title: "Następne", items: sorted.filter((t) => !future(t) && t.due_date && t.due_date > today) },
+        { title: "Bez terminu", items: sorted.filter((t) => !future(t) && !t.due_date && !(t.repeat && t.repeat !== "none")) },
+        { title: "Zaplanowane (jeszcze nie teraz)", items: sorted.filter((t) => future(t) && !(t.due_date && t.due_date <= today)) },
       ].filter((g) => g.items.length);
 
   return (
