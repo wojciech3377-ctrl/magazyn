@@ -9,6 +9,7 @@ import { listWebhooks, shopifyCredentials, WEBHOOK_TOPICS } from "@/lib/integrat
 import { getBuyerSignature, getCompany } from "@/lib/contracts/settings";
 import { getSmtpSettings, mailConfig } from "@/lib/mail";
 import { ContractSettings } from "./ContractSettings";
+import { FiscalSettings } from "./FiscalSettings";
 import { addExclusion, createUser, deleteExclusion, disconnectFurgonetka, importInitialStock, purgeExcluded, purgeNonShopify, registerWebhooks, runStockNow, saveSmtp, saveInvoiceSettings, saveLocation, saveSender, saveShopifyLocation, saveStockMaster, saveStore, saveUser, checkOmnibus, fixProductStockNow } from "./actions";
 import { compareStock, getStockMaster, planPushToShopify, shopifyLocations, type ShopifyLocation } from "@/lib/sync/shopify-stock";
 import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/furgonetka";
@@ -31,6 +32,7 @@ const SETTINGS_TABS = [
   { key: "polaczenia", label: "Połączenia" },
   { key: "firma", label: "Firma i umowy" },
   { key: "faktury", label: "Faktury i KSeF" },
+  { key: "drukarka", label: "Drukarka fiskalna" },
   { key: "wysylka", label: "Wysyłka" },
   { key: "sklepy", label: "Sklepy i lokalizacje" },
   { key: "stany", label: "Stany magazynowe" },
@@ -246,6 +248,7 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
           </section>
           )}
 
+          {tab === "drukarka" && isAdmin && <FiscalSettings />}
           {tab === "faktury" && (
           <section id="ksef" className="card scroll-mt-4 p-4">
             <h2 className="h2 mb-1">Faktury i KSeF</h2>

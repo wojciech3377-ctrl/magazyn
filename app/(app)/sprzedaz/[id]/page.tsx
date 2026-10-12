@@ -17,6 +17,8 @@ import { LabelForm } from "./LabelForm";
 import { OrderOps } from "./OrderOps";
 import { WtbButton } from "@/components/WtbButton";
 import { ReceiptButton } from "@/components/ReceiptButton";
+import { fiscalPrinterReady } from "@/lib/fiscal/jobs";
+import type { JobView } from "../receipt-actions";
 import { refreshOrder } from "./actions";
 
 type Address = { name: string | null; company: string | null; address1: string | null; address2: string | null; city: string | null; zip: string | null; countryCodeV2: string | null; phone: string | null } | null;
@@ -47,6 +49,10 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
   const pendingBySale = new Map((pendingContracts ?? []).map((c) => [c.sale_id as string, c as unknown as ContractLite]));
   const furgonetkaReady = furgonetkaConfigured() && !!(await furgonetkaConnection(createAdminClient()));
   const { data: invoice } = await supabase.from("invoices").select("id, number").eq("order_id", id).not("status", "in", "(rejected,cancelled)").limit(1).maybeSingle();
+  const [{ data: receiptJob }, printer] = await Promise.all([
+    supabase.from("receipt_jobs").select("id, status, receipt_number, error, claimed_at, number").eq("order_id", id).neq("status", "cancelled").order("created_at", { ascending: false }).limit(1).maybeSingle(),
+    fiscalPrinterReady(createAdminClient()),
+  ]);
 
   const store = order.store as { name: string; code: string; shopify_domain: string | null } | null;
   const addr = order.shipping_address as Address;
@@ -70,7 +76,7 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
         sub={<>{store?.name} · {dateTime(order.ordered_at)}</>}
         actions={
           <>
-            {status !== "cancelled" && status !== "returned" && <ReceiptButton orderId={order.id} receiptId={order.receipt_id} />}
+            {status !== "cancelled" && status !== "returned" && <ReceiptButton orderId={order.id} receiptId={order.receipt_id} job={receiptJob as JobView | null} printer={printer} />}
             {invoice
               ? <Link className="btn-secondary" href={`/sprzedaz/faktury/${invoice.id}`}>Faktura {invoice.number}</Link>
               : status !== "cancelled" && <Link className="btn-secondary" href={`/sprzedaz/faktury/nowa?zamowienie=${order.id}`}>Wystaw fakturę</Link>}

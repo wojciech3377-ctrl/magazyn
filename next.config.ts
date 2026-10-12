@@ -4,7 +4,7 @@ const nextConfig: NextConfig = {
   images: { remotePatterns: [{ protocol: "https", hostname: "cdn.shopify.com" }] },
   experimental: { serverActions: { bodySizeLimit: "2mb" } },
   // Czcionki do PDF umów muszą trafić do funkcji serwerowych.
-  outputFileTracingIncludes: { "/**": ["./lib/contracts/fonts/**"] },
+  outputFileTracingIncludes: { "/**": ["./lib/contracts/fonts/**"], "/api/program-drukarki": ["./agent/drukarka/**"] },
 };
 
 export default nextConfig;

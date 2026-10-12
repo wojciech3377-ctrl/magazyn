@@ -7,7 +7,7 @@ type Line = PosUnit & { priceInput: string };
 const PAYMENTS = [["card", "Karta"], ["cash", "Gotówka"], ["blik", "BLIK"], ["transfer", "Przelew"]] as const;
 const fmt = (n: number) => new Intl.NumberFormat("pl-PL", { style: "currency", currency: "PLN" }).format(n);
 
-export function PosForm({ stores }: { stores: { id: string; name: string }[] }) {
+export function PosForm({ stores, printer }: { stores: { id: string; name: string }[]; printer: boolean }) {
   const [state, action, submitting] = useActionState(finishPosOrder, null);
   const [storeId, setStoreId] = useState(stores[0]?.id ?? "");
   const [lines, setLines] = useState<Line[]>([]);
@@ -174,8 +174,12 @@ export function PosForm({ stores }: { stores: { id: string; name: string }[] }) 
             <span className="text-2xl font-semibold tabular-nums">{fmt(total)}</span>
           </div>
           {state?.error && <p className="text-sm text-bad">{state.error}</p>}
-          <button className="btn w-full py-3 text-base" disabled={submitting || !lines.length}>{submitting ? "Zapisuję…" : "Zakończ sprzedaż"}</button>
-          <p className="text-xs text-muted">Sztuki zmienią status na „sprzedana”, a stan w Shopify spadnie o 1 za każdą. Paragon wystawiasz na kasie fiskalnej jak dotąd.</p>
+          <button className="btn w-full py-3 text-base" name="receipt" value="1" disabled={submitting || !lines.length}>{submitting ? "Zapisuję…" : "Zakończ i wystaw paragon"}</button>
+          <button className="btn-ghost w-full text-xs" name="receipt" value="0" disabled={submitting || !lines.length}>Zakończ bez paragonu (np. na fakturę)</button>
+          <p className="text-xs text-muted">
+            Sztuki zmienią status na „sprzedana”, a stan w Shopify spadnie o 1 za każdą.{" "}
+            {printer ? "Paragon wydrukuje się od razu na drukarce fiskalnej." : "Drukarka fiskalna nie jest jeszcze podłączona (Ustawienia → Drukarka fiskalna) – paragon trafi do kolejki i wydrukuje się po podłączeniu."}
+          </p>
         </section>
       </div>
     </form>

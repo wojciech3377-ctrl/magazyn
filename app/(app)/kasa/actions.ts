@@ -4,6 +4,9 @@ import { redirect } from "next/navigation";
 import { requireProfile } from "@/lib/auth";
 import { findVariantIds } from "@/lib/queries/units";
 import { adjustStock } from "@/lib/stock";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { enqueuePosReceipt } from "@/lib/fiscal/jobs";
+import { errorMessage } from "@/lib/errors";
 
 export type PosUnit = {
   id: string;
@@ -108,7 +111,7 @@ export async function searchUnits(q: string, storeId: string): Promise<PosUnit[]
 }
 
 export async function finishPosOrder(_: unknown, formData: FormData): Promise<{ error?: string }> {
-  const { supabase } = await requireProfile();
+  const { supabase, profile } = await requireProfile();
   const storeId = String(formData.get("store_id") ?? "");
   const items = JSON.parse(String(formData.get("items") ?? "[]")) as { unit_id: string; price: string }[];
   if (!storeId) return { error: "Wybierz sklep." };
@@ -139,6 +142,14 @@ export async function finishPosOrder(_: unknown, formData: FormData): Promise<{ 
     base_pending: failed.map(({ variantId, locationId, delta }) => ({ variantId, locationId, delta })),
   }).eq("id", orderId);
 
+  // „Zakończ i wystaw paragon”: paragon do kolejki drukarki fiskalnej (program przy drukarce drukuje go od razu).
+  if (formData.get("receipt") === "1") {
+    try {
+      await enqueuePosReceipt(createAdminClient(), orderId as string, profile.id);
+    } catch (e) {
+      redirect(`/kasa/${orderId}?blad=${encodeURIComponent(`Sprzedaż zapisana, ale paragon nie trafił do drukarki: ${errorMessage(e)}`)}`);
+    }
+  }
   redirect(`/kasa/${orderId}`);
 }
 

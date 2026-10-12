@@ -1,0 +1,16 @@
+DRUKARKA MAGAZYN – paragony fiskalne z aplikacji Magazyn
+
+1. W aplikacji: Ustawienia -> Drukarka fiskalna -> Dodaj drukarkę. Skopiuj klucz (pokazuje się tylko raz).
+2. Na komputerze przy drukarce rozpakuj ten plik ZIP i uruchom Zainstaluj.bat.
+3. Wklej klucz, wybierz połączenie (sieć: adres IP i port drukarki albo USB: port COM) i tryb.
+   - test  – nic nie drukuje, tylko sprawdza drogę aplikacja -> komputer -> drukarka i zapisuje podgląd paragonu do pliku,
+   - elzab – drukuje paragony fiskalne na drukarce ELZAB.
+4. W aplikacji (Ustawienia -> Drukarka fiskalna) po minucie zobaczysz „połączona” i stan połączenia z drukarką.
+   Przycisk „Sprawdź połączenie z drukarką” wysyła zadanie testowe (bez paragonu).
+
+Program działa w tle (Harmonogram zadań Windows: „Drukarka Magazyn”) i startuje sam po zalogowaniu.
+Dziennik: %LOCALAPPDATA%\DrukarkaMagazyn\dziennik.txt
+Usunięcie: Odinstaluj.bat
+
+Drukarka ELZAB w sieci: w drukarce ustaw port TCP z protokołem STX (Ustawienia -> Parametry transmisji ->
+Ustawienia usług -> Ustawienia sieciowe -> Port), stały adres IP (bez DHCP), Wi-Fi tylko 2,4 GHz.

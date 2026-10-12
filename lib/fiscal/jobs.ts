@@ -1,0 +1,99 @@
+import "server-only";
+import { createHash, randomBytes } from "node:crypto";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { draftFromOrder, draftFromPos, type PaymentMethod } from "@/lib/invoices/service";
+import type { LineItem } from "@/lib/sync/shop-orders";
+
+/**
+ * Paragony fiskalne z naszej drukarki: aplikacja odkłada paragon do kolejki (receipt_jobs),
+ * program na komputerze przy drukarce pobiera go przez /api/drukarka, drukuje i odsyła numer.
+ */
+
+export type FiscalLine = { name: string; qty: number; price: number; ptu: string };
+export type FiscalSettings = { ptu23: string; ptuMargin: string; ptuService: string };
+export const FISCAL_DEFAULTS: FiscalSettings = { ptu23: "A", ptuMargin: "F", ptuService: "A" };
+
+export const JOB_STATUS: Record<string, { text: string; tone: "slate" | "amber" | "green" | "red" | "blue" }> = {
+  queued: { text: "w kolejce do drukarki", tone: "blue" },
+  printing: { text: "drukuje się…", tone: "amber" },
+  printed: { text: "wydrukowany", tone: "green" },
+  error: { text: "błąd wydruku", tone: "red" },
+  cancelled: { text: "anulowany", tone: "slate" },
+};
+
+export async function getFiscalSettings(db: SupabaseClient): Promise<FiscalSettings> {
+  const { data } = await db.from("app_settings").select("value").eq("key", "fiscal").maybeSingle();
+  const v = (data?.value ?? {}) as Partial<FiscalSettings>;
+  const letter = (x: unknown, d: string) => (typeof x === "string" && /^[A-G]$/.test(x) ? x : d);
+  return { ptu23: letter(v.ptu23, FISCAL_DEFAULTS.ptu23), ptuMargin: letter(v.ptuMargin, FISCAL_DEFAULTS.ptuMargin), ptuService: letter(v.ptuService, FISCAL_DEFAULTS.ptuService) };
+}
+
+/** Czy jest aktywna drukarka (program) – wtedy paragony idą przez naszą kolejkę zamiast przez Base. */
+export async function fiscalPrinterReady(db: SupabaseClient) {
+  const { count, error } = await db.from("fiscal_printers").select("id", { count: "exact", head: true }).eq("active", true);
+  return !error && (count ?? 0) > 0;
+}
+
+/** Nazwa towaru na paragonie: bez znaków sterujących, do 40 znaków (limit drukarek). */
+export function fiscalName(s: string) {
+  return s.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 40) || "Towar";
+}
+
+const round = (n: number) => Math.round(n * 100) / 100;
+const PAYMENT: Record<string, PaymentMethod> = { cash: "cash", card: "card", blik: "mobile", transfer: "transfer", other: "cash", mobile: "mobile" };
+
+async function insertJob(db: SupabaseClient, row: { source: "pos" | "order"; pos_order_id?: string; order_id?: string; lines: FiscalLine[]; payment: string; created_by: string }) {
+  const total = round(row.lines.reduce((s, l) => s + l.qty * l.price, 0));
+  if (!row.lines.length || total <= 0) throw new Error("Paragon nie ma pozycji do wydruku.");
+  const { data, error } = await db.from("receipt_jobs").insert({ ...row, total }).select("id, number, status").single();
+  if (error) {
+    if (error.code === "23505") throw new Error("Do tej sprzedaży paragon jest już w kolejce albo wydrukowany.");
+    throw error;
+  }
+  return data as { id: string; number: number; status: string };
+}
+
+/** Paragon do sprzedaży w Kasie: pozycje i płatność ze sprzedaży. */
+export async function enqueuePosReceipt(db: SupabaseClient, posOrderId: string, userId: string) {
+  const d = await draftFromPos(db, posOrderId);
+  if (!d) throw new Error("Nie ma takiej sprzedaży.");
+  const s = await getFiscalSettings(db);
+  const lines = d.items.map((i) => ({ name: fiscalName(i.name), qty: i.quantity, price: round(i.unit_price_gross), ptu: i.vat === "23" ? s.ptu23 : s.ptuMargin }));
+  return insertJob(db, { source: "pos", pos_order_id: posOrderId, lines, payment: PAYMENT[d.paymentMethod] ?? "cash", created_by: userId });
+}
+
+/** Paragon do zamówienia ze sklepu: towary (marża / 23% wg sztuki), usługi i wysyłka 23%. */
+export async function enqueueOrderReceipt(db: SupabaseClient, orderId: string, userId: string) {
+  const { data: o } = await db.from("orders").select("id, cancelled_at, line_items, receipt_id").eq("id", orderId).maybeSingle();
+  if (!o) throw new Error("Nie ma takiego zamówienia.");
+  if (o.cancelled_at) throw new Error("Zamówienie jest anulowane.");
+  if (o.receipt_id) throw new Error(`Paragon już wystawiony w Base (nr ${o.receipt_id}).`);
+  const d = await draftFromOrder(db, orderId);
+  if (!d) throw new Error("Nie ma takiego zamówienia.");
+  const s = await getFiscalSettings(db);
+  const lines: FiscalLine[] = d.items.map((i) => ({
+    name: fiscalName(i.name), qty: i.quantity, price: round(i.unit_price_gross),
+    ptu: i.unit === "usł." ? s.ptuService : i.vat === "23" ? s.ptu23 : s.ptuMargin,
+  }));
+  // Usługi z zamówienia (np. naprawa) – na fakturze pomijane, na paragonie muszą być.
+  for (const l of ((o.line_items ?? []) as LineItem[]).filter((x) => x.service && Number(x.price) > 0)) {
+    lines.push({ name: fiscalName([l.title, l.variant_title].filter(Boolean).join(" ")), qty: l.quantity, price: round(Number(l.price)), ptu: s.ptuService });
+  }
+  return insertJob(db, { source: "order", order_id: orderId, lines, payment: d.paymentMethod, created_by: userId });
+}
+
+/** Nowy klucz programu drukarki: zwracany raz (do wpisania w programie), w bazie tylko skrót. */
+export function newPrinterToken() {
+  const token = `drk_${randomBytes(24).toString("base64url")}`;
+  return { token, hash: hashToken(token) };
+}
+export const hashToken = (t: string) => createHash("sha256").update(t).digest("hex");
+
+/** Drukarka po kluczu z nagłówka Authorization: Bearer … (program na komputerze przy drukarce). */
+export async function printerFromRequest(db: SupabaseClient, req: Request) {
+  const auth = req.headers.get("authorization") ?? "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+  if (!/^drk_[A-Za-z0-9_-]{20,}$/.test(token)) return null;
+  const { data } = await db.from("fiscal_printers").select("id, name, active").eq("token_hash", hashToken(token)).maybeSingle();
+  return data?.active ? (data as { id: string; name: string; active: boolean }) : null;
+}

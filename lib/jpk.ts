@@ -194,12 +194,16 @@ export function sortLines(lines: JpkLine[]) {
 
 async function docsFor(db: SupabaseClient, orders: Order[], posIds: string[]) {
   const baseIds = orders.map((o) => o.base_order_id).filter((x): x is number => !!x).map(Number);
-  const [rb, rp, ib, ip] = await Promise.all([
+  const [rb, rp, ib, ip, ro] = await Promise.all([
     inChunks<Receipt>(baseIds, (part) => db.from("receipts").select(RECEIPT_FIELDS).in("base_order_id", part as number[]).order("issued_at")),
     inChunks<Receipt>(posIds, (part) => db.from("receipts").select(RECEIPT_FIELDS).in("pos_order_id", part as string[]).order("issued_at")),
     inChunks<InvoiceRow>(orders.map((o) => o.id), (part) => db.from("invoices").select(INVOICE_FIELDS).in("order_id", part as string[]).neq("kind", "receipt").in("status", KSEF_SENT)),
     inChunks<InvoiceRow>(posIds, (part) => db.from("invoices").select(INVOICE_FIELDS).in("pos_order_id", part as string[]).neq("kind", "receipt").in("status", KSEF_SENT)),
+    // Paragony z naszej drukarki fiskalnej do zamówień ze sklepu (bez migracji 0036 – brak kolumny, pomijamy).
+    inChunks<Receipt & { order_id: string }>(orders.map((o) => o.id), (part) => db.from("receipts").select(`${RECEIPT_FIELDS}, order_id`).in("order_id", part as string[]).order("issued_at")).catch(() => []),
   ]);
+  const byOrder = new Map<string, Receipt>();
+  for (const r of ro) if (!byOrder.has(r.order_id)) byOrder.set(r.order_id, r);
   const byBase = new Map<number, Receipt>();
   const byPos = new Map<string, Receipt>();
   // Paragon z naszego systemu (drukarka / ręczny) ma pierwszeństwo przed paragonem z Base.
@@ -210,7 +214,7 @@ async function docsFor(db: SupabaseClient, orders: Order[], posIds: string[]) {
   const invByOrder = new Map(ib.map((i) => [i.order_id as string, i]));
   const invByPos = new Map(ip.map((i) => [i.pos_order_id as string, i]));
   return {
-    orderDoc: (o: Order) => receiptDoc(o.base_order_id ? byBase.get(Number(o.base_order_id)) : undefined) ?? invoiceDoc(invByOrder.get(o.id)),
+    orderDoc: (o: Order) => receiptDoc(byOrder.get(o.id)) ?? receiptDoc(o.base_order_id ? byBase.get(Number(o.base_order_id)) : undefined) ?? invoiceDoc(invByOrder.get(o.id)),
     posDoc: (id: string) => receiptDoc(byPos.get(id)) ?? invoiceDoc(invByPos.get(id)),
   };
 }
@@ -242,11 +246,12 @@ export async function loadJpkLines(db: SupabaseClient, opts: { from: Date; to: D
   const to = opts.to.toISOString();
   const fromDay = new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Warsaw" }).format(opts.from);
   const toDay = new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Warsaw" }).format(opts.to);
-  const [{ data: monthReceipts, error: e1 }, { data: monthOrders, error: e2 }, { data: monthPos, error: e3 }, { data: monthInvoices, error: e4 }] = await Promise.all([
+  const [{ data: monthReceipts, error: e1 }, { data: monthOrders, error: e2 }, { data: monthPos, error: e3 }, { data: monthInvoices, error: e4 }, monthPrinted] = await Promise.all([
     db.from("receipts").select("base_order_id, pos_order_id").gte("issued_at", from).lt("issued_at", to).limit(10000),
     db.from("orders").select("id").gte("ordered_at", from).lt("ordered_at", to).limit(10000),
     db.from("pos_orders").select("id").gte("created_at", from).lt("created_at", to).limit(10000),
     db.from("invoices").select(INVOICE_FIELDS).gte("issue_date", fromDay).lt("issue_date", toDay).neq("kind", "receipt").in("status", KSEF_SENT).limit(10000),
+    db.from("receipts").select("order_id").not("order_id", "is", null).gte("issued_at", from).lt("issued_at", to).limit(10000),
   ]);
   if (e1 || e2 || e3 || e4) throw e1 ?? e2 ?? e3 ?? e4;
   const invoicesM = (monthInvoices ?? []) as InvoiceRow[];
@@ -255,7 +260,8 @@ export async function loadJpkLines(db: SupabaseClient, opts: { from: Date; to: D
 
   const ordersByReceipt = await inChunks<Order>(recBase, (part) => db.from("orders").select(ORDER_FIELDS).in("base_order_id", part as number[]));
   const known = new Set(ordersByReceipt.map((o) => o.id));
-  const extraIds = [...new Set([...(monthOrders ?? []).map((o) => o.id as string), ...invoicesM.map((i) => i.order_id).filter((x): x is string => !!x)])].filter((id) => !known.has(id));
+  const printedOrders = monthPrinted.error ? [] : (monthPrinted.data ?? []).map((r) => r.order_id as string);
+  const extraIds = [...new Set([...(monthOrders ?? []).map((o) => o.id as string), ...printedOrders, ...invoicesM.map((i) => i.order_id).filter((x): x is string => !!x)])].filter((id) => !known.has(id));
   const ordersMore = await inChunks<Order>(extraIds, (part) => db.from("orders").select(ORDER_FIELDS).in("id", part as string[]));
   const orders = [...ordersByReceipt, ...ordersMore];
   const posIds = [...new Set([...docPos, ...(monthPos ?? []).map((p) => p.id as string)])];

@@ -7,6 +7,8 @@ import { SubmitButton } from "@/components/SubmitButton";
 import { retryPosBase } from "../actions";
 import { ReceiptView } from "@/components/ReceiptView";
 import { getCompany } from "@/lib/contracts/settings";
+import { PosReceiptButton } from "@/components/PosReceiptButton";
+import type { JobView } from "@/app/(app)/sprzedaz/receipt-actions";
 
 const PAYMENT: Record<string, string> = { card: "karta", cash: "gotówka", blik: "BLIK", transfer: "przelew", other: "inna" };
 
@@ -18,6 +20,7 @@ export default async function PosOrderPage({ params, searchParams }: { params: P
   if (!o) notFound();
   const { data: receipt } = await supabase.from("receipts").select("number, issued_at, source, items, base_receipt_id").eq("pos_order_id", id).order("issued_at", { ascending: false }).limit(1).maybeSingle();
   const company = await getCompany(supabase);
+  const { data: receiptJob } = await supabase.from("receipt_jobs").select("id, status, receipt_number, error, claimed_at, number").eq("pos_order_id", id).neq("status", "cancelled").order("created_at", { ascending: false }).limit(1).maybeSingle();
   const { data: invoice } = await supabase.from("invoices").select("id, number").eq("pos_order_id", id).not("status", "in", "(rejected,cancelled)").limit(1).maybeSingle();
   const { data: items } = await supabase
     .from("pos_order_items")
@@ -42,8 +45,9 @@ export default async function PosOrderPage({ params, searchParams }: { params: P
       {sp.blad && <div className="mb-4"><Notice tone="error">{sp.blad}</Notice></div>}
       <div className="card mb-4 flex flex-wrap items-center gap-2 p-4 text-sm">
         <span className="text-muted">Paragon:</span>
-        {receipt ? <b className="font-mono">{receipt.number}</b> : <span className="text-muted">jeszcze nie wystawiony – numer zapisze się sam po wydruku na drukarce fiskalnej</span>}
+        {receipt ? <b className="font-mono">{receipt.number}</b> : !receiptJob && <span className="text-muted">jeszcze nie wystawiony</span>}
         {receipt && <span className="text-muted">· {dateTime(receipt.issued_at)}</span>}
+        {(!receipt || receiptJob) && <span className="ml-auto"><PosReceiptButton posOrderId={o.id} job={receiptJob as JobView | null} /></span>}
       </div>
       <div className="mb-4">
         {o.base_sync_status === "ok" && <Notice tone="ok">Stan w Shopify zmniejszony.</Notice>}

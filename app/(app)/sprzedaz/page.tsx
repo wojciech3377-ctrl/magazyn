@@ -9,6 +9,9 @@ import { matchPieces, type Piece } from "@/lib/orders/pieces";
 import { SwapForm } from "./SwapForm";
 import { WtbButton } from "@/components/WtbButton";
 import { ReceiptButton } from "@/components/ReceiptButton";
+import { fiscalPrinterReady } from "@/lib/fiscal/jobs";
+import { createAdminClient } from "@/lib/supabase/admin";
+import type { JobView } from "./receipt-actions";
 import { Invoices, Jpk } from "./Jpk";
 import { OrderStatusPill, SALE_SELECT, SaleContract, UnitCell, type SaleUnit } from "./SaleBits";
 import { CONTRACT_LITE_FIELDS, contractStage, isSettled, MISSING_BTN, type ContractLite } from "@/lib/contracts/stage";
@@ -72,6 +75,11 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
   const lastShip = lastOf("furgonetka");
 
   const ids = (orders ?? []).map((o) => o.id);
+  const [{ data: receiptJobs }, printer] = await Promise.all([
+    ids.length ? supabase.from("receipt_jobs").select("id, order_id, status, receipt_number, error, claimed_at, number").in("order_id", ids).neq("status", "cancelled") : Promise.resolve({ data: [] }),
+    fiscalPrinterReady(createAdminClient()),
+  ]);
+  const jobOf = new Map((receiptJobs ?? []).map((j) => [j.order_id as string, j as unknown as JobView]));
   const [{ data: sales }, { data: shipments }] = ids.length
     ? await Promise.all([
         supabase.from("sales").select(`id, order_id, status, variant_id, shopify_line_id, shopify_line_index, unit:units(id, code, contract_id, owner_type, contract:contracts(${CONTRACT_LITE_FIELDS}))`).in("order_id", ids),
@@ -189,7 +197,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
                     <div className="flex flex-col items-start gap-1.5">
                       <ContractAction pieces={matchPieces(o.id, (o.line_items ?? []) as LineItem[], oSales, (g) => variantOf.get(g))} saleContract={saleContract} cancelled={status === "cancelled"} back={`/sprzedaz${tab ? `?status=${tab}` : ""}`} />
                       {status === "new" && <Link className="btn-secondary relative z-10 whitespace-nowrap px-2.5 py-1 text-xs" href={`/sprzedaz/${o.id}#etykieta`}>Utwórz etykietę</Link>}
-                      {status !== "cancelled" && status !== "returned" && <ReceiptButton orderId={o.id} receiptId={o.receipt_id as number | null} compact />}
+                      {status !== "cancelled" && status !== "returned" && <ReceiptButton orderId={o.id} receiptId={o.receipt_id as number | null} job={jobOf.get(o.id) ?? null} printer={printer} compact />}
                     </div>
                   </td>
                 </tr>
