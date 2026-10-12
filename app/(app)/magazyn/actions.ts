@@ -183,14 +183,37 @@ export async function changeStatus(formData: FormData) {
     const row = ((received ?? []) as { to_status: string }[])[0];
     const results = row?.to_status === "in_stock" ? await adjustStock(supabase, [{ variantId: u!.variant_id, locationId: u!.location_id, delta: 1 }]) : [];
     revalidatePath(path);
-    back(path, row?.to_status === "sold" ? "Sztuka dotarła i jest przypisana do zamówienia (sprzedana)." : `Przyjęto na stan.${baseSummary(results)}`, results.some((r) => !r.ok) ? "error" : "ok");
+    back(path, row?.to_status === "reserved" || row?.to_status === "sold" ? "Sztuka dotarła i jest zarezerwowana pod zamówienie (sprzedana po paragonie / fakturze)." : `Przyjęto na stan.${baseSummary(results)}`, results.some((r) => !r.ok) ? "error" : "ok");
   }
 
-  // Dozwolone przejścia i ich wpływ na stan w Base.
+  // Rezerwacja pod zamówienie ze sklepu zdejmuje się tylko anulowaniem zamówienia.
+  if (u!.status === "reserved") {
+    const { count } = await supabase.from("sales").select("id", { count: "exact", head: true }).eq("unit_id", id).eq("status", "assigned");
+    if (count) back(path, "Ta sztuka jest zarezerwowana pod zamówienie – zmienia się przez zamówienie (paragon albo anulowanie).", "error");
+  }
+
+  // Wydanie poza sklepem: sztuka znika z magazynu (historia zostaje), umowa wraca do niewykorzystanych.
+  if (to === "out" && (u!.status === "in_stock" || u!.status === "reserved")) {
+    const { data: full } = await supabase.from("units").select("contract_id").eq("id", id).single();
+    const { data: done, error } = await supabase.from("units").update({ status: "removed", contract_id: null, sold_at: new Date().toISOString() })
+      .eq("id", id).eq("status", u!.status).select("id");
+    if (error) back(path, error.message, "error");
+    if (!done?.length) back(path, "Status sztuki zmienił się w międzyczasie. Odśwież i spróbuj ponownie.", "error");
+    await supabase.from("unit_events").insert({ unit_id: id, type: "status", data: { from: u!.status, to: "removed", reason: "wydana poza sklepem", contract_id: full?.contract_id ?? null } });
+    if (full?.contract_id) {
+      const { count } = await supabase.from("units").select("id", { count: "exact", head: true }).eq("contract_id", full.contract_id);
+      if (!count) await supabase.from("contracts").update({ sale_id: null }).eq("id", full.contract_id);
+    }
+    const results = u!.status === "in_stock" ? await adjustStock(supabase, [{ variantId: u!.variant_id, locationId: u!.location_id, delta: -1 }]) : [];
+    revalidatePath("/magazyn");
+    back("/magazyn", `Sztuka wydana poza sklepem i usunięta z magazynu.${full?.contract_id ? " Umowa jest znowu na liście niewykorzystanych." : ""}${baseSummary(results)}`, results.some((r) => !r.ok) ? "error" : "ok");
+  }
+
+  // Dozwolone przejścia i ich wpływ na stan w Shopify (rezerwacja = −1, bo w sklepie nie można jej już kupić).
   const rules: Record<string, Record<string, number>> = {
     in_transit: { in_stock: 1 },
-    in_stock: { reserved: 0, shipped: -1, in_transit: -1 },
-    reserved: { in_stock: 0, shipped: -1 },
+    in_stock: { reserved: -1, shipped: -1, in_transit: -1 },
+    reserved: { in_stock: 1, shipped: 0 },
     sold: { shipped: 0 },
     returned: { in_stock: 1 },
   };

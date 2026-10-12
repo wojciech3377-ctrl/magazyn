@@ -101,8 +101,10 @@ export async function reconcileFromShopify(db: SupabaseClient, opts: { force?: b
     const variantOf = new Map(links.map((l) => [l.shopify_inventory_item_id, l.variant_id]));
     // Ten sam rozmiar w dwóch produktach Shopify (duplikat) – liczymy większy stan, nie sumę.
     const best = new Map<string, { variant_id: string; location_id: string; qty: number; count_locations: string[] }>();
+    const perItem = new Map<string, number>();
     for (const [shopLoc, group] of groupByShopLocation(mapped)) {
       const levels = await readLevels(s.shopify_domain, s.code, shopLoc);
+      for (const [item, qty] of levels) perItem.set(item, (perItem.get(item) ?? 0) + Math.max(0, qty));
       for (const [item, qty] of levels) {
         const variantId = variantOf.get(item);
         if (!variantId) continue;
@@ -121,6 +123,9 @@ export async function reconcileFromShopify(db: SupabaseClient, opts: { force?: b
     });
     if (error) throw error;
     results[s.name] = data;
+    // Stan ze Shopify przy rozmiarze (Katalog) – tylko zmienione.
+    const rows = [...perItem.entries()].map(([item, qty]) => ({ item, qty }));
+    for (let i = 0; i < rows.length; i += 2000) await db.rpc("set_shopify_qty", { p_store_id: s.id, p_rows: rows.slice(i, i + 2000) }).then(() => null, () => null);
   }
   return results;
 }

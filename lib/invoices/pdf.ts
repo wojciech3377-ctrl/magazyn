@@ -15,6 +15,8 @@ export type InvoiceForPdf = {
   payment_method: string; paid: boolean; paid_at: string | null; due_date: string | null; currency: string;
   total_gross: number; net_23: number; vat_23: number; margin_total: number; notes: string | null;
   ksef_number: string | null; xml_hash: string | null; status: string; items: Item[];
+  kind?: string | null;
+  correction?: { reason?: string; before?: Omit<Item, "position">[]; original_number?: string; original_date?: string; original_ksef?: string | null } | null;
 };
 
 const A4: [number, number] = [595.28, 841.89];
@@ -63,7 +65,8 @@ export async function renderInvoicePdf(inv: InvoiceForPdf) {
   const grey = rgb(0.4, 0.4, 0.4);
 
   // Nagłówek
-  text(`Faktura VAT ${inv.number}`, M, 16, bold);
+  const isKor = inv.kind === "correction";
+  text(isKor ? `Faktura korygująca ${inv.number}` : `Faktura VAT ${inv.number}`, M, 16, bold);
   const right = A4[0] - M;
   const meta = [`Data wystawienia: ${date(inv.issue_date)}${inv.place ? `, ${inv.place}` : ""}`, `Data sprzedaży: ${date(inv.sale_date)}`];
   meta.forEach((m, i) => page.drawText(m, { x: right - regular.widthOfTextAtSize(m, 9), y: y - i * 12 + 4, size: 9, font: regular }));
@@ -83,18 +86,26 @@ export async function renderInvoicePdf(inv: InvoiceForPdf) {
     }
     return yy;
   };
+  if (isKor && inv.correction) {
+    const k = inv.correction;
+    const info = `Korekta faktury ${k.original_number ?? ""} z dnia ${date(k.original_date ?? null)}${k.original_ksef ? ` (KSeF ${k.original_ksef})` : ""}. Przyczyna: ${k.reason ?? "–"}`;
+    for (const l of fit(regular, info, 9, A4[0] - 2 * M)) { page.drawText(l, { x: M, y, size: 9, font: regular }); y -= 12; }
+    y -= 8;
+  }
   const y1 = party("SPRZEDAWCA", inv.seller, M);
   const y2 = party("NABYWCA", inv.buyer, A4[0] / 2 + 10);
   y = Math.min(y1, y2) - 14;
 
-  // Tabela pozycji
+  // Tabela pozycji (przy korekcie: najpierw „przed korektą”, potem „po korekcie”)
   const cols = [M, M + 22, M + 270, M + 310, M + 355, M + 430];
   const head = ["Lp.", "Nazwa", "Ilość", "J.m.", "Cena brutto", "Wartość"];
+  const drawTable = (rows: Item[], caption: string | null) => {
+  if (caption) { page.drawText(caption, { x: M, y, size: 9, font: bold }); y -= 14; }
   page.drawRectangle({ x: M - 4, y: y - 4, width: A4[0] - 2 * M + 8, height: 16, color: rgb(0.93, 0.94, 0.96) });
   head.forEach((h, i) => page.drawText(h, { x: cols[i], y: y + 1, size: 8, font: bold }));
   page.drawText("VAT", { x: right - 26, y: y + 1, size: 8, font: bold });
   y -= 18;
-  for (const it of inv.items) {
+  for (const it of rows) {
     const nameLines = fit(regular, it.name, 9, 240);
     if (y - nameLines.length * 11 < 160) {
       page = doc.addPage(A4);
@@ -112,14 +123,20 @@ export async function renderInvoicePdf(inv: InvoiceForPdf) {
   }
   page.drawLine({ start: { x: M - 4, y: y + 6 }, end: { x: right + 4, y: y + 6 }, thickness: 0.5, color: rgb(0.7, 0.7, 0.7) });
   y -= 10;
+  };
+  if (isKor && inv.correction?.before) {
+    drawTable(inv.correction.before.map((b, i) => ({ ...b, position: i + 1 })), "Przed korektą");
+    y -= 6;
+    drawTable(inv.items, "Po korekcie");
+  } else drawTable(inv.items, null);
 
   // Podsumowanie
   const sumLines: [string, string][] = [];
-  if (Number(inv.net_23) > 0) sumLines.push(["Wartość netto 23%", pl(Number(inv.net_23))], ["VAT 23%", pl(Number(inv.vat_23))]);
-  if (Number(inv.margin_total) > 0) sumLines.push(["Sprzedaż w procedurze marży", pl(Number(inv.margin_total))]);
-  sumLines.push([`Razem do zapłaty (${inv.currency})`, pl(Number(inv.total_gross))]);
+  if (Number(inv.net_23) !== 0) sumLines.push(["Wartość netto 23%", pl(Number(inv.net_23))], ["VAT 23%", pl(Number(inv.vat_23))]);
+  if (Number(inv.margin_total) !== 0) sumLines.push(["Sprzedaż w procedurze marży", pl(Number(inv.margin_total))]);
+  sumLines.push([isKor ? `Różnica – ${Number(inv.total_gross) < 0 ? "do zwrotu" : "do zapłaty"} (${inv.currency})` : `Razem do zapłaty (${inv.currency})`, pl(Number(inv.total_gross))]);
   for (const [k, v] of sumLines) {
-    const last = k.startsWith("Razem");
+    const last = k.startsWith("Razem") || k.startsWith("Różnica");
     const font = last ? bold : regular;
     const size = last ? 11 : 9;
     page.drawText(k, { x: right - 260, y, size, font });

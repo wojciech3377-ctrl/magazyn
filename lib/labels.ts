@@ -1,7 +1,7 @@
 export const UNIT_STATUS: Record<string, string> = {
   in_transit: "w drodze",
   in_stock: "na stanie",
-  reserved: "zarezerwowana",
+  reserved: "zarezerwowana (zamówienie)",
   sold: "sprzedana",
   shipped: "wydana",
   returned: "zwrot",

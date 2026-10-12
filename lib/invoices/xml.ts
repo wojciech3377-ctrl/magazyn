@@ -31,6 +31,15 @@ export type InvoiceInput = {
   bankAccount?: string | null;
   items: InvoiceItemInput[];
   createdAt: Date;
+  /** Faktura korygująca: pozycje przed korektą (StanPrzed) i dane faktury korygowanej. */
+  correction?: {
+    reason: string | null;
+    type: 1 | 2 | 3;
+    before: InvoiceItemInput[];
+    originalNumber: string;
+    originalIssueDate: string;
+    originalKsef: string | null;
+  };
 };
 
 const PAYMENT_CODE = { cash: 1, card: 2, transfer: 6, mobile: 7 } as const;
@@ -65,8 +74,15 @@ export function onlyDigits(nip: string | null | undefined) {
 }
 
 export function buildFa3(inv: InvoiceInput) {
-  const t = invoiceTotals(inv.items);
-  const hasMargin = t.margin > 0;
+  const k = inv.correction;
+  const after = invoiceTotals(inv.items);
+  const before = k ? invoiceTotals(k.before) : null;
+  // Korekta: kwoty w podsumowaniu to różnica „po” minus „przed”.
+  const t = before
+    ? { gross23: r2(after.gross23 - before.gross23), net23: r2(after.net23 - before.net23), vat23: r2(after.vat23 - before.vat23), margin: r2(after.margin - before.margin), total: r2(after.total - before.total) }
+    : after;
+  const hasMargin = k ? (after.margin > 0 || (before?.margin ?? 0) > 0) : t.margin > 0;
+  const has23 = k ? (after.gross23 > 0 || (before?.gross23 ?? 0) > 0) : t.gross23 > 0;
   const buyerNip = onlyDigits(inv.buyer.nip);
   const buyerCountry = (inv.buyer.country || "PL").toUpperCase();
   const buyerId = buyerNip && buyerCountry === "PL"
@@ -75,7 +91,7 @@ export function buildFa3(inv: InvoiceInput) {
       ? `${el("KodKraju", buyerCountry)}${el("NrID", inv.buyer.nip?.trim())}`
       : "<BrakID>1</BrakID>";
 
-  const lines = inv.items.map((i, idx) => [
+  const row = (i: InvoiceItemInput, idx: number, stanPrzed: boolean) => [
     "<FaWiersz>",
     el("NrWierszaFa", idx + 1),
     el("P_7", i.name.slice(0, 512)),
@@ -84,8 +100,12 @@ export function buildFa3(inv: InvoiceInput) {
     el("P_9B", money(i.unit_price_gross)),
     el("P_11A", money(i.total_gross)),
     i.vat === "23" ? el("P_12", "23") : "",
+    stanPrzed ? el("StanPrzed", 1) : "",
     "</FaWiersz>",
-  ].join("")).join("");
+  ].join("");
+  const lines = k
+    ? [...k.before.map((i, idx) => row(i, idx, true)), ...inv.items.map((i, idx) => row(i, k.before.length + idx, false))].join("")
+    : inv.items.map((i, idx) => row(i, idx, false)).join("");
 
   const payment = [
     "<Platnosc>",
@@ -122,7 +142,7 @@ export function buildFa3(inv: InvoiceInput) {
     el("P_1M", inv.place),
     el("P_2", inv.number),
     inv.saleDate !== inv.issueDate ? el("P_6", inv.saleDate) : "",
-    t.gross23 > 0 ? `${el("P_13_1", money(t.net23))}${el("P_14_1", money(t.vat23))}` : "",
+    has23 ? `${el("P_13_1", money(t.net23))}${el("P_14_1", money(t.vat23))}` : "",
     hasMargin ? el("P_13_11", money(t.margin)) : "",
     el("P_15", money(t.total)),
     "<Adnotacje>",
@@ -132,10 +152,13 @@ export function buildFa3(inv: InvoiceInput) {
     "<P_23>2</P_23>",
     hasMargin ? "<PMarzy><P_PMarzy>1</P_PMarzy><P_PMarzy_3_1>1</P_PMarzy_3_1></PMarzy>" : "<PMarzy><P_PMarzyN>1</P_PMarzyN></PMarzy>",
     "</Adnotacje>",
-    "<RodzajFaktury>VAT</RodzajFaktury>",
+    k ? "<RodzajFaktury>KOR</RodzajFaktury>" : "<RodzajFaktury>VAT</RodzajFaktury>",
+    k ? el("PrzyczynaKorekty", k.reason?.slice(0, 256)) : "",
+    k ? el("TypKorekty", k.type) : "",
+    k ? `<DaneFaKorygowanej>${el("DataWystFaKorygowanej", k.originalIssueDate)}${el("NrFaKorygowanej", k.originalNumber)}${k.originalKsef ? `${el("NrKSeF", 1)}${el("NrKSeFFaKorygowanej", k.originalKsef)}` : el("NrKSeFN", 1)}</DaneFaKorygowanej>` : "",
     hasMargin ? `<DodatkowyOpis>${el("Klucz", "Procedura")}${el("Wartosc", "procedura marży - towary używane")}</DodatkowyOpis>` : "",
     lines,
-    payment,
+    k ? "" : payment,
     "</Fa>",
     "</Faktura>",
   ].join("");

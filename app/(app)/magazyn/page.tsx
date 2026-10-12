@@ -23,12 +23,15 @@ function shopPrice(u: UnitRow) {
     ?? null;
 }
 
+/** Magazyn pokazuje tylko rzeczy, które fizycznie są u nas (sprzedane i oddane komisantowi są w Sprzedaży / JPK / historii sztuki). */
+const MAGAZYN_STATUSES = ["in_stock", "reserved", "in_transit", "consignor_hold", "returned"];
+
 export default async function MagazynPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const sp = await searchParams;
   const { supabase, profile } = await requireProfile();
   const page = Math.max(1, Number(sp.strona ?? 1));
   const filters: UnitFilters = {
-    q: sp.q, sklep: sp.sklep, lokalizacja: sp.lokalizacja, status: sp.status, umowa: sp.umowa, wlasciciel: sp.wlasciciel, komisant: sp.komisant,
+    q: sp.q, sklep: sp.sklep, lokalizacja: sp.lokalizacja, status: MAGAZYN_STATUSES.includes(sp.status ?? "") ? sp.status : undefined, umowa: sp.umowa, wlasciciel: sp.wlasciciel, komisant: sp.komisant,
     forma: sp.forma, rozmiar: sp.rozmiar, cena_od: sp.cena_od, cena_do: sp.cena_do, zakup_od: sp.zakup_od, zakup_do: sp.zakup_do,
     od: sp.od, do: sp.do, imei: sp.imei, sort: sp.sort, kier: sp.kier,
   };
@@ -86,6 +89,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
           <>
             {profile.role === "admin" && <form action={runAutoCatalogNow}><SubmitButton className="btn-secondary" pendingText="Sprawdzam…">Sprawdź nowe produkty i stany</SubmitButton></form>}
             {profile.role === "admin" && filters.q && <Link className="btn-secondary" href={`/ustawienia?zakladka=stany&sprawdz=${encodeURIComponent(filters.q)}#sprawdz`}>Porównaj „{filters.q.slice(0, 20)}” ze Shopify</Link>}
+            <Link className="btn-secondary" href="/magazyn/inwentaryzacja">Inwentaryzacja</Link>
             <Link className="btn-secondary" href={`/api/eksport/sztuki${qs ? `?${qs}` : ""}`}>Eksport CSV</Link>
             <Link className="btn" href="/dostawa">Przyjmij dostawę</Link>
           </>
@@ -106,10 +110,9 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
             <option value="">Wszystkie lokalizacje</option>
             {locations?.map((l) => <option key={l.id} value={l.id}>{storeName.get(l.store_id)} · {l.name}</option>)}
           </select>
-          <select className="input" name="status" defaultValue={sp.status ?? ""}>
+          <select className="input" name="status" defaultValue={MAGAZYN_STATUSES.includes(sp.status ?? "") ? sp.status : ""}>
             <option value="">Dostępne (na stanie, w drodze, rezerwacje)</option>
-            {Object.entries(UNIT_STATUS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-            <option value="wszystkie">wszystkie statusy</option>
+            {MAGAZYN_STATUSES.map((k) => <option key={k} value={k}>{UNIT_STATUS[k]}</option>)}
           </select>
           <select className="input" name="umowa" defaultValue={sp.umowa ?? ""}>
             <option value="">Umowa: wszystkie</option>
@@ -236,7 +239,17 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
                       </span>
                     ) : "–"}
                   </td>
-                  {profile.can_see_prices && <td className="whitespace-nowrap text-right tabular-nums">{money(u.purchase_price)}</td>}
+                  {profile.can_see_prices && (
+                    <td className="whitespace-nowrap text-right tabular-nums">
+                      {(() => {
+                        // Komis bez ceny zakupu: kwota komisanta. Waluta z umowy (np. EUR).
+                        const value = u.purchase_price ?? (u.owner_type === "consignment" ? u.payout_amount : null);
+                        const cur = c?.currency && c.currency !== "PLN" ? c.currency : null;
+                        if (value === null) return "–";
+                        return <>{cur ? `${Number(value).toFixed(2)} ${cur}` : money(value)}{u.purchase_price === null && <span className="block text-[11px] text-muted">kwota komisanta</span>}</>;
+                      })()}
+                    </td>
+                  )}
                   <td className="text-right">
                     <div className="flex flex-col items-end gap-1">
                       <span className="text-xs text-muted">{dateOnly(u.received_at)}</span>

@@ -204,6 +204,8 @@ export async function issueInvoice(db: SupabaseClient, d: InvoiceDraft, userId: 
   const hash = createHash("sha256").update(Buffer.from(xml, "utf8")).digest("base64");
   const { error: e2 } = await db.from("invoices").update({ xml, xml_hash: hash }).eq("id", row.id);
   if (e2) throw e2;
+  // Faktura do zamówienia – zarezerwowane sztuki stają się sprzedane.
+  if (d.orderId) await db.rpc("settle_order_units").then(() => null, () => null);
   return row;
 }
 
@@ -293,4 +295,57 @@ export async function pollKsef(db: SupabaseClient) {
   }
   if (errors.length) throw new Error(errors.slice(0, 3).join("; "));
   return { checked: data?.length ?? 0, done };
+}
+
+export type CorrectionInput = { items: InvoiceItemInput[]; reason: string; type: 1 | 2 | 3; issueDate: string };
+
+/**
+ * Faktura korygująca (FVK/n/rok) do faktury przyjętej w KSeF: pozycje „przed” z faktury korygowanej,
+ * „po” z formularza; kwoty w podsumowaniu to różnica. Wysyłana do KSeF tak samo jak zwykła faktura.
+ */
+export async function issueCorrection(db: SupabaseClient, originalId: string, c: CorrectionInput, userId: string) {
+  const company = await getCompany(db);
+  const { data: orig } = await db.from("invoices").select("*").eq("id", originalId).maybeSingle();
+  if (!orig) throw new Error("Nie ma takiej faktury.");
+  if (orig.kind === "correction") throw new Error("Korektę wystawia się do faktury pierwotnej.");
+  if (orig.status !== "accepted" || !orig.ksef_number) throw new Error("Korektę wystawia się do faktury przyjętej w KSeF. Fakturę spoza KSeF możesz usunąć albo unieważnić.");
+  const { data: origItems } = await db.from("invoice_items").select("name, quantity, unit, unit_price_gross, total_gross, vat").eq("invoice_id", originalId).order("position");
+  const before: InvoiceItemInput[] = (origItems ?? []).map((i) => ({ name: i.name, quantity: Number(i.quantity), unit: i.unit, unit_price_gross: Number(i.unit_price_gross), total_gross: Number(i.total_gross), vat: i.vat === "23" ? "23" : "margin" }));
+  const items = c.items.map((i) => {
+    const quantity = Math.round(i.quantity * 1000) / 1000;
+    const unit_price_gross = Math.round(i.unit_price_gross * 100) / 100;
+    return { ...i, name: i.name.trim().slice(0, 256), quantity, unit_price_gross, total_gross: Math.round(unit_price_gross * quantity * 100) / 100 };
+  }).filter((i) => i.quantity > 0);
+  if (items.some((i) => !i.name || !(i.unit_price_gross > 0))) throw new Error("Każda pozycja po korekcie musi mieć nazwę i cenę (usuń pozycję, żeby ją wyzerować).");
+  if (!c.reason.trim()) throw new Error("Podaj przyczynę korekty.");
+  if (c.issueDate > todayPl()) throw new Error("Data wystawienia nie może być z przyszłości.");
+  const a = invoiceTotals(items);
+  const b = invoiceTotals(before);
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  if (r2(a.total - b.total) === 0 && JSON.stringify(items) === JSON.stringify(before)) throw new Error("Korekta niczego nie zmienia.");
+  const seller = { name: company.name, nip: onlyDigits(company.nip), address1: company.street, address2: company.city, country: "PL", email: company.email, bank_account: company.bank_account ?? null };
+  const { data, error } = await db.rpc("create_invoice", {
+    p_invoice: {
+      series: "FVK", kind: "correction", corrected_invoice_id: originalId,
+      correction: { reason: c.reason.trim().slice(0, 256), type: c.type, before, original_number: orig.number, original_date: orig.issue_date, original_ksef: orig.ksef_number },
+      issue_date: c.issueDate, sale_date: orig.sale_date, place: orig.place, seller, buyer: orig.buyer,
+      currency: orig.currency, payment_method: orig.payment_method, paid: false, paid_at: null, due_date: null,
+      total_gross: r2(a.total - b.total), net_23: r2(a.net23 - b.net23), vat_23: r2(a.vat23 - b.vat23), margin_total: r2(a.margin - b.margin),
+      notes: null, order_id: null, pos_order_id: null, created_by: userId,
+    },
+    p_items: items,
+  });
+  if (error) throw error;
+  const row = (data as { id: string; number: string }[])[0];
+  const xml = buildFa3({
+    number: row.number, issueDate: c.issueDate, saleDate: orig.sale_date, place: orig.place, seller, buyer: orig.buyer as InvoiceParty,
+    currency: orig.currency, paymentMethod: orig.payment_method, paid: false, paidAt: null, dueDate: null, bankAccount: seller.bank_account,
+    items, createdAt: new Date(),
+    correction: { reason: c.reason.trim().slice(0, 256), type: c.type, before, originalNumber: orig.number, originalIssueDate: orig.issue_date, originalKsef: orig.ksef_number },
+  });
+  const { createHash } = await import("node:crypto");
+  const hash = createHash("sha256").update(Buffer.from(xml, "utf8")).digest("base64");
+  const { error: e2 } = await db.from("invoices").update({ xml, xml_hash: hash }).eq("id", row.id);
+  if (e2) throw e2;
+  return row;
 }

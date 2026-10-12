@@ -19,11 +19,19 @@ export async function selectIn<T>(
   query: (chunk: string[]) => PromiseLike<{ data: unknown; error: unknown }>,
   size = 100,
 ) {
+  // Każda porcja czytana stronami po 1000 wierszy (limit odpowiedzi Supabase) – inaczej przy produktach z wieloma
+  // rozmiarami część istniejących rozmiarów „znikała” i import próbował dodać je drugi raz (duplicate key).
   const out: T[] = [];
   for (let i = 0; i < values.length; i += size) {
-    const { data, error } = await query(values.slice(i, i + size));
-    if (error) throw error;
-    out.push(...((data as T[]) ?? []));
+    const chunk = values.slice(i, i + size);
+    for (let from = 0; ; from += 1000) {
+      const builder = query(chunk) as PromiseLike<{ data: unknown; error: unknown }> & { range?: (a: number, b: number) => PromiseLike<{ data: unknown; error: unknown }> };
+      const { data, error } = await (builder.range ? builder.range(from, from + 999) : builder);
+      if (error) throw error;
+      const rows = (data as T[]) ?? [];
+      out.push(...rows);
+      if (!builder.range || rows.length < 1000) break;
+    }
   }
   return out;
 }

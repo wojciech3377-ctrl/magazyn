@@ -292,3 +292,70 @@ export async function sendTestMailAction(fd: FormData) {
   }
   redirect(`/ustawienia?zakladka=faktury&${q}`);
 }
+
+/**
+ * Usunięcie faktury, której nie ma w KSeF (nie wysłana albo odrzucona). Faktury z KSeF nie da się usunąć –
+ * tylko skorygować. Sztuki sprzedane tą fakturą (bez zamówienia i kasy) wracają na stan.
+ */
+export async function deleteInvoiceAction(fd: FormData) {
+  await requireAdmin();
+  const id = s(fd, "id");
+  const db = createAdminClient();
+  const { data: inv } = await db.from("invoices").select("id, number, status, ksef_number, order_id, pos_order_id").eq("id", id).maybeSingle();
+  if (!inv) redirect("/sprzedaz?widok=faktury");
+  if (inv.ksef_number || ["accepted", "sending"].includes(inv.status as string)) {
+    redirect(`/sprzedaz/faktury/${id}?blad=${encodeURIComponent("Faktura jest w KSeF – nie można jej usunąć. Wystaw korektę.")}`);
+  }
+  const { data: items } = await db.from("invoice_items").select("unit_id").eq("invoice_id", id).not("unit_id", "is", null);
+  const unitIds = !inv.order_id && !inv.pos_order_id ? [...new Set((items ?? []).map((i) => i.unit_id as string))] : [];
+  const { error } = await db.rpc("delete_invoice", { p_id: id });
+  if (error) redirect(`/sprzedaz/faktury/${id}?blad=${encodeURIComponent(error.message)}`);
+  let note = "";
+  if (unitIds.length) {
+    const { data: back } = await db.from("units").update({ status: "in_stock", sold_at: null }).in("id", unitIds).eq("status", "sold").select("id, variant_id, location_id");
+    if (back?.length) {
+      await db.from("unit_events").insert(back.map((u) => ({ unit_id: u.id, type: "status", data: { to: "in_stock", note: `faktura ${inv.number} usunięta` } })));
+      await adjustStock(db, back.map((u) => ({ variantId: u.variant_id as string, locationId: u.location_id as string, delta: 1 })));
+      note = ` ${back.length} szt. wróciło na stan.`;
+    }
+  }
+  revalidatePath("/sprzedaz");
+  redirect(`/sprzedaz?widok=faktury&ok=${encodeURIComponent(`Faktura ${inv.number} usunięta.${note}`)}`);
+}
+
+/** Faktura korygująca do faktury przyjętej w KSeF; od razu wysyłana do KSeF (gdy jest skonfigurowany). */
+export async function issueCorrectionAction(_: InvoiceFormState, fd: FormData): Promise<InvoiceFormState> {
+  const { profile } = await requireProfile();
+  const db = createAdminClient();
+  const originalId = s(fd, "original_id");
+  let items: { name: string; quantity: number; unit: string; unit_price_gross: number; vat: "23" | "margin" }[];
+  try {
+    items = JSON.parse(s(fd, "items") || "[]");
+  } catch {
+    return { error: "Błąd pozycji." };
+  }
+  const type = Number(s(fd, "type")) as 1 | 2 | 3;
+  const issueDate = isDate(s(fd, "issue_date")) ? s(fd, "issue_date") : new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Warsaw" }).format(new Date());
+  let id: string;
+  try {
+    const { issueCorrection } = await import("@/lib/invoices/service");
+    const row = await issueCorrection(db, originalId, {
+      items: items.map((i) => ({ name: String(i.name ?? ""), quantity: Number(i.quantity) || 0, unit: String(i.unit || "szt."), unit_price_gross: Number(String(i.unit_price_gross).replace(",", ".")) || 0, total_gross: 0, vat: i.vat === "23" ? "23" : "margin" })),
+      reason: s(fd, "reason"), type: [1, 2, 3].includes(type) ? type : 2, issueDate,
+    }, profile.id);
+    id = row.id;
+  } catch (e) {
+    return { error: errorMessage(e) };
+  }
+  let msg = "Korekta wystawiona.";
+  if (ksefConfigured()) {
+    try {
+      const r = await sendInvoiceToKsef(db, id);
+      msg = r.status === "accepted" ? `Korekta przyjęta w KSeF (${r.ksefNumber}).` : r.status === "rejected" ? "Korekta wystawiona, ale KSeF ją odrzucił – szczegóły poniżej." : "Korekta wysłana do KSeF – numer pojawi się za chwilę.";
+    } catch (e) {
+      msg = `Korekta wystawiona, ale wysyłka do KSeF nie udała się: ${errorMessage(e)}`;
+    }
+  }
+  revalidatePath("/sprzedaz");
+  redirect(`/sprzedaz/faktury/${id}?ok=${encodeURIComponent(msg)}`);
+}

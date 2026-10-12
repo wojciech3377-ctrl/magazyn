@@ -142,3 +142,33 @@ export async function fetchMissingReceipts(formData: FormData) {
   revalidatePath("/sprzedaz");
   redirect(`${back.startsWith("/sprzedaz") ? back : "/sprzedaz?widok=jpk"}&${ok ? "ok" : "blad"}=${encodeURIComponent(msg)}`);
 }
+
+/**
+ * Usunięcie sprzedaży stacjonarnej (administrator): sprzedane sztuki wracają na stan (+1 w Shopify),
+ * paragon z aplikacji znika z JPK. Sprzedaży z fakturą nie usuwa się – najpierw faktura.
+ */
+export async function deletePosOrder(formData: FormData) {
+  const { supabase } = await requireAdmin();
+  const id = String(formData.get("id") ?? "");
+  const back = safeBack(String(formData.get("back") ?? "/sprzedaz?widok=stacjonarna"));
+  const go = (key: "ok" | "blad", m: string) => redirect(`${back}${back.includes("?") ? "&" : "?"}${key}=${encodeURIComponent(m)}`);
+  const db = createAdminClient();
+  const { data: o } = await db.from("pos_orders").select("id, code").eq("id", id).maybeSingle();
+  if (!o) return go("blad", "Nie ma takiej sprzedaży.");
+  const { data: inv } = await db.from("invoices").select("number").eq("pos_order_id", id).not("status", "in", "(rejected,cancelled)").limit(1).maybeSingle();
+  if (inv) return go("blad", `Do tej sprzedaży jest faktura ${inv.number} – najpierw ją usuń albo skoryguj.`);
+  const { data: items } = await db.from("pos_order_items").select("unit_id, status").eq("order_id", id);
+  const unitIds = (items ?? []).filter((i) => i.status === "sold").map((i) => i.unit_id as string);
+  let back1: { id: string; variant_id: string; location_id: string }[] = [];
+  if (unitIds.length) {
+    const { data } = await db.from("units").update({ status: "in_stock", sold_at: null }).in("id", unitIds).in("status", ["sold", "shipped"]).select("id, variant_id, location_id");
+    back1 = (data ?? []) as typeof back1;
+    if (back1.length) await db.from("unit_events").insert(back1.map((u) => ({ unit_id: u.id, type: "status", data: { to: "in_stock", note: `sprzedaż ${o.code} usunięta` } })));
+  }
+  const { error } = await db.from("pos_orders").delete().eq("id", id);
+  if (error) return go("blad", errorMessage(error));
+  const { adjustStock } = await import("@/lib/stock");
+  if (back1.length) await adjustStock(supabase, back1.map((u) => ({ variantId: u.variant_id, locationId: u.location_id, delta: 1 })));
+  revalidatePath("/sprzedaz");
+  return go("ok", `Sprzedaż ${o.code} usunięta${back1.length ? `, ${back1.length} szt. wróciło na stan` : ""}.`);
+}

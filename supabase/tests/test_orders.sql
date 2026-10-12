@@ -131,6 +131,18 @@ from public.stores where code = 'sneakers-depot';
 select public.register_shopify_sales(array['70000000-0000-0000-0000-000000000001'::uuid]) as created;
 select public.register_shopify_sales(array['70000000-0000-0000-0000-000000000001'::uuid]) as created_again;
 select shopify_line_index, status, unit_id is not null as has_unit from public.sales where order_id = '70000000-0000-0000-0000-000000000001' order by shopify_line_index;
+-- rezerwacja do paragonu: sztuka „reserved”, po paragonie „sold”
+do $$ begin
+  if (select count(*) from public.units u join public.sales s on s.unit_id = u.id where s.order_id = '70000000-0000-0000-0000-000000000001' and u.status = 'reserved') <> 1 then
+    raise exception 'sztuka zamówienia powinna być zarezerwowana';
+  end if;
+  update public.orders set receipt_id = 123 where id = '70000000-0000-0000-0000-000000000001';
+  perform public.settle_order_units();
+  if (select count(*) from public.units u join public.sales s on s.unit_id = u.id where s.order_id = '70000000-0000-0000-0000-000000000001' and u.status = 'sold') <> 1 then
+    raise exception 'po paragonie sztuka powinna być sprzedana';
+  end if;
+  raise notice 'OK: rezerwacja do paragonu';
+end $$;
 -- Base przejmuje obie linie zamiast tworzyć nowe
 select public.register_sale((select id from public.stores where code = 'sneakers-depot'), 9001, 1, '20000000-0000-0000-0000-000000000007', 2, '7001', 'Samba 41') as base_new;
 select count(*) as sales, count(*) filter (where base_order_id = 9001) as adopted from public.sales where order_id = '70000000-0000-0000-0000-000000000001';

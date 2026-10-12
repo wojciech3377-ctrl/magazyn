@@ -270,12 +270,27 @@ export async function loadJpkLines(db: SupabaseClient, opts: { from: Date; to: D
     const d = posDoc(id);
     return d ? inMonth(d.date) : posInMonth.has(id);
   });
-  const manual = invoicesM.filter((i) => !i.order_id && !i.pos_order_id).map((i) => i.id);
+  // Korekty faktur: osobna linia z różnicą (nie pozycje po korekcie).
+  const { data: corr } = await db.from("invoices").select("id, number, issue_date, total_gross, correction").eq("kind", "correction")
+    .gte("issue_date", fromDay).lt("issue_date", toDay).not("status", "in", "(rejected,cancelled)").limit(2000);
+  const corrIds = new Set((corr ?? []).map((c) => c.id as string));
+  const manual = invoicesM.filter((i) => !i.order_id && !i.pos_order_id && !corrIds.has(i.id)).map((i) => i.id);
+  const correctionLines: JpkLine[] = (corr ?? []).map((c) => {
+    const k = (c.correction ?? {}) as { reason?: string; original_number?: string };
+    return {
+      key: `k:${c.id}`, source: "shop", kind: "invoice", docNumber: c.number as string, docDate: invoiceInstant(c.issue_date as string), saleDate: invoiceInstant(c.issue_date as string),
+      name: `Korekta do ${k.original_number ?? "faktury"}${k.reason ? `: ${k.reason}` : ""}`, price: Number(c.total_gross), vat: "", unitId: null, unitCode: null,
+      contractId: null, contractNumber: null, contractDate: null, purchasePrice: null, currency: null, contractStage: null, consignorWait: false,
+      orderLabel: c.number as string, orderHref: `/sprzedaz/faktury/${c.id}`, saleNote: "KOREKTA",
+      saleId: null, variantLinked: false, baseOrderId: null, pieceRef: null, pendingContractId: null,
+    };
+  });
 
   const lines = [
     ...(await shopLines(db, keepOrders, orderDoc)),
     ...(await posLines(db, keepPos, posDoc)),
     ...(await manualInvoiceLines(db, manual)),
+    ...correctionLines,
   ];
   const filtered = opts.kind === "all" ? lines : opts.kind === "none" ? lines.filter((l) => !l.kind) : lines.filter((l) => l.kind === opts.kind);
   return sortLines(filtered);

@@ -3,6 +3,7 @@ import { consignorBalance, consignorContracts, consignorUnits, consignmentFee, d
 import { SoldList, type SoldRow } from "./SoldList";
 import { IntakeForm } from "./IntakeForm";
 import { IntakeList, type IntakeCard } from "./IntakeList";
+import { mergeIntakes } from "./intake-actions";
 import { INTAKE_STATUS, ITEM_STATUS, type Intake, type IntakeItem } from "@/lib/intake";
 import { dateOnly, dateTime, money } from "@/lib/labels";
 import { Pill } from "@/components/ui";
@@ -46,8 +47,13 @@ export default async function KomisPage({ searchParams }: { searchParams: Promis
   const onStock = units.filter((u) => ["in_stock", "in_transit", "reserved", "consignor_hold"].includes(u.status));
   const sold = units.filter((u) => ["sold", "shipped"].includes(u.status));
   const contracts = await consignorContracts(db, consignor.id, sold.map((u) => u.id));
+  const paidIds = new Set<string>();
+  for (let i = 0; i < sold.length; i += 200) {
+    const { data } = await db.from("units").select("id").in("id", sold.slice(i, i + 200).map((u) => u.id)).eq("consignor_id", consignor.id).not("consignor_payout_id", "is", null);
+    for (const r of data ?? []) paidIds.add(r.id as string);
+  }
   const soldRows: SoldRow[] = sold.map((u) => ({
-    id: u.id, code: u.code, title: u.title, option: u.option, price: u.payout_amount, soldAt: dateOnly(u.sold_at), hasDocument: u.has_document,
+    id: u.id, code: u.code, title: u.title, option: u.option, price: u.payout_amount, soldAt: dateOnly(u.sold_at), hasDocument: u.has_document, paid: paidIds.has(u.id),
     doc: docOf(contracts.get(u.id)),
   }));
   const missing = soldRows.filter((r) => r.doc.kind === "none").length;
@@ -145,6 +151,17 @@ export default async function KomisPage({ searchParams }: { searchParams: Promis
           </section>
           <section className="mb-6">
             <h2 className="h2 mb-2">Twoje zgłoszenia i paczki</h2>
+            {(() => {
+              const groups = new Map<string, IntakeCard[]>();
+              for (const i of intakes.filter((x) => x.status === "to_send")) groups.set(i.location, [...(groups.get(i.location) ?? []), i]);
+              return [...groups.entries()].filter(([, g]) => g.length > 1).map(([locLabel, g]) => (
+                <form key={locLabel} action={mergeIntakes} className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-accent/40 bg-sky-50 p-3 text-sm">
+                  {g.map((i) => <input key={i.id} type="hidden" name="intake_id" value={i.id} />)}
+                  <span>Masz {g.length} paczki do wysłania na <b>{locLabel}</b> – możesz wysłać je razem.</span>
+                  <button className="btn">Połącz w jedną paczkę</button>
+                </form>
+              ));
+            })()}
             <IntakeList intakes={intakes} />
           </section>
         </>

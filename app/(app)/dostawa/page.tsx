@@ -14,7 +14,7 @@ export default async function DostawaPage({ searchParams }: { searchParams: Prom
     <nav className="mb-4 flex flex-wrap gap-1 border-b border-line text-sm" aria-label="Przyjęcie dostawy">
       {([["nowa", "Nowa dostawa", 0], ["akceptacja", "Do akceptacji", counts.accept], ["w-drodze", "W drodze", counts.transit]] as const).map(([k, label, n]) => (
         <Link key={k} href={k === "nowa" ? "/dostawa" : `/dostawa?zakladka=${k}`} className={`-mb-px border-b-2 px-3 py-2 ${tab === k ? "border-accent font-medium text-ink" : "border-transparent text-muted hover:text-ink"}`}>
-          {label}{n > 0 && <span className={`ml-1 rounded px-1.5 py-0.5 text-xs tabular-nums ${k === "akceptacja" ? "bg-bad text-white" : "bg-panel"}`}>{n}</span>}
+          {label}{n > 0 && <span className={`ml-1 rounded px-1.5 py-0.5 text-xs tabular-nums ${k === "akceptacja" ? "bg-emerald-600 text-white" : "bg-orange-500 text-white"}`}>{n}</span>}
         </Link>
       ))}
     </nav>

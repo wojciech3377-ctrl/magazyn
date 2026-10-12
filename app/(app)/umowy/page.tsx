@@ -3,7 +3,8 @@ import { requireProfile } from "@/lib/auth";
 import { CONTRACT_TYPE, dateOnly, money } from "@/lib/labels";
 import { Notice, PageHeader, Pagination, Pill } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
-import { markPaid } from "./actions";
+import { deleteContract, markPaid } from "./actions";
+import { ConfirmSubmit } from "@/components/ConfirmSubmit";
 
 const PER_PAGE = 100;
 
@@ -24,8 +25,9 @@ type Row = {
 };
 
 function StatePill({ c }: { c: Row }) {
-  if (c.status === "sent") return <Pill tone="amber">czeka na podpis klienta</Pill>;
-  if (c.status === "signed" && c.template) return <Pill tone="red">do zatwierdzenia</Pill>;
+  if (c.status === "sent") return <Pill tone="amber">czeka na podpis</Pill>;
+  if (c.status === "offer") return <Pill tone="blue">oferta – czeka na odpowiedź</Pill>;
+  if (c.status === "signed") return <Pill tone="red">do zatwierdzenia</Pill>;
   if (c.status === "rejected") return <Pill tone="slate">odrzucona</Pill>;
   if (c.status === "cancelled") return <Pill tone="slate">anulowana</Pill>;
   if (c.category === "done") return <Pill tone="green">{c.template ? "opłacona" : "wgrana"}</Pill>;
@@ -78,6 +80,16 @@ export default async function UmowyPage({ searchParams }: { searchParams: Promis
     productsOf.get(u.contract_id as string)?.push(`${v.product.title} · ${v.option}`);
   }
   const href = (k: string) => `/umowy${k ? `?kategoria=${k}` : ""}`;
+  // Dane sprzedającego (z podpisu) do kolumn i podglądu.
+  const { data: extraRows } = rows.length
+    ? await supabase.from("contracts").select("id, doc_number, seller_name, seller_address, seller_bank_account, seller_email, seller_phone, payment_method, payment_days, signed_at, accepted_at, notes").in("id", rows.map((r) => r.id))
+    : { data: [] };
+  type Extra = { doc_number: string | null; seller_name: string | null; seller_address: string | null; seller_bank_account: string | null; seller_email: string | null; seller_phone: string | null; payment_method: string | null; payment_days: number | null; signed_at: string | null; accepted_at: string | null; notes: string | null };
+  const extra = new Map((extraRows ?? []).map((e) => [e.id as string, e as unknown as Extra]));
+  const nr = (c: Row) => extra.get(c.id)?.doc_number ?? (c.number ? `NR${c.number}` : "–");
+  const person = (c: Row) => extra.get(c.id)?.seller_name ?? (c.counterparty === "(czeka na podpis)" ? "–" : c.counterparty);
+  const amountText = (c: Row) => (c.currency && c.currency !== "PLN" ? `${Number(c.amount ?? 0).toFixed(2)} ${c.currency}` : money(c.amount));
+  const toPay = (c: Row) => c.status === "accepted" && c.template && !c.paid_at && c.source !== "consignor";
 
   return (
     <>
@@ -121,33 +133,55 @@ export default async function UmowyPage({ searchParams }: { searchParams: Promis
       </form>
 
       <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={{ kategoria: tab || undefined, q: sp.q, typ: sp.typ, plik: sp.plik }} top />
-      <div className="card overflow-x-auto">
-        <table className="table">
-          <thead><tr><th>Nr</th><th>Od kogo</th><th>Stan</th><th /><th>Typ</th><th>Data</th>{profile.can_see_prices && <th className="text-right">Kwota</th>}<th>Produkty</th><th>Plik</th></tr></thead>
+      <div className="card overflow-x-auto lg:overflow-visible">
+        <table className="table [&_td]:px-2 [&_th]:px-2">
+          <thead>
+            <tr>
+              <th>Numer</th><th>Imię i nazwisko</th><th>Stan</th>{profile.can_see_prices && <th className="text-right">Do opłaty</th>}<th>Konto</th><th>Opłacone</th>
+              <th>Typ</th><th>Data</th>{profile.can_see_prices && <th className="text-right">Kwota</th>}<th>Przedmiot</th><th>Adres</th><th />
+            </tr>
+          </thead>
           <tbody>
-            {!rows.length && <tr><td colSpan={9} className="py-10 text-center text-muted">Brak umów w tej kategorii.</td></tr>}
-            {rows.map((c) => (
-              <tr key={c.id}>
-                <td className="tabular-nums text-muted">{c.number}</td>
-                <td><Link className="font-medium text-accent hover:underline" href={`/umowy/${c.id}`}>{c.counterparty}</Link></td>
-                <td><StatePill c={c} /></td>
-                <td>
-                  {tab === "bez-rzeczy" && <Link className="btn-secondary mb-1 inline-block px-2.5 py-1 text-xs" href={`/umowy/${c.id}/przypisz`}>Przypisz</Link>}
-                  {c.status === "accepted" && !c.paid_at && c.template && (
-                    <form action={markPaid}>
-                      <input type="hidden" name="id" value={c.id} />
-                      <input type="hidden" name="back" value={href(tab)} />
-                      <SubmitButton className="btn-secondary px-2.5 py-1 text-xs" pendingText="…">Opłacona</SubmitButton>
-                    </form>
-                  )}
-                </td>
-                <td>{CONTRACT_TYPE[c.type]}</td>
-                <td className="whitespace-nowrap">{dateOnly(c.contract_date ?? c.created_at)}</td>
-                {profile.can_see_prices && <td className="text-right tabular-nums">{c.currency && c.currency !== "PLN" ? `${Number(c.amount ?? 0).toFixed(2)} ${c.currency}` : money(c.amount)}</td>}
-                <td className="max-w-80"><Products names={productsOf.get(c.id) ?? []} /></td>
-                <td>{c.file_path ? <a className="text-accent hover:underline" href={`/api/umowy/${c.id}/pdf`} target="_blank" rel="noreferrer">otwórz</a> : <span className="text-muted">–</span>}</td>
-              </tr>
-            ))}
+            {!rows.length && <tr><td colSpan={12} className="py-10 text-center text-muted">Brak umów w tej kategorii.</td></tr>}
+            {rows.map((c) => {
+              const e = extra.get(c.id);
+              return (
+                <tr key={c.id} className="group relative hover:bg-sky-50">
+                  <td className="whitespace-nowrap font-medium">
+                    <Link className="text-accent after:absolute after:inset-0 after:content-[''] hover:underline" href={`/umowy/${c.id}`}>{nr(c)}</Link>
+                    <ContractPreview c={c} e={e} nr={nr(c)} person={person(c)} amount={profile.can_see_prices ? amountText(c) : null} products={productsOf.get(c.id) ?? []} />
+                  </td>
+                  <td className="min-w-32">{person(c)}</td>
+                  <td><StatePill c={c} /></td>
+                  {profile.can_see_prices && <td className="whitespace-nowrap text-right tabular-nums">{toPay(c) ? <b>{amountText(c)}</b> : "–"}</td>}
+                  <td className="max-w-40 break-all text-xs">{e?.seller_bank_account ? e.seller_bank_account : e?.payment_method === "cash" || (!e?.seller_bank_account && c.template) ? "gotówka" : "–"}</td>
+                  <td className="whitespace-nowrap">
+                    {c.paid_at ? <span className="text-sm text-ok">tak · {dateOnly(c.paid_at)}</span> : toPay(c) ? (
+                      <form action={markPaid} className="relative z-10">
+                        <input type="hidden" name="id" value={c.id} />
+                        <input type="hidden" name="back" value={href(tab)} />
+                        <SubmitButton className="btn-secondary px-2.5 py-1 text-xs" pendingText="…">Oznacz: opłacona</SubmitButton>
+                      </form>
+                    ) : <span className="text-sm text-muted">{c.template ? "nie" : "–"}</span>}
+                  </td>
+                  <td className="text-sm">{CONTRACT_TYPE[c.type]}</td>
+                  <td className="whitespace-nowrap text-sm">{dateOnly(c.contract_date ?? c.created_at)}</td>
+                  {profile.can_see_prices && <td className="whitespace-nowrap text-right tabular-nums">{amountText(c)}</td>}
+                  <td className="max-w-64"><Products names={productsOf.get(c.id) ?? []} /></td>
+                  <td className="max-w-48 text-xs text-muted">{e?.seller_address ?? "–"}</td>
+                  <td className="relative z-10 whitespace-nowrap">
+                    {tab === "bez-rzeczy" && <Link className="btn-secondary mb-1 inline-block px-2.5 py-1 text-xs" href={`/umowy/${c.id}/przypisz`}>Przypisz</Link>}
+                    {c.file_path && <a className="block text-xs text-accent hover:underline" href={`/api/umowy/${c.id}/pdf`} target="_blank" rel="noreferrer">plik</a>}
+                    {profile.role === "admin" && (
+                      <form action={deleteContract}>
+                        <input type="hidden" name="id" value={c.id} />
+                        <ConfirmSubmit className="text-xs text-bad hover:underline" message={`Usunąć umowę ${nr(c)}? Rzeczy z tą umową zostaną bez umowy.`}>usuń</ConfirmSubmit>
+                      </form>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -167,5 +201,34 @@ function Products({ names }: { names: string[] }) {
         {names.slice(1).map((n, i) => <li key={i}>{n}</li>)}
       </ul>
     </details>
+  );
+}
+
+/** Podgląd umowy po najechaniu na wiersz (jak w zamówieniach). */
+function ContractPreview({ c, e, nr, person, amount, products }: {
+  c: Row; e: { seller_address: string | null; seller_bank_account: string | null; seller_email: string | null; seller_phone: string | null; payment_method: string | null; payment_days: number | null; signed_at: string | null; notes: string | null } | undefined;
+  nr: string; person: string; amount: string | null; products: string[];
+}) {
+  return (
+    <div role="tooltip" className="pointer-events-none invisible absolute left-20 top-full z-40 mt-1 hidden w-[28rem] rounded-lg border border-line bg-white p-3 text-sm font-normal opacity-0 shadow-xl transition-opacity delay-300 duration-150 group-hover:visible group-hover:opacity-100 lg:block">
+      <div className="mb-2 flex items-baseline justify-between gap-2"><b className="text-base">Umowa {nr}</b><StatePill c={c} /></div>
+      <div className="grid grid-cols-2 gap-3 text-xs">
+        <div>
+          <div className="font-medium text-ink">{person}</div>
+          {e?.seller_address && <div className="text-muted">{e.seller_address}</div>}
+          {e?.seller_phone && <div>{e.seller_phone}</div>}
+          {e?.seller_email && <div className="truncate">{e.seller_email}</div>}
+        </div>
+        <div>
+          {amount && <div>Kwota: <b>{amount}</b></div>}
+          <div>Zapłata: {e?.payment_method === "cash" ? "gotówka" : e?.seller_bank_account ? `przelew – ${e.seller_bank_account}` : "–"}</div>
+          {e?.payment_days ? <div className="text-muted">termin: {e.payment_days} dni</div> : null}
+          <div>Opłacona: {c.paid_at ? dateOnly(c.paid_at) : "nie"}</div>
+          {e?.signed_at && <div className="text-muted">podpisana {dateOnly(e.signed_at)}</div>}
+        </div>
+      </div>
+      {products.length > 0 && <ul className="mt-2 space-y-0.5 border-t border-line pt-2 text-xs">{products.map((p, i) => <li key={i}>{p}</li>)}</ul>}
+      {e?.notes && <p className="mt-2 rounded bg-panel p-1.5 text-xs">{e.notes}</p>}
+    </div>
   );
 }

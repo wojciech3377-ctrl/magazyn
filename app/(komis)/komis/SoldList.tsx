@@ -7,7 +7,7 @@ import { createClient } from "@/lib/supabase/client";
 import { attachConsignorInvoice, createConsignorContract, prepareInvoiceUpload, type DocState } from "./actions";
 
 export type SoldRow = {
-  id: string; code: string; title: string; option: string; price: number | null; soldAt: string; hasDocument: boolean;
+  id: string; code: string; title: string; option: string; price: number | null; soldAt: string; hasDocument: boolean; paid?: boolean;
   doc: { kind: "none" } | { kind: "sign"; href: string | null } | { kind: "approve" } | { kind: "done"; label: string };
 };
 
@@ -64,7 +64,7 @@ export function SoldList({ rows }: { rows: SoldRow[] }) {
                   {r.doc.kind === "approve" && <span className="text-muted">przesłane – sprawdzamy</span>}
                   {r.doc.kind === "done" && <span className="text-ok">{r.doc.label} ✓</span>}
                 </td>
-                <td>{r.hasDocument ? <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-xs text-emerald-800">do wypłaty</span> : <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-800">czeka na paragon / fakturę sprzedaży</span>}</td>
+                <td>{r.paid ? <span className="rounded bg-emerald-600 px-1.5 py-0.5 text-xs text-white">wypłacone ✓</span> : r.hasDocument ? <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-xs text-emerald-800">do wypłaty</span> : <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-800">czeka na paragon / fakturę sprzedaży</span>}</td>
               </tr>
             ))}
           </tbody>

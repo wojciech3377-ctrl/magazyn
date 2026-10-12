@@ -6,7 +6,8 @@ import { Notice, PageHeader, Pill } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { consignorBalance, consignorUnits, SHIPMENT_METHOD, SHIPMENT_STATUS, type Consignor, type ConsignorShipment } from "@/lib/consignment";
-import { addPayout, createConsignorAccount, deletePayout, openLabel, processShipment, removeConsignorAccount, resetConsignorPassword, saveConsignor } from "../actions";
+import { addPayout, createConsignorAccount, deleteConsignor, deletePayout, openLabel, processShipment, removeConsignorAccount, resetConsignorPassword, saveConsignor, toggleUnitPaid } from "../actions";
+import { ConfirmSubmit } from "@/components/ConfirmSubmit";
 
 export default async function ConsignorPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<Record<string, string | undefined>> }) {
   const { id } = await params;
@@ -20,6 +21,15 @@ export default async function ConsignorPage({ params, searchParams }: { params: 
   const bal = await consignorBalance(db, id, units);
   const { data: shipments } = await supabase.from("consignor_shipments").select("*").eq("consignor_id", id).order("created_at", { ascending: false }).limit(50);
   const nameOf = new Map(units.map((u) => [u.id, `${u.title} ${u.option} (${u.code})`]));
+  // Numer umowy (tytuł przelewu) i rozliczenie każdej rzeczy.
+  const extra = new Map<string, { paid: boolean; title: string | null }>();
+  for (let i = 0; i < units.length; i += 200) {
+    const { data } = await db.from("units").select("id, consignor_payout_id, contract:contracts(number, doc_number, template)").in("id", units.slice(i, i + 200).map((u) => u.id));
+    for (const r of data ?? []) {
+      const ct = r.contract as unknown as { number: number | null; doc_number: string | null; template: string | null } | null;
+      extra.set(r.id as string, { paid: !!r.consignor_payout_id, title: ct ? (ct.template && ct.number ? `NR${ct.number}` : ct.doc_number ?? (ct.number ? `NR${ct.number}` : null)) : null });
+    }
+  }
   const prices = profile.can_see_prices;
   const isAdmin = profile.role === "admin";
 
@@ -28,6 +38,12 @@ export default async function ConsignorPage({ params, searchParams }: { params: 
       <PageHeader title={consignor.name} sub="Komisant" actions={<><Link className="btn-secondary" href={`/magazyn?wlasciciel=consignment&komisant=${id}&status=wszystkie`}>W Magazynie</Link><Link className="btn-secondary" href="/komisanci">Wróć</Link></>} />
       {sp.ok && <div className="mb-4"><Notice tone="ok">{sp.ok}</Notice></div>}
       {sp.blad && <div className="mb-4"><Notice tone="error">{sp.blad}</Notice></div>}
+      {isAdmin && (
+        <form action={deleteConsignor} className="mb-4 flex justify-end">
+          <input type="hidden" name="id" value={id} />
+          <ConfirmSubmit className="btn-danger px-3 py-1.5 text-sm" message={`Usunąć komisanta ${consignor.name}? Usunie się też jego konto do panelu. Komisanta z rzeczami w historii nie da się usunąć.`}>Usuń komisanta</ConfirmSubmit>
+        </form>
+      )}
 
       <div className="mb-5 grid gap-3 sm:grid-cols-4">
         {[
@@ -95,8 +111,17 @@ export default async function ConsignorPage({ params, searchParams }: { params: 
                   <td><Link className="text-accent hover:underline" href={`/magazyn/${u.id}`}>{u.title} · <b>{u.option}</b></Link> <span className="font-mono text-xs text-muted">{u.code}</span></td>
                   <td className="text-sm">{UNIT_STATUS[u.status] ?? u.status}</td>
                   <td className="text-sm text-muted">{dateOnly(u.sold_at ?? u.received_at)}</td>
-                  {prices && <td className="text-right tabular-nums">{money(u.payout_amount)}</td>}
-                  <td>{["sold", "shipped"].includes(u.status) ? (u.has_document ? <Pill tone="green">do wypłaty</Pill> : <Pill tone="amber">bez paragonu / faktury</Pill>) : null}</td>
+                  {prices && <td className="text-right tabular-nums">{money(u.payout_amount)}{extra.get(u.id)?.title && <span className="block text-xs text-muted">tytuł: {extra.get(u.id)!.title}</span>}</td>}
+                  <td className="whitespace-nowrap">
+                    {["sold", "shipped"].includes(u.status) ? (
+                      extra.get(u.id)?.paid ? (
+                        <span className="flex items-center gap-2"><Pill tone="green">zapłacono ✓</Pill>{isAdmin && <form action={toggleUnitPaid}><input type="hidden" name="id" value={id} /><input type="hidden" name="unit_id" value={u.id} /><button className="text-xs text-muted hover:underline">cofnij</button></form>}</span>
+                      ) : u.has_document ? (
+                        <span className="flex items-center gap-2"><Pill tone="amber">do wypłaty</Pill>{isAdmin && <form action={toggleUnitPaid}><input type="hidden" name="id" value={id} /><input type="hidden" name="unit_id" value={u.id} /><SubmitButton className="btn-secondary px-2 py-0.5 text-xs" pendingText="…">Zapłacono</SubmitButton></form>}</span>
+                      ) : <Pill tone="slate">bez paragonu / faktury</Pill>
+                    ) : null}
+                    {extra.get(u.id)?.title && <span className="block text-xs text-muted">umowa {extra.get(u.id)!.title}</span>}
+                  </td>
                 </tr>
               ))}
             </tbody>

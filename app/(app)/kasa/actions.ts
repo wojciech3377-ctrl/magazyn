@@ -44,7 +44,7 @@ export type ScanChoice = { variantId: string; title: string; option: string; inS
 /** Najstarsza wolna sztuka rozmiaru: najpierw własne, potem komis; najpierw z lokalizacji sklepu. */
 export async function pickUnitForVariant(variantId: string, storeId: string, exclude: string[] = []): Promise<{ unit?: PosUnit; error?: string }> {
   const { supabase } = await requireProfile();
-  let q = supabase.from("units").select(SELECT).eq("variant_id", variantId).in("status", ["in_stock", "reserved"]);
+  let q = supabase.from("units").select(SELECT).eq("variant_id", variantId).eq("status", "in_stock");
   if (exclude.length) q = q.not("id", "in", `(${exclude.filter((x) => /^[0-9a-f-]{36}$/.test(x)).join(",")})`);
   const { data } = await q.order("received_at").limit(200);
   const rows = (data ?? []) as unknown as Row[];
@@ -69,7 +69,7 @@ export async function scanUnit(code: string, storeId: string, exclude: string[] 
   // 1. Konkretna sztuka: kod z etykiety albo IMEI.
   const { data } = await supabase.from("units").select(SELECT).or(`code.eq.${c},identifier.eq.${c}`).limit(5);
   const rows = (data ?? []) as unknown as Row[];
-  const available = rows.find((r) => (r.status === "in_stock" || r.status === "reserved") && !exclude.includes(r.id));
+  const available = rows.find((r) => r.status === "in_stock" && !exclude.includes(r.id));
   if (available) return { unit: toPos(available, storeId) };
   if (rows.length) return { error: `Sztuka ${rows[0].code} nie jest na stanie albo jest już w koszyku.` };
 
@@ -102,7 +102,7 @@ export async function searchUnits(q: string, storeId: string): Promise<PosUnit[]
   const variantIds = await findVariantIds(supabase, text);
   if (!variantIds.length) return [];
   const { data } = await supabase.from("units").select(SELECT)
-    .in("variant_id", variantIds.slice(0, 150)).in("status", ["in_stock", "reserved"])
+    .in("variant_id", variantIds.slice(0, 150)).eq("status", "in_stock")
     .order("received_at").limit(40);
   return ((data ?? []) as unknown as Row[]).map((r) => toPos(r, storeId));
 }

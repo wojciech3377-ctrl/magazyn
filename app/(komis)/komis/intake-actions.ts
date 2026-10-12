@@ -131,3 +131,18 @@ export async function cancelIntake(fd: FormData) {
     .eq("id", String(fd.get("intake_id") ?? "")).eq("consignor_id", consignor.id).in("status", ["review", "offer", "to_send"]);
   revalidatePath("/komis");
 }
+
+/** Połączenie kilku paczek do wysłania (na ten sam adres) w jedną – jeden numer przesyłki dla wszystkich rzeczy. */
+export async function mergeIntakes(fd: FormData) {
+  const { db, consignor } = await requireConsignor();
+  const ids = [...new Set(fd.getAll("intake_id").map(String).filter((x) => UUID.test(x)))];
+  if (ids.length < 2) return;
+  const { data: list } = await db.from("consignor_intakes").select("id, location_id, created_at").in("id", ids).eq("consignor_id", consignor.id).eq("status", "to_send").order("created_at");
+  const rows = list ?? [];
+  if (rows.length < 2 || new Set(rows.map((r) => r.location_id)).size > 1) return;
+  const [main, ...rest] = rows;
+  const restIds = rest.map((r) => r.id as string);
+  await db.from("consignor_intake_items").update({ intake_id: main.id }).in("intake_id", restIds);
+  await db.from("consignor_intakes").update({ status: "cancelled", note: `połączona z paczką z ${new Date(main.created_at as string).toLocaleDateString("pl-PL")}` }).in("id", restIds).eq("status", "to_send");
+  revalidatePath("/komis");
+}

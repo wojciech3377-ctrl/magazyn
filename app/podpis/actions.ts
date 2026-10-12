@@ -144,7 +144,13 @@ export async function submitGeneralContract(key: string, _: Result | null, formD
   if (contractTotal(items) > 5_000_000) return { error: "Kwota umowy jest za wysoka – skontaktuj się z nami." };
 
   const token = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
+  // Wybrany sklep → towar przyjdzie do jego pierwszej aktywnej lokalizacji (można zmienić przy zatwierdzeniu).
+  const storeId = String(formData.get("store_id") ?? "");
+  const { data: loc } = /^[0-9a-f-]{36}$/.test(storeId)
+    ? await db.from("locations").select("id").eq("store_id", storeId).eq("active", true).order("created_at").limit(1).maybeSingle()
+    : { data: null };
   const { data: c, error } = await db.from("contracts").insert({
+    location_id: loc?.id ?? null,
     type: "purchase",
     template: "purchase_v1",
     source: "general",

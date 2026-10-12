@@ -87,7 +87,7 @@ const L = {
 } as const;
 
 export function SellerContractForm({
-  action, mode, company, number, date, paymentDays, items: fixedItems, buyerSignature, searchCatalog,
+  action, mode, company, number, date, paymentDays, items: fixedItems, buyerSignature, searchCatalog: searchAll, stores,
 }: {
   action: Action;
   mode: "fixed" | "free";
@@ -97,9 +97,13 @@ export function SellerContractForm({
   paymentDays: number;
   items: ContractItem[];
   buyerSignature?: string | null;
-  searchCatalog?: (q: string) => Promise<CatalogHit[]>;
+  searchCatalog?: (q: string, storeId?: string) => Promise<CatalogHit[]>;
+  /** Ogólny link: klient wybiera sklep – wyszukiwarka pokazuje tylko jego produkty (+ wpisanie ręczne). */
+  stores?: { id: string; name: string }[];
 }) {
   const [state, formAction, pending] = useActionState(action, null);
+  const [storeId, setStoreId] = useState(stores?.length === 1 ? stores[0].id : "");
+  const searchCatalog = useMemo(() => (searchAll ? (q: string) => searchAll(q, storeId || undefined) : undefined), [searchAll, storeId]);
   const [lang, setLang] = useState<Lang>("pl");
   const T = L[lang];
   const [f, setF] = useState({ name: "", idNumber: "", street: "", postcode: "", city: "", bank: "", email: "", phone: "" });
@@ -176,7 +180,21 @@ export function SellerContractForm({
             </div>
           </section>
 
-          {mode === "free" && (
+          {mode === "free" && stores && stores.length > 1 && (
+            <section className="card space-y-2 p-4">
+              <h2 className="h2">{lang === "pl" ? "Do którego sklepu sprzedajesz?" : "Which shop are you selling to?"}</h2>
+              <input type="hidden" name="store_id" value={storeId} />
+              <div className="grid grid-cols-2 gap-2">
+                {stores.map((st) => (
+                  <button key={st.id} type="button" onClick={() => setStoreId(st.id)}
+                    className={`rounded-md border px-3 py-2 text-sm transition-colors hover:border-accent hover:bg-sky-50 ${storeId === st.id ? "border-accent bg-accent/5 font-medium" : "border-line"}`}>{st.name}</button>
+                ))}
+              </div>
+            </section>
+          )}
+          {mode === "free" && stores && stores.length === 1 && <input type="hidden" name="store_id" value={storeId} />}
+
+          {mode === "free" && (!stores || stores.length < 2 || storeId) && (
             <section className="card space-y-3 p-4">
               <h2 className="h2">{T.what}</h2>
               <input type="hidden" name="items" value={JSON.stringify(items)} />

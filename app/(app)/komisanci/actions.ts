@@ -158,3 +158,47 @@ export async function saveConsignmentFee(formData: FormData) {
   revalidatePath("/komisanci");
   redirect(`/komisanci?ok=${encodeURIComponent("Opłata zapisana.")}`);
 }
+
+/** Rzecz komisanta rozliczona: wypłata na jej kwotę (tytuł = numer umowy) albo cofnięcie. */
+export async function toggleUnitPaid(formData: FormData) {
+  const { supabase } = await requireAdmin();
+  const id = s(formData, "id");
+  const unitId = s(formData, "unit_id");
+  const db = createAdminClient();
+  const { data: u } = await db.from("units").select("id, code, payout_amount, consignor_payout_id, consignor_id, status, contract:contracts(number, doc_number, template), variant:variants(option, product:products(title))").eq("id", unitId).eq("consignor_id", id).maybeSingle();
+  if (!u) back(id, "Nie ma takiej rzeczy.", false);
+  if (u!.consignor_payout_id) {
+    await supabase.from("consignor_payouts").delete().eq("id", u!.consignor_payout_id).eq("consignor_id", id);
+    await db.from("units").update({ consignor_payout_id: null }).eq("id", unitId);
+    revalidatePath(`/komisanci/${id}`);
+    back(id, `Cofnięto „zapłacono” dla ${u!.code}.`);
+  }
+  const amount = Number(u!.payout_amount ?? 0);
+  if (!(amount > 0)) back(id, "Ta rzecz nie ma kwoty komisanta.", false);
+  const c = u!.contract as unknown as { number: number | null; doc_number: string | null; template: string | null } | null;
+  const v = u!.variant as unknown as { option: string; product: { title: string } } | null;
+  const title = c ? (c.template && c.number ? `NR${c.number}` : c.doc_number ?? (c.number ? `NR${c.number}` : "")) : "";
+  const { data: payout, error } = await supabase.from("consignor_payouts").insert({
+    consignor_id: id, amount, note: [title, v ? `${v.product.title} ${v.option}` : u!.code].filter(Boolean).join(" – ").slice(0, 300), unit_ids: [unitId],
+  }).select("id").single();
+  if (error || !payout) back(id, errorMessage(error), false);
+  await db.from("units").update({ consignor_payout_id: payout!.id }).eq("id", unitId);
+  revalidatePath(`/komisanci/${id}`);
+  back(id, `Zapłacono ${amount.toFixed(2)} zł${title ? ` (tytuł: ${title})` : ""}.`);
+}
+
+/** Usunięcie komisanta (tylko bez rzeczy w aplikacji); konto do panelu też jest usuwane. */
+export async function deleteConsignor(formData: FormData) {
+  await requireAdmin();
+  const id = s(formData, "id");
+  const db = createAdminClient();
+  const { count } = await db.from("units").select("id", { count: "exact", head: true }).eq("consignor_id", id);
+  if (count) back(id, `Komisant ma ${count} rzeczy w historii magazynu – nie można go usunąć (dane są potrzebne do rozliczeń i JPK).`, false);
+  const { data: c } = await db.from("consignors").select("user_id, name").eq("id", id).maybeSingle();
+  await db.from("contracts").update({ consignor_id: null }).eq("consignor_id", id);
+  const { error } = await db.from("consignors").delete().eq("id", id);
+  if (error) back(id, error.message, false);
+  if (c?.user_id) await db.auth.admin.deleteUser(c.user_id as string).catch(() => null);
+  revalidatePath("/komisanci");
+  redirect(`/komisanci?ok=${encodeURIComponent(`Komisant ${c?.name ?? ""} usunięty.`)}`);
+}

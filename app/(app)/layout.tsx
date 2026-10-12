@@ -17,9 +17,25 @@ async function consignorAlerts() {
   }
 }
 
+/** Przyjęcie dostawy: do akceptacji (zgłoszenia komisantów, podpisane umowy) i w drodze. */
+async function deliveryAlerts() {
+  try {
+    const db = createAdminClient();
+    const [a, b, c, d] = await Promise.all([
+      db.from("consignor_intakes").select("id", { count: "exact", head: true }).eq("status", "review"),
+      db.from("contracts").select("id", { count: "exact", head: true }).eq("status", "signed").not("template", "is", null),
+      db.from("consignor_intakes").select("id", { count: "exact", head: true }).in("status", ["to_send", "sent"]),
+      db.from("units").select("id", { count: "exact", head: true }).eq("status", "in_transit"),
+    ]);
+    return { accept: (a.count ?? 0) + (b.count ?? 0), transit: (c.count ?? 0) + (d.count ?? 0) };
+  } catch {
+    return { accept: 0, transit: 0 };
+  }
+}
+
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const { profile } = await requireProfile();
-  const alerts = await consignorAlerts();
+  const [alerts, delivery] = await Promise.all([consignorAlerts(), deliveryAlerts()]);
   return (
     <div className="min-h-screen">
       <header className="border-b border-line bg-white">
@@ -30,7 +46,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
               <button className="text-sm text-muted hover:text-ink">Wyloguj</button>
             </form>
           </div>
-          <Nav badges={{ "/komisanci": alerts }} />
+          <Nav badges={{
+            "/komisanci": [{ n: alerts, tone: "red", title: "Zgłoszenia komisantów do obsłużenia" }],
+            "/dostawa": [{ n: delivery.accept, tone: "green", title: "Do akceptacji" }, { n: delivery.transit, tone: "orange", title: "W drodze" }],
+          }} />
           <form action={signOut} className="hidden items-center gap-3 md:flex">
             <span className="text-sm text-muted">{profile.full_name || profile.email}</span>
             <button className="text-sm text-muted hover:text-ink">Wyloguj</button>

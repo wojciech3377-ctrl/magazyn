@@ -5,7 +5,8 @@ import { dateOnly, dateTime, money } from "@/lib/labels";
 import { Field, Notice, PageHeader, Pill } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
 import { ksefConfigured } from "@/lib/ksef/client";
-import { checkKsefAction, emailInvoiceAction, sendToKsefAction, voidInvoiceAction } from "../actions";
+import { checkKsefAction, deleteInvoiceAction, emailInvoiceAction, sendToKsefAction, voidInvoiceAction } from "../actions";
+import { ConfirmSubmit } from "@/components/ConfirmSubmit";
 import { mailConfigured } from "@/lib/mail";
 import { KSEF_TRANSIENT } from "@/lib/invoices/service";
 import { KSEF_STATUS } from "@/lib/invoices/labels";
@@ -15,10 +16,14 @@ const PAY: Record<string, string> = { cash: "gotówka", card: "karta", transfer:
 export default async function InvoicePage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<Record<string, string | undefined>> }) {
   const { id } = await params;
   const sp = await searchParams;
-  const { supabase } = await requireProfile();
+  const { supabase, profile } = await requireProfile();
   const { data: inv } = await supabase.from("invoices").select("*, order:orders(id, name), pos:pos_orders(id, code)").eq("id", id).maybeSingle();
   if (!inv) notFound();
   const { data: items } = await supabase.from("invoice_items").select("*").eq("invoice_id", id).order("position");
+  const { data: corrections } = await supabase.from("invoices").select("id, number, status").eq("corrected_invoice_id", id).order("created_at");
+  const { data: original } = inv.corrected_invoice_id ? await supabase.from("invoices").select("id, number").eq("id", inv.corrected_invoice_id).maybeSingle() : { data: null };
+  const correction = inv.correction as { reason?: string; before?: { name: string; quantity: number; unit_price_gross: number; total_gross: number; vat: string }[] } | null;
+  const inKsef = !!inv.ksef_number || ["accepted", "sending"].includes(inv.status);
   const st = KSEF_STATUS[inv.status] ?? KSEF_STATUS.issued;
   const buyer = inv.buyer as { name: string; nip?: string | null; address1?: string | null; address2?: string | null; country?: string | null; email?: string | null };
   const order = inv.order as { id: string; name: string } | null;
@@ -33,13 +38,27 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
           <>
             <a className="btn" href={`/api/faktury/${inv.id}/pdf`} target="_blank" rel="noreferrer">PDF</a>
             <a className="btn-secondary" href={`/api/faktury/${inv.id}/xml`}>XML</a>
-            <Link className="btn-secondary" href={`/sprzedaz/faktury/nowa?podobna=${inv.id}`}>Wystaw podobną</Link>
+            {inv.kind !== "correction" && <Link className="btn-secondary" href={`/sprzedaz/faktury/nowa?podobna=${inv.id}`}>Wystaw podobną</Link>}
+            {inv.kind !== "correction" && inv.status === "accepted" && inv.ksef_number && <Link className="btn-secondary" href={`/sprzedaz/faktury/${inv.id}/korekta`}>Wystaw korektę</Link>}
+            {profile.role === "admin" && !inKsef && (
+              <form action={deleteInvoiceAction}>
+                <input type="hidden" name="id" value={inv.id} />
+                <ConfirmSubmit className="btn-danger" message={`Usunąć fakturę ${inv.number}? Nie ma jej w KSeF, więc zniknie całkowicie (sztuki sprzedane tą fakturą wrócą na stan).`}>Usuń</ConfirmSubmit>
+              </form>
+            )}
             <Link className="btn-secondary" href="/sprzedaz?widok=faktury">Wróć</Link>
           </>
         }
       />
       {sp.ok && <div className="mb-4"><Notice tone="ok">{sp.ok}</Notice></div>}
       {sp.blad && <div className="mb-4"><Notice tone="error">{sp.blad}</Notice></div>}
+      {inv.kind === "correction" && (
+        <div className="mb-4"><Notice>Faktura korygująca{original ? <> do <Link className="underline" href={`/sprzedaz/faktury/${original.id}`}>{original.number}</Link></> : null}. Przyczyna: {correction?.reason ?? "–"}. Kwoty poniżej to pozycje po korekcie; „Razem” to różnica.</Notice></div>
+      )}
+      {!!corrections?.length && (
+        <div className="mb-4"><Notice>Korekty tej faktury: {corrections.map((c, i) => <span key={c.id}>{i ? ", " : ""}<Link className="underline" href={`/sprzedaz/faktury/${c.id}`}>{c.number}</Link></span>)}</Notice></div>
+      )}
+      {inKsef && inv.kind !== "correction" && profile.role === "admin" && <p className="mb-4 text-xs text-muted">Faktury przyjętej w KSeF nie można usunąć – KSeF nie pozwala kasować faktur. Zmiany robi się korektą.</p>}
 
       <section className="card mb-5 p-4">
         <div className="flex flex-wrap items-center gap-3">
@@ -113,7 +132,13 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
               </tr>
             ))}
             {Number(inv.net_23) > 0 && <tr><td colSpan={4} className="text-right">Netto 23% / VAT</td><td className="text-right tabular-nums">{money(inv.net_23)} / {money(inv.vat_23)}</td><td /></tr>}
-            <tr><td colSpan={4} className="text-right font-medium">Razem</td><td className="text-right text-lg font-semibold tabular-nums">{money(inv.total_gross)}</td><td /></tr>
+            {inv.kind === "correction" && correction?.before?.length ? (
+              <>
+                <tr><td colSpan={6} className="bg-panel text-xs font-medium uppercase text-muted">Przed korektą</td></tr>
+                {correction.before.map((b, k) => <tr key={`b${k}`} className="text-muted"><td /><td>{b.name}</td><td className="text-right tabular-nums">{Number(b.quantity)}</td><td className="text-right tabular-nums">{money(b.unit_price_gross)}</td><td className="text-right tabular-nums">{money(b.total_gross)}</td><td>{b.vat === "23" ? "23%" : "marża"}</td></tr>)}
+              </>
+            ) : null}
+            <tr><td colSpan={4} className="text-right font-medium">{inv.kind === "correction" ? "Różnica (po − przed)" : "Razem"}</td><td className="text-right text-lg font-semibold tabular-nums">{money(inv.total_gross)}</td><td /></tr>
           </tbody>
         </table>
       </section>

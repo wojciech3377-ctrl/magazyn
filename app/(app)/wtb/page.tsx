@@ -4,7 +4,7 @@ import { dateOnly } from "@/lib/labels";
 import { Notice, PageHeader } from "@/components/ui";
 import { SelectAll } from "@/components/SelectAll";
 import { WtbAdd } from "./WtbAdd";
-import { updateWtb } from "./actions";
+import { editWtbItem, updateWtb } from "./actions";
 
 const TABS = [
   { key: "", label: "Szukamy", status: "active" },
@@ -33,7 +33,18 @@ export default async function WtbPage({ searchParams }: { searchParams: Promise<
       {sp.ok && <div className="mb-4"><Notice tone="ok">{sp.ok}</Notice></div>}
       {sp.blad && <div className="mb-4"><Notice tone="error">{sp.blad}</Notice></div>}
 
-      {active && <div className="mb-5"><WtbAdd /></div>}
+      {active && (
+        <div className="mb-5 grid gap-5 lg:grid-cols-[1fr_320px]">
+          <WtbAdd />
+          {!!items?.length && (
+            <Link href="/wtb/grafika" className="group block rounded-lg border border-line bg-white p-2 transition hover:border-accent hover:shadow-md" title="Podgląd grafiki z całej listy">
+              <span className="mb-1 block text-xs font-medium text-muted group-hover:text-accent">Podgląd grafiki z całej listy{items.length > 16 ? " (pierwsza z kilku)" : ""} →</span>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={`/api/wtb?strona=1&v=${items.length}-${items.map((i) => i.id.slice(0, 4)).join("").slice(0, 40)}`} alt="Podgląd grafiki WTB" className="w-full rounded" loading="lazy" />
+            </Link>
+          )}
+        </div>
+      )}
 
       <nav className="mb-4 flex gap-1 border-b border-line text-sm" aria-label="Lista WTB">
         {TABS.map((t, i) => (
@@ -47,18 +58,18 @@ export default async function WtbPage({ searchParams }: { searchParams: Promise<
       {!items?.length ? (
         <p className="py-10 text-center text-muted">{active ? "Lista jest pusta. Dodaj buty z katalogu albo przyciskiem „Dodaj do WTB” przy zamówieniu." : "Nic jeszcze nie kupiono z listy."}</p>
       ) : (
-        <form action="/wtb/grafika" method="get">
+        <form action={updateWtb}>
           <input type="hidden" name="back" value={back} />
           <div className="sticky top-0 z-20 mb-3 flex flex-wrap items-center gap-2 border-b border-line bg-white/95 py-2 backdrop-blur">
             <label className="flex items-center gap-2 text-sm"><SelectAll /> zaznacz wszystkie</label>
             {active ? (
               <>
-                <button className="btn">Grafika z zaznaczonych</button>
-                <button className="btn-secondary" formAction={updateWtb} name="to" value="bought">Kupione</button>
-                <button className="btn-secondary" formAction={updateWtb} name="to" value="cancelled">Usuń z listy</button>
+                <button className="btn" formAction="/wtb/grafika" formMethod="get">Grafika z zaznaczonych</button>
+                <button className="btn-secondary" name="to" value="bought">Kupione</button>
+                <button className="btn-secondary" name="to" value="cancelled">Usuń z listy</button>
               </>
             ) : (
-              <button className="btn-secondary" formAction={updateWtb} name="to" value="active">Przywróć na listę</button>
+              <button className="btn-secondary" name="to" value="active">Przywróć na listę</button>
             )}
           </div>
           <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
@@ -80,11 +91,28 @@ export default async function WtbPage({ searchParams }: { searchParams: Promise<
                   </div>
                   {it.note && <div className="mt-1 text-xs text-muted">{it.order_id ? <Link className="relative z-10 underline" href={`/sprzedaz/${it.order_id}`}>{it.note}</Link> : it.note}</div>}
                 </label>
+                {active && (
+                  <details className="mt-1 rounded-md border border-line bg-white px-2 py-1 text-xs">
+                    <summary className="cursor-pointer text-accent">Zmień nazwę / rozmiar</summary>
+                    <div className="mt-1 space-y-1">
+                      <input className="input py-1 text-xs" name="title" form={`wtb-edit-${it.id}`} defaultValue={it.title} aria-label="Nazwa" />
+                      <div className="flex gap-1">
+                        <input className="input py-1 text-xs" name="size" form={`wtb-edit-${it.id}`} defaultValue={it.size ?? ""} placeholder="rozmiar" aria-label="Rozmiar" />
+                        <input className="input py-1 text-xs" name="sku" form={`wtb-edit-${it.id}`} defaultValue={it.sku ?? ""} placeholder="SKU" aria-label="SKU" />
+                      </div>
+                      <button className="btn-secondary w-full px-2 py-1 text-xs" form={`wtb-edit-${it.id}`}>Zapisz</button>
+                    </div>
+                  </details>
+                )}
               </li>
             ))}
           </ul>
         </form>
       )}
+      {/* Formularze edycji pozycji (poza główną listą – pola wskazują je atrybutem form). */}
+      {active && items?.map((it) => (
+        <form key={it.id} id={`wtb-edit-${it.id}`} action={editWtbItem} className="hidden"><input type="hidden" name="id" value={it.id} /><input type="hidden" name="back" value={back} /></form>
+      ))}
     </>
   );
 }

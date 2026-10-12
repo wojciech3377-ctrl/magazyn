@@ -42,7 +42,7 @@ export default async function KatalogPage({ searchParams }: { searchParams: Prom
   async function Products({ sp, page }: { sp: Record<string, string | undefined>; page: number }) {
     let query = supabase
       .from("products")
-      .select("id, title, style_sku, image_url, updated_at, stores:product_store_links(store_id), variants(id, option, position, links:variant_store_links(store_id, base_product_id, base_sku))", { count: "exact" })
+      .select("id, title, style_sku, image_url, updated_at, stores:product_store_links(store_id), variants(id, option, position, links:variant_store_links(store_id, base_product_id, base_sku, shopify_qty))", { count: "exact" })
       .order("title")
       .range((page - 1) * PER_PAGE, page * PER_PAGE - 1);
     if (sp.q) {
@@ -51,11 +51,8 @@ export default async function KatalogPage({ searchParams }: { searchParams: Prom
       query = query.in("id", [...new Set((pids ?? []).map((p) => p.product_id))].slice(0, 100).concat("00000000-0000-0000-0000-000000000000"));
     }
     const { data, count } = await query;
-    const allVariantIds = (data ?? []).flatMap((p) => (p.variants as { id: string }[]).map((v) => v.id));
-    const chunks = Array.from({ length: Math.ceil(allVariantIds.length / 100) }, (_, i) => allVariantIds.slice(i * 100, i * 100 + 100));
-    const stock = (await Promise.all(chunks.map((c) => supabase.from("variant_stock_totals").select("variant_id, in_stock").in("variant_id", c))))
-      .flatMap((r) => r.data ?? []);
-    const counts = new Map(stock.map((s) => [s.variant_id as string, Number(s.in_stock)]));
+    // Stan wyłącznie ze Shopify (suma sklepów; odczyt co 15 min i na żywo przez webhooki).
+    const shopQty = (links: { shopify_qty?: number | null }[]) => links.reduce((n, l) => n + Math.max(0, Number(l.shopify_qty ?? 0)), 0);
     const collator = new Intl.Collator("pl", { numeric: true });
 
     return (
@@ -67,11 +64,11 @@ export default async function KatalogPage({ searchParams }: { searchParams: Prom
         <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={{ q: sp.q }} top />
         <div className="card overflow-x-auto">
           <table className="table">
-            <thead><tr><th>Produkt</th><th>Sklepy</th><th>Rozmiary (sztuk na stanie)</th></tr></thead>
+            <thead><tr><th>Produkt</th><th>Sklepy</th><th>Rozmiary (stan w Shopify)</th></tr></thead>
             <tbody>
               {!data?.length && <tr><td colSpan={3} className="py-10 text-center text-muted">Brak produktów. Uruchom import z Shopify.</td></tr>}
               {data?.map((p) => {
-                const variants = (p.variants as { id: string; option: string; position: number; links: { store_id: string; base_product_id: number | null; base_sku: string | null }[] }[])
+                const variants = (p.variants as { id: string; option: string; position: number; links: { store_id: string; base_product_id: number | null; base_sku: string | null; shopify_qty: number | null }[] }[])
                   .sort((a, b) => collator.compare(a.option, b.option));
                 return (
                   <tr key={p.id}>
@@ -89,7 +86,7 @@ export default async function KatalogPage({ searchParams }: { searchParams: Prom
                           return (
                             <Link key={v.id} href={`/magazyn?q=${encodeURIComponent(p.title)}`} title={missing ? "brak powiązania z Base" : `SKU w Base: ${[...new Set(v.links.map((l) => l.base_sku).filter(Boolean))].join(", ")}`}
                               className={`rounded border px-1.5 py-0.5 text-xs ${missing ? "border-amber-300 bg-amber-50" : "border-line"}`}>
-                              {v.option} <b>{counts.get(v.id) ?? 0}</b>
+                              {v.option} <b>{shopQty(v.links)}</b>
                               {!missing && v.links[0]?.base_sku && <span className="ml-1 text-muted">· {v.links.find((l) => l.base_sku)?.base_sku}</span>}
                             </Link>
                           );

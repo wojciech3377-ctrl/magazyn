@@ -122,3 +122,17 @@ export async function updateWtb(fd: FormData) {
   revalidatePath("/wtb");
   redirect(`${back}${back.includes("?") ? "&" : "?"}${error ? "blad" : "ok"}=${encodeURIComponent(msg)}`);
 }
+
+/** Zmiana nazwy, rozmiaru albo SKU pozycji (to trafia na grafikę). */
+export async function editWtbItem(fd: FormData) {
+  const { supabase } = await requireProfile();
+  const id = String(fd.get("id") ?? "");
+  const back = String(fd.get("back") ?? "/wtb");
+  const title = String(fd.get("title") ?? "").trim().slice(0, 200);
+  if (!title) redirect(`${back}${back.includes("?") ? "&" : "?"}blad=${encodeURIComponent("Nazwa nie może być pusta.")}`);
+  const { error } = await supabase.from("wtb_items").update({
+    title, size: String(fd.get("size") ?? "").trim().slice(0, 40) || null, sku: String(fd.get("sku") ?? "").trim().slice(0, 60) || null,
+  }).eq("id", id);
+  revalidatePath("/wtb");
+  redirect(`${back}${back.includes("?") ? "&" : "?"}${error ? "blad" : "ok"}=${encodeURIComponent(error ? errorMessage(error) : "Zapisano zmiany pozycji.")}`);
+}

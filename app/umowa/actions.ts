@@ -12,17 +12,22 @@ async function linkActive(key: string) {
 }
 
 /** Wyszukiwarka modeli z katalogu dla klienta z ogólnego linku (tylko nazwa, zdjęcie i rozmiary). */
-export async function searchCatalogPublic(key: string, q: string): Promise<CatalogHit[]> {
+export async function searchCatalogPublic(key: string, q: string, storeId?: string): Promise<CatalogHit[]> {
   const db = await linkActive(key);
   const text = q.trim().replace(/[,()*%\\]/g, " ").trim().slice(0, 60);
   if (!db || text.length < 2) return [];
+  // Tylko produkty wybranego sklepu.
+  const inStore = !!storeId && /^[0-9a-f-]{36}$/.test(storeId);
   const words = text.split(/\s+/).filter(Boolean).slice(0, 4);
-  let query = db.from("products").select("id, title, style_sku, image_url, variants(id, option, position)").limit(8);
+  let query = db.from("products").select("id, title, style_sku, image_url, variants(id, option, position), links:product_store_links!inner(store_id)").limit(8);
+  if (inStore) query = query.eq("links.store_id", storeId!);
   for (const w of words) query = query.ilike("title", `%${w}%`);
   const { data } = await query;
   let rows = data ?? [];
   if (!rows.length) {
-    const { data: bySku } = await db.from("products").select("id, title, style_sku, image_url, variants(id, option, position)").ilike("style_sku", `%${text}%`).limit(8);
+    let q2 = db.from("products").select("id, title, style_sku, image_url, variants(id, option, position), links:product_store_links!inner(store_id)").ilike("style_sku", `%${text}%`).limit(8);
+    if (inStore) q2 = q2.eq("links.store_id", storeId!);
+    const { data: bySku } = await q2;
     rows = bySku ?? [];
   }
   const collator = new Intl.Collator("pl", { numeric: true });

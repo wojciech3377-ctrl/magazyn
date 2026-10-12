@@ -18,6 +18,7 @@ export function ShipRequestForm({ units, address, fee }: { units: U[]; address: 
   const [label, setLabel] = useState<{ path: string; name: string } | null>(null);
   const [upload, setUpload] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null });
   const selectable = units.filter((u) => u.status === "in_stock");
+  const [open, setOpen] = useState(false);
 
   async function onFile(file: File | undefined) {
     setLabel(null);
@@ -40,7 +41,7 @@ export function ShipRequestForm({ units, address, fee }: { units: U[]; address: 
             {!units.length && <tr><td colSpan={6} className="py-6 text-center text-muted">Nie masz teraz rzeczy na stanie.</td></tr>}
             {units.map((u) => (
               <tr key={u.id}>
-                <td>{u.status === "in_stock" && <input type="checkbox" name="unit" value={u.id} className="h-4 w-4" checked={picked.has(u.id)}
+                <td>{open && u.status === "in_stock" && <input type="checkbox" name="unit" value={u.id} className="h-4 w-4" checked={picked.has(u.id)}
                   onChange={(e) => { const n = new Set(picked); if (e.target.checked) n.add(u.id); else n.delete(u.id); setPicked(n); }} aria-label={`Wybierz ${u.title}`} />}</td>
                 <td>{u.title} · <b>{u.option}</b></td>
                 <td className="font-mono text-xs">{u.code}</td>
@@ -53,10 +54,14 @@ export function ShipRequestForm({ units, address, fee }: { units: U[]; address: 
         </table>
       </div>
 
-      {selectable.length > 0 && (
+      {selectable.length > 0 && !open && (
+        <button type="button" className="btn" onClick={() => setOpen(true)}>Zleć wysyłkę do siebie</button>
+      )}
+      {selectable.length > 0 && open && (
         <div className="card space-y-3 p-4">
           <div className="flex flex-wrap items-center gap-3">
             <h3 className="font-medium">Zleć wysyłkę do siebie</h3>
+            <button type="button" className="text-sm text-muted hover:underline" onClick={() => setOpen(false)}>zwiń</button>
             <button type="button" className="text-sm text-accent hover:underline" onClick={() => setPicked(new Set(selectable.map((u) => u.id)))}>zaznacz wszystkie</button>
             <span className="text-sm text-muted">zaznaczono: {picked.size}</span>
           </div>

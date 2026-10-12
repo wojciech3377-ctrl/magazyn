@@ -5,6 +5,8 @@ import { dateTime, money } from "@/lib/labels";
 import { Notice, PageHeader } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
 import { retryPosBase } from "../actions";
+import { ReceiptView } from "@/components/ReceiptView";
+import { getCompany } from "@/lib/contracts/settings";
 
 const PAYMENT: Record<string, string> = { card: "karta", cash: "gotówka", blik: "BLIK", transfer: "przelew", other: "inna" };
 
@@ -14,11 +16,12 @@ export default async function PosOrderPage({ params, searchParams }: { params: P
   const { supabase } = await requireProfile();
   const { data: o } = await supabase.from("pos_orders").select("*, store:stores(name)").eq("id", id).maybeSingle();
   if (!o) notFound();
-  const { data: receipt } = await supabase.from("receipts").select("number, issued_at, source").eq("pos_order_id", id).order("issued_at", { ascending: false }).limit(1).maybeSingle();
+  const { data: receipt } = await supabase.from("receipts").select("number, issued_at, source, items, base_receipt_id").eq("pos_order_id", id).order("issued_at", { ascending: false }).limit(1).maybeSingle();
+  const company = await getCompany(supabase);
   const { data: invoice } = await supabase.from("invoices").select("id, number").eq("pos_order_id", id).not("status", "in", "(rejected,cancelled)").limit(1).maybeSingle();
   const { data: items } = await supabase
     .from("pos_order_items")
-    .select("id, price, status, unit:units(id, code, identifier, variant:variants(option, product:products(title)))")
+    .select("id, price, status, unit:units(id, code, identifier, purchase_form, variant:variants(option, product:products(title)))")
     .eq("order_id", id);
 
   return (
@@ -55,6 +58,21 @@ export default async function PosOrderPage({ params, searchParams }: { params: P
             )}
           </Notice>
         )}
+      </div>
+      <div className="mb-5">
+        <ReceiptView
+          company={{ name: company.name, street: company.street, city: company.city, nip: company.nip }}
+          date={dateTime(receipt?.issued_at ?? o.created_at)}
+          number={receipt?.number ?? o.code}
+          transaction={receipt?.base_receipt_id ? String(receipt.base_receipt_id) : o.code}
+          title={receipt ? "PARAGON FISKALNY" : "PODGLĄD (paragon jeszcze nie wydrukowany)"}
+          lines={((receipt?.items as { name: string; price_brutto: number; tax_rate: number; quantity?: number }[] | null) ?? []).length
+            ? (receipt!.items as { name: string; price_brutto: number; tax_rate: number; quantity?: number }[]).map((r) => ({ name: r.name, qty: Number(r.quantity ?? 1), price: Number(r.price_brutto), rate: Number(r.tax_rate) }))
+            : (items ?? []).filter((i) => i.status !== "returned").map((i) => {
+                const u = i.unit as unknown as { purchase_form: string; variant: { option: string; product: { title: string } } };
+                return { name: `${u.variant.product.title} ${u.variant.option}`, qty: 1, price: Number(i.price), rate: u.purchase_form === "vat_23" ? 23 : 0 };
+              })}
+        />
       </div>
       <div className="card overflow-x-auto">
         <table className="table">

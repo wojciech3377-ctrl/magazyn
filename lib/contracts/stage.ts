@@ -4,7 +4,7 @@
  */
 export type ContractLite = {
   id: string; status: string; template: string | null; paid_at: string | null; source?: string | null;
-  number?: number | null; doc_number?: string | null; counterparty?: string | null; amount?: number | null; type?: string | null;
+  number?: number | null; doc_number?: string | null; counterparty?: string | null; amount?: number | null; type?: string | null; currency?: string | null;
 };
 
 export type ContractStage = "sign" | "approve" | "offer" | "pay" | "done" | "dead";
@@ -33,4 +33,4 @@ export const isSettled = (s: ContractStage | null) => s === "done" || s === "pay
 /** Przycisk „Dołącz umowę” (brak umowy) – na czerwono. */
 export const MISSING_BTN = "inline-flex items-center justify-center whitespace-nowrap rounded-md border border-bad/40 bg-rose-50 px-2.5 py-1 text-xs font-medium text-bad hover:bg-rose-100";
 
-export const CONTRACT_LITE_FIELDS = "id, status, template, paid_at, source, number, doc_number, counterparty, amount, type";
+export const CONTRACT_LITE_FIELDS = "id, status, template, paid_at, source, number, doc_number, counterparty, amount, type, currency";

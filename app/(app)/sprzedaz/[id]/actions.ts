@@ -409,6 +409,8 @@ export async function issueReceipt(_: ReceiptState, fd: FormData): Promise<Recei
   try {
     const receiptId = await addReceipt(Number(sale.base_order_id));
     await db.from("orders").update({ receipt_id: receiptId }).eq("id", order.id);
+    // Paragon wystawiony – zarezerwowane sztuki zamówienia stają się sprzedane.
+    await db.rpc("settle_order_units").then(() => null, () => null);
     revalidatePath(`/sprzedaz/${order.id}`);
     revalidatePath("/sprzedaz");
     return { ok: `Paragon wysłany do drukarki (nr ${receiptId}).` };

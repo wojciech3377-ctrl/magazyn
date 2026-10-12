@@ -18,6 +18,7 @@ export default async function GeneralContractPage({ params }: { params: Promise<
   if (!cfg?.enabled || cfg.key !== key) {
     return <PublicShell company={company.name}><div className="card mx-auto max-w-lg p-6">Ten link jest nieaktywny. Skontaktuj się z nami: {company.email}</div></PublicShell>;
   }
+  const { data: stores } = await db.from("stores").select("id, name").order("name");
   return (
     <PublicShell company={company.name}>
       <h1 className="h1 mb-3">Umowa kupna</h1>
@@ -30,6 +31,7 @@ export default async function GeneralContractPage({ params }: { params: Promise<
         paymentDays={company.payment_days ?? 7}
         buyerSignature={buyerSignature}
         searchCatalog={searchCatalogPublic.bind(null, key)}
+        stores={(stores ?? []).map((st) => ({ id: st.id as string, name: st.name as string }))}
         items={[]}
       />
     </PublicShell>

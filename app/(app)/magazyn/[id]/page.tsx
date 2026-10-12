@@ -13,11 +13,11 @@ import { changeStatus, deleteUnit, updateUnit } from "../actions";
 const NEXT_STATUS: Record<string, { to: string; label: string; danger?: boolean }[]> = {
   in_transit: [{ to: "in_stock", label: "Przyjmij na stan" }],
   in_stock: [
-    { to: "reserved", label: "Zarezerwuj" },
-    { to: "shipped", label: "Wydaj poza sklepem (−1 w Base)" },
+    { to: "reserved", label: "Zarezerwuj (−1 w Shopify)" },
+    { to: "out", label: "Wydaj poza sklepem (przedmiot się usunie, a umowa doda się do niewykorzystanych)", danger: true },
     { to: "in_transit", label: "Cofnij do „w drodze”" },
   ],
-  reserved: [{ to: "in_stock", label: "Zdejmij rezerwację" }, { to: "shipped", label: "Wydaj" }],
+  reserved: [{ to: "in_stock", label: "Zdejmij rezerwację" }, { to: "out", label: "Wydaj poza sklepem (przedmiot się usunie, a umowa doda się do niewykorzystanych)", danger: true }],
   sold: [{ to: "shipped", label: "Oznacz jako wysłaną" }, { to: "return_to_stock", label: "Zwrot – wraca na stan" }, { to: "returned", label: "Zwrot – do sprawdzenia" }],
   shipped: [{ to: "return_to_stock", label: "Zwrot – wraca na stan" }, { to: "returned", label: "Zwrot – do sprawdzenia" }],
   returned: [{ to: "in_stock", label: "Przywróć na stan" }],

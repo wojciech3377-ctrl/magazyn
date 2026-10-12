@@ -1,12 +1,13 @@
 import Link from "next/link";
 import { requireProfile } from "@/lib/auth";
 import { loadJpkLines, sortBy, type DocKind, type JpkSort } from "@/lib/jpk";
-import { attachContractForPiece, fetchMissingReceipts } from "./actions";
+import { attachContractForPiece, deletePosOrder, fetchMissingReceipts } from "./actions";
 import { SubmitButton } from "@/components/SubmitButton";
 import { dateOnly, money } from "@/lib/labels";
 import { monthLabel, monthRange, previousMonthKey, warsawMidnight } from "@/lib/month";
 import { Notice, Pill } from "@/components/ui";
 import { SelectAllNamed } from "@/components/SelectAll";
+import { ConfirmSubmit } from "@/components/ConfirmSubmit";
 import { errorMessage } from "@/lib/errors";
 import { KSEF_STATUS } from "@/lib/invoices/labels";
 import { isSettled, MISSING_BTN, STAGE_TEXT } from "@/lib/contracts/stage";
@@ -117,6 +118,7 @@ export async function Jpk({ sp }: { sp: Record<string, string | undefined> }) {
       <form id="jpk-umowa" action={attachContractForPiece}><input type="hidden" name="back" value={`/sprzedaz?${qs}`} /></form>
       <form id="jpk" action="/api/jpk" method="post">
         <input type="hidden" name="okres" value={custom ? `${fromDay}_${toDay}` : month.key} />
+        <input type="hidden" name="back" value={`/sprzedaz?${qs}`} />
         <div className="sticky top-0 z-20 mb-2 flex flex-wrap items-center gap-3 border-b border-line bg-white/95 py-2 text-sm backdrop-blur">
           <label className="flex items-center gap-2"><SelectAllNamed name="l" /> zaznacz wszystkie ({lines.length})</label>
           <span className="text-muted">{range.label} · razem {money(total)}</span>
@@ -164,7 +166,13 @@ export async function Jpk({ sp }: { sp: Record<string, string | undefined> }) {
                       {l.saleNote && <span className="font-semibold text-bad">{l.saleNote} </span>}
                       {foreign && <span className="font-medium">{l.currency === "EUR" ? "EURO" : l.currency}</span>}
                     </td>
-                    <td className="whitespace-nowrap text-xs">{l.orderHref ? <Link className="text-accent hover:underline" href={l.orderHref}>{l.orderLabel}</Link> : l.orderLabel}</td>
+                    <td className="whitespace-nowrap text-xs">
+                      {l.orderHref ? <Link className="text-accent hover:underline" href={l.orderHref}>{l.orderLabel}</Link> : l.orderLabel}
+                      {profile.role === "admin" && l.source === "pos" && l.orderHref?.startsWith("/kasa/") && (
+                        <ConfirmSubmit formAction={deletePosOrder} name="id" value={l.orderHref.slice(6)} className="ml-2 text-bad hover:underline"
+                          message={`Usunąć sprzedaż stacjonarną ${l.orderLabel}? Sztuki wrócą na stan, a sprzedaż zniknie z JPK.`}>usuń</ConfirmSubmit>
+                      )}
+                    </td>
                   </tr>
                 );
               })}

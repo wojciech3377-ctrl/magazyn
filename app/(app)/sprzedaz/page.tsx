@@ -3,12 +3,12 @@ import { requireProfile } from "@/lib/auth";
 import { dateTime, money, SALE_STATUS } from "@/lib/labels";
 import { Notice, PageHeader, Pagination, Pill } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
-import { attachContractForPiece, pullOrdersNow } from "./actions";
+import { attachContractForPiece, deletePosOrder, pullOrdersNow } from "./actions";
+import { ConfirmSubmit } from "@/components/ConfirmSubmit";
 import { matchPieces, type Piece } from "@/lib/orders/pieces";
 import { SwapForm } from "./SwapForm";
 import { WtbButton } from "@/components/WtbButton";
 import { ReceiptButton } from "@/components/ReceiptButton";
-import { SelectAllNamed } from "@/components/SelectAll";
 import { Invoices, Jpk } from "./Jpk";
 import { OrderStatusPill, SALE_SELECT, SaleContract, UnitCell, type SaleUnit } from "./SaleBits";
 import { CONTRACT_LITE_FIELDS, contractStage, isSettled, MISSING_BTN, type ContractLite } from "@/lib/contracts/stage";
@@ -96,9 +96,12 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
       <PageHeader
         title="Sprzedaż"
         sub={<>Zamówienia ze sklepów Shopify. Ostatni odczyt: {lastShop ? dateTime(lastShop.created_at) : "jeszcze nie było"}{lastShip ? <> · przesyłki: {dateTime(lastShip.created_at)}</> : null}.</>}
-        actions={profile.role === "admin" ? (
-          <form action={pullOrdersNow}><SubmitButton className="btn-secondary" pendingText="Pobieram…">Pobierz zamówienia teraz</SubmitButton></form>
-        ) : null}
+        actions={
+          <>
+            <Link className="btn" href="/druk/zamowienia" target="_blank">Drukuj nowe zamówienia</Link>
+            {profile.role === "admin" && <form action={pullOrdersNow}><SubmitButton className="btn-secondary" pendingText="Pobieram…">Pobierz zamówienia teraz</SubmitButton></form>}
+          </>
+        }
       />
       <Tabs active="orders" />
       <Flash sp={sp} />
@@ -125,18 +128,13 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
         <button className="btn">Szukaj</button>
       </form>
 
-      {/* Zaznaczone zamówienia → paczka umów (ZIP). Pola wyboru są w wierszach (atrybut form). */}
-      <form id="umowy-paczka" action="/api/umowy/paczka" method="get" className="mb-2 flex flex-wrap items-center gap-3 text-sm">
-        <label className="flex items-center gap-2"><SelectAllNamed name="zamowienia" /> zaznacz wszystkie</label>
-        <button className="btn-secondary px-3 py-1.5 text-sm">Pobierz umowy zaznaczonych (ZIP)</button>
-      </form>
       <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={{ q: sp.q, status: tab || undefined }} top />
       <div className="card overflow-x-auto lg:overflow-visible">
         <table className="table">
-          <thead><tr><th className="w-8" /><th>Data</th><th>Zamówienie</th><th>Produkty</th><th>Wysyłka</th><th>Płatność</th><th>Status</th><th /></tr></thead>
+          <thead><tr><th>Data</th><th>Zamówienie</th><th>Produkty</th><th>Wysyłka</th><th>Płatność</th><th>Status</th><th /></tr></thead>
           <tbody>
             {!orders?.length && (
-              <tr><td colSpan={8} className="py-10 text-center text-muted">{tab || q ? "Brak zamówień." : "Zamówienia pojawią się po pierwszym odczycie ze Shopify (co 5 minut albo przyciskiem „Pobierz zamówienia teraz”)."}</td></tr>
+              <tr><td colSpan={7} className="py-10 text-center text-muted">{tab || q ? "Brak zamówień." : "Zamówienia pojawią się po pierwszym odczycie ze Shopify (co 5 minut albo przyciskiem „Pobierz zamówienia teraz”)."}</td></tr>
             )}
             {orders?.map((o) => {
               const lines = ((o.line_items ?? []) as LineItem[]).map((l, i) => ({ ...l, i })).filter((l) => !l.service);
@@ -148,7 +146,6 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
               const status = o.status as OrderStatus;
               return (
                 <tr key={o.id} className={`group relative cursor-pointer transition-colors ${status === "problem" ? "bg-rose-50/60 hover:bg-rose-100/70" : "hover:bg-sky-50"}`}>
-                  <td><input type="checkbox" name="zamowienia" value={o.id} form="umowy-paczka" className="relative z-10 h-4 w-4" aria-label={`Zaznacz ${o.name}`} /></td>
                   <td className="whitespace-nowrap text-muted">{dateTime(o.ordered_at)}</td>
                   <td className="whitespace-nowrap">
                     {/* Cały wiersz prowadzi do zamówienia (link rozciągnięty na wiersz); pozostałe linki są nad nim. */}
@@ -338,7 +335,7 @@ function Tabs({ active }: { active: "orders" | "lines" | "pos" | "faktury" | "jp
 const PAYMENT: Record<string, string> = { card: "karta", cash: "gotówka", blik: "BLIK", transfer: "przelew", other: "inna" };
 
 async function PosList({ page, q }: { page: number; q: string }) {
-  const { supabase } = await requireProfile();
+  const { supabase, profile } = await requireProfile();
   let query = supabase
     .from("pos_orders")
     .select("id, code, total, payment_method, customer, created_at, base_sync_status, store:stores(name), items:pos_order_items(price, status, unit:units(id, code, identifier, owner_type, contract_id, variant:variants(option, product:products(title))))", { count: "exact" })
@@ -369,7 +366,7 @@ async function PosList({ page, q }: { page: number; q: string }) {
       <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={{ widok: "stacjonarna", q: q || undefined }} top />
       <div className="card overflow-x-auto">
         <table className="table">
-          <thead><tr><th>Data</th><th>Numer</th><th>Przedmioty</th><th>Sklep</th><th>Płatność</th><th className="text-right">Kwota</th><th>Stan</th></tr></thead>
+          <thead><tr><th>Data</th><th>Numer</th><th>Przedmioty</th><th>Sklep</th><th>Płatność</th><th className="text-right">Kwota</th><th>Stan</th>{profile.role === "admin" && <th />}</tr></thead>
           <tbody>
             {!data?.length && <tr><td colSpan={7} className="py-10 text-center text-muted">{q ? "Nic nie znaleziono." : "Brak sprzedaży stacjonarnej."}</td></tr>}
             {data?.map((o) => (
@@ -390,6 +387,15 @@ async function PosList({ page, q }: { page: number; q: string }) {
                 <td>{PAYMENT[o.payment_method] ?? o.payment_method}</td>
                 <td className="text-right tabular-nums">{money(o.total)}</td>
                 <td><Pill tone={o.base_sync_status === "ok" ? "green" : "red"}>{o.base_sync_status === "ok" ? "ok" : "do sprawdzenia"}</Pill></td>
+                {profile.role === "admin" && (
+                  <td>
+                    <form action={deletePosOrder}>
+                      <input type="hidden" name="id" value={o.id} />
+                      <input type="hidden" name="back" value={`/sprzedaz?widok=stacjonarna${q ? `&q=${encodeURIComponent(q)}` : ""}`} />
+                      <ConfirmSubmit className="text-sm text-bad hover:underline" message={`Usunąć sprzedaż ${o.code}? Sztuki wrócą na stan, a sprzedaż zniknie z JPK.`}>Usuń</ConfirmSubmit>
+                    </form>
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>

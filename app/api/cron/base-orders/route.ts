@@ -41,6 +41,12 @@ export async function GET(req: NextRequest) {
   const base = await run(db, "base-orders", () => syncBaseOrders(db));
   const shop = await run(db, "shopify-orders", () => syncShopifyOrders(db));
   const receipts = await run(db, "base-receipts", () => syncBaseReceipts(db));
+  // Rezerwacje zamówień: paragon albo faktura → sztuka sprzedana (dziennik tylko, gdy coś się zmieniło).
+  {
+    const { data: settled, error } = await db.rpc("settle_order_units");
+    if (error && !/settle_order_units/.test(error.message)) await db.from("sync_log").insert({ job: "settle", ok: false, message: error.message });
+    else if (settled) await db.from("sync_log").insert({ job: "settle", ok: true, message: JSON.stringify({ sold: settled }) });
+  }
   // Numery umów ze skanów: w dzienniku tylko, gdy coś sprawdzono albo był błąd.
   try {
     const r = await backfillContractNumbers(db);
