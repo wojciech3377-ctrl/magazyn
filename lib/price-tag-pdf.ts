@@ -92,7 +92,7 @@ function roundRect(page: PDFPage, x: number, y: number, w: number, h: number, r:
 
 /**
  * Metka 57 × 32 mm: czarny pasek z nazwą sklepu (Sneakers Depot / Telefoniki), nazwa produktu, cena z ramką rozmiaru,
- * informacja Omnibus i kod kreskowy sztuki z numerem pod spodem.
+ * informacja Omnibus, IMEI telefonu (gdy jest) i kod kreskowy sztuki z numerem pod spodem.
  */
 export async function renderPriceTags(tags: PriceTag[]) {
   const doc = await PDFDocument.create();
@@ -111,18 +111,9 @@ export async function renderPriceTags(tags: PriceTag[]) {
     const band = 3.9 * MM;
     page.drawRectangle({ x: 0, y: H - band, width: W, height: band, color: rgb(0, 0, 0) });
     const store = (t.storeName || "Sklep").toUpperCase();
-    const tagText = t.used ? "UŻYWANE" : "";
-    const tagW = tagText ? spaced(null, tagText, 0, 0, 4.6, bold, 0.5) : 0;
     let ss = 6.2;
-    while (ss > 4.5 && spaced(null, store, 0, 0, ss, bold, ss * 0.16) > inner - tagW - (tagText ? 4 : 0)) ss -= 0.2;
-    const bandY = H - band + (band - ss * 0.72) / 2;
-    spaced(page, store, PAD_X, bandY, ss, bold, ss * 0.16, white);
-    if (tagText) {
-      const pw = tagW + 4, ph = 6.2, px = W - PAD_X - pw, py = H - band + (band - ph) / 2;
-      roundRect(page, px, py, pw, ph, 1.6, { border: 0.6 });
-      page.drawRectangle({ x: px + 0.3, y: py + 0.3, width: pw - 0.6, height: ph - 0.6, color: white });
-      spaced(page, tagText, px + 2, py + (ph - 4.6 * 0.72) / 2, 4.6, bold, 0.5);
-    }
+    while (ss > 4.5 && spaced(null, store, 0, 0, ss, bold, ss * 0.16) > inner) ss -= 0.2;
+    spaced(page, store, PAD_X, H - band + (band - ss * 0.72) / 2, ss, bold, ss * 0.16, white);
 
     // Nazwa produktu (do 2 linii).
     let y = H - band - 1.2;
@@ -172,6 +163,16 @@ export async function renderPriceTags(tags: PriceTag[]) {
     const lsz = fitSize(regular, low, 5.2, inner, 4.2);
     y -= lsz + 1.3;
     page.drawText(low, { x: PAD_X, y, size: lsz, font: regular });
+
+    // IMEI telefonu (Telefoniki) – numer sztuki zapisany przy przyjęciu.
+    const imei = (t.identifier ?? "").trim();
+    if (imei) {
+      const label = /^\d{15}$/.test(imei) ? "IMEI " : "S/N ";
+      const isz = fitSize(bold, label + imei, 6.4, inner, 4.6);
+      y -= isz + 1.6;
+      page.drawText(label, { x: PAD_X, y, size: isz, font: regular });
+      page.drawText(imei, { x: PAD_X + regular.widthOfTextAtSize(label, isz), y, size: isz, font: bold });
+    }
 
     // Dół: kod kreskowy sztuki i jego numer pod spodem.
     const codeSize = 5.6;

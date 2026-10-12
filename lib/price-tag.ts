@@ -22,6 +22,8 @@ export type Range = { min: number; max: number } | null;
 export type PriceTag = {
   unitId: string; code: string; title: string; option: string; sku: string; skuIsBase: boolean;
   price: Range; compareAt: Range; promo: boolean; lowest30: Range; lowestSource: string; storeName: string; used: boolean;
+  /** IMEI / numer seryjny sztuki (telefony) – drukowany na metce. */
+  identifier?: string | null;
 };
 
 /** Używane: produkt ma w Shopify tag „reused” (w sklepie sztuki, a gdy go tam nie ma – w którymkolwiek). */
@@ -111,9 +113,9 @@ function mfNumber(m: { type: string; value: string }): number | null {
 
 export async function priceTags(db: SupabaseClient, unitIds: string[]) {
   const { data: units } = await db.from("units")
-    .select("id, code, variant_id, variant:variants(option, product_id, product:products(title, style_sku)), location:locations(store_id, store:stores(name, code, shopify_domain))")
+    .select("id, code, identifier, variant_id, variant:variants(option, product_id, product:products(title, style_sku)), location:locations(store_id, store:stores(name, code, shopify_domain))")
     .in("id", unitIds.slice(0, 200)).order("number");
-  type U = { id: string; code: string; variant_id: string; variant: { option: string; product_id: string; product: { title: string; style_sku: string | null } }; location: { store_id: string; store: { name: string; code: string; shopify_domain: string | null } } };
+  type U = { id: string; code: string; identifier: string | null; variant_id: string; variant: { option: string; product_id: string; product: { title: string; style_sku: string | null } }; location: { store_id: string; store: { name: string; code: string; shopify_domain: string | null } } };
   const list = (units ?? []) as unknown as U[];
   const productIds = [...new Set(list.map((u) => u.variant.product_id))];
   const { data: variants } = productIds.length ? await db.from("variants").select("id, product_id").in("product_id", productIds) : { data: [] };
@@ -197,7 +199,7 @@ export async function priceTags(db: SupabaseClient, unitIds: string[]) {
       return r.value ?? Number(l.price);
     });
     return {
-      unitId: u.id, code: u.code, title: u.variant.product.title, option: u.variant.option, sku: u.code, skuIsBase: false,
+      unitId: u.id, code: u.code, identifier: u.identifier, title: u.variant.product.title, option: u.variant.option, sku: u.code, skuIsBase: false,
       price, compareAt, promo: promoRows.length > 0, lowest30: range(lows), lowestSource, storeName: u.location.store.name,
       omnibusFields: o?.found ?? [], historyComplete: complete,
       used: isReused((plinks ?? []).filter((p) => p.product_id === u.variant.product_id) as { store_id: string; tags?: string[] | null }[], storeId),
