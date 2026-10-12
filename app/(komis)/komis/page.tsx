@@ -126,7 +126,7 @@ export default async function KomisPage({ searchParams }: { searchParams: Promis
       <section className="mb-6">
         <h2 className="h2 mb-2">Zlecenia wysyłki do Ciebie</h2>
         <div className="card overflow-x-auto">
-          <table className="table">
+          <table className="table mtable mtable-flow">
             <thead><tr><th>Data</th><th>Rzeczy</th><th>Sposób</th><th>Status</th><th /></tr></thead>
             <tbody>
               {!shipments?.length && <tr><td colSpan={5} className="py-6 text-center text-muted">Brak zleceń.</td></tr>}
@@ -181,7 +181,7 @@ export default async function KomisPage({ searchParams }: { searchParams: Promis
         <section>
           <h2 className="h2 mb-2">Wypłaty</h2>
           <div className="card overflow-x-auto">
-            <table className="table">
+            <table className="table mtable mtable-flow">
               <thead><tr><th>Data</th><th className="text-right">Kwota</th><th>Opis</th></tr></thead>
               <tbody>
                 {bal.payouts.map((p) => (

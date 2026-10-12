@@ -9,6 +9,15 @@ import { SyncPanel } from "./SyncPanel";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getFiscalSettings, PTU_LETTERS, ptuLabel, type FiscalSettings } from "@/lib/fiscal/jobs";
 import { money } from "@/lib/labels";
+import { FilterField, ListToolbar } from "@/components/ListToolbar";
+import { activeFilters, filterChips } from "@/lib/list-params";
+
+const CATALOG_SORTS: Record<string, { label: string; column: string; asc: boolean }> = {
+  nazwa: { label: "Nazwa A–Z", column: "title", asc: true },
+  "nazwa-z": { label: "Nazwa Z–A", column: "title", asc: false },
+  zmienione: { label: "Ostatnio zmienione", column: "updated_at", asc: false },
+  nowe: { label: "Ostatnio dodane", column: "created_at", asc: false },
+};
 
 const PER_PAGE = 50;
 
@@ -31,7 +40,7 @@ export default async function KatalogPage({ searchParams }: { searchParams: Prom
       {sp.ok && <div className="mb-4"><Notice tone="ok">{sp.ok}</Notice></div>}
       {sp.blad && <div className="mb-4"><Notice tone="error">{sp.blad}</Notice></div>}
 
-      <nav className="segmented mb-5" aria-label="Katalog">
+      <nav className="segmented mb-5 max-w-full overflow-x-auto whitespace-nowrap" aria-label="Katalog">
         <Link href="/katalog" aria-current={tab === "produkty" ? "page" : undefined}>Produkty ze Shopify</Link>
         <Link href="/katalog?widok=wlasne" aria-current={tab === "wlasne" ? "page" : undefined}>Własne produkty ({own.count ?? 0})</Link>
       </nav>
@@ -41,30 +50,67 @@ export default async function KatalogPage({ searchParams }: { searchParams: Prom
   );
 
   async function Products({ sp, page }: { sp: Record<string, string | undefined>; page: number }) {
+    const sort = CATALOG_SORTS[sp.sort ?? ""] ? sp.sort! : "nazwa";
+    const inner = sp.sklep || sp.status || sp.uzywane;
     let query = supabase
       .from("products")
-      .select("id, title, style_sku, image_url, updated_at, stores:product_store_links(store_id, status, tags), variants(id, option, position, links:variant_store_links(store_id, sku, shopify_qty))", { count: "exact" })
-      .order("title")
+      .select(`id, title, style_sku, image_url, updated_at, stores:product_store_links${inner ? "!inner" : ""}(store_id, status, tags), variants(id, option, position, links:variant_store_links(store_id, sku, shopify_qty))`, { count: "exact" })
+      .order(CATALOG_SORTS[sort].column, { ascending: CATALOG_SORTS[sort].asc })
       .range((page - 1) * PER_PAGE, page * PER_PAGE - 1);
+    if (sp.sklep) query = query.eq("stores.store_id", sp.sklep);
+    if (sp.status === "robocza") query = query.eq("stores.status", "DRAFT");
+    if (sp.status === "aktywny") query = query.eq("stores.status", "ACTIVE");
+    if (sp.uzywane === "tak") query = query.contains("stores.tags", ["reused"]);
     if (sp.q) {
       const ids = await findVariantIds(supabase, sp.q.replace(/[,()*%\\]/g, " ").trim());
       const { data: pids } = ids.length ? await supabase.from("variants").select("product_id").in("id", ids.slice(0, 150)) : { data: [] };
       query = query.in("id", [...new Set((pids ?? []).map((p) => p.product_id))].slice(0, 100).concat("00000000-0000-0000-0000-000000000000"));
     }
     const { data, count } = await query;
+    const listParams = { q: sp.q, sklep: sp.sklep, status: sp.status, uzywane: sp.uzywane, sort: sp.sort };
     // Stan wyłącznie ze Shopify (suma sklepów; odczyt co 15 min i na żywo przez webhooki).
     const shopQty = (links: { shopify_qty?: number | null }[]) => links.reduce((n, l) => n + Math.max(0, Number(l.shopify_qty ?? 0)), 0);
     const collator = new Intl.Collator("pl", { numeric: true });
 
     return (
       <>
-        <form className="mb-4 flex gap-2" method="get">
-          <input className="input w-80" name="q" defaultValue={sp.q} placeholder="Szukaj: nazwa, SKU, EAN" />
-          <button className="btn">Szukaj</button>
-        </form>
-        <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={{ q: sp.q }} top />
+        <ListToolbar
+          q={sp.q}
+          placeholder="Nazwa, SKU, EAN"
+          sort={{ value: sort, options: Object.entries(CATALOG_SORTS).map(([value, o]) => ({ value, label: o.label })) }}
+          dirParam={null}
+          active={activeFilters(sp, ["sklep", "status", "uzywane"])}
+          resetHref="/katalog"
+          chips={filterChips("/katalog", listParams, {
+            q: (v) => `„${v}”`,
+            sklep: (v) => storeName.get(v),
+            status: (v) => (v === "robocza" ? "wersje robocze" : "aktywne w sklepie"),
+            uzywane: () => "tag reused",
+          })}
+        >
+          <FilterField label="Sklep">
+            <select className="input" name="sklep" defaultValue={sp.sklep ?? ""}>
+              <option value="">Wszystkie sklepy</option>
+              {stores?.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+            </select>
+          </FilterField>
+          <FilterField label="Status w Shopify">
+            <select className="input" name="status" defaultValue={sp.status ?? ""}>
+              <option value="">Wszystkie</option>
+              <option value="aktywny">Aktywne (widoczne w sklepie)</option>
+              <option value="robocza">Wersje robocze</option>
+            </select>
+          </FilterField>
+          <FilterField label="Używane">
+            <select className="input" name="uzywane" defaultValue={sp.uzywane ?? ""}>
+              <option value="">Wszystkie</option>
+              <option value="tak">Tylko z tagiem reused</option>
+            </select>
+          </FilterField>
+        </ListToolbar>
+        <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={listParams} top />
         <div className="card overflow-x-auto">
-          <table className="table">
+          <table className="table mtable mtable-flow">
             <thead><tr><th>Produkt</th><th>Sklepy</th><th>Rozmiary (stan w Shopify)</th></tr></thead>
             <tbody>
               {!data?.length && <tr><td colSpan={3} className="py-10 text-center text-muted">Brak produktów. Uruchom import z Shopify.</td></tr>}
@@ -76,7 +122,7 @@ export default async function KatalogPage({ searchParams }: { searchParams: Prom
                 const reused = links.some((l) => (l.tags ?? []).some((t) => t.toLowerCase() === "reused"));
                 return (
                   <tr key={p.id}>
-                    <td>
+                    <td className="m-full">
                       <div className="flex items-center gap-3">
                         <Thumb src={p.image_url} alt="" />
                         <span>
@@ -85,8 +131,8 @@ export default async function KatalogPage({ searchParams }: { searchParams: Prom
                         </span>
                       </div>
                     </td>
-                    <td className="whitespace-nowrap text-xs">{[...new Set(links.map((s) => storeName.get(s.store_id)))].join(", ")}</td>
-                    <td>
+                    <td className="whitespace-nowrap text-xs max-md:hidden">{[...new Set(links.map((s) => storeName.get(s.store_id)))].join(", ")}</td>
+                    <td className="m-full max-md:pl-[3.25rem]">
                       <div className="flex flex-wrap gap-1">
                         {variants.map((v) => (
                           <Link key={v.id} href={`/magazyn?q=${encodeURIComponent(p.title)}`} title={v.links.map((l) => l.sku).filter(Boolean).join(", ") || undefined}
@@ -102,7 +148,7 @@ export default async function KatalogPage({ searchParams }: { searchParams: Prom
             </tbody>
           </table>
         </div>
-        <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={{ q: sp.q }} />
+        <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={listParams} />
       </>
     );
   }
@@ -141,13 +187,13 @@ async function OwnProducts({ fiscal, edit }: { fiscal: FiscalSettings; edit?: st
     <div className="space-y-5">
       <Form p={editing} />
       <div className="card overflow-x-auto">
-        <table className="table">
+        <table className="table mtable mtable-flow">
           <thead><tr><th>Produkt</th><th>Kod</th><th className="text-right">Cena</th><th>PTU</th><th>Stan</th><th /></tr></thead>
           <tbody>
             {!data?.length && <tr><td colSpan={6} className="py-8 text-center text-muted">Brak własnych produktów. Dodaj pierwszy powyżej albo zaznacz „zapisz jako własny produkt” w Kasie.</td></tr>}
             {data?.map((p) => (
               <tr key={p.id} className={p.active ? "" : "opacity-50"}>
-                <td className="font-medium">{p.name}{!p.active && <span className="ml-2"><Pill>ukryty</Pill></span>}</td>
+                <td className="m-full font-medium">{p.name}{!p.active && <span className="ml-2"><Pill>ukryty</Pill></span>}</td>
                 <td className="font-mono text-xs">{p.code ?? "–"}</td>
                 <td className="text-right tabular-nums">{p.price !== null ? money(p.price) : "–"}</td>
                 <td className="text-sm">{ptuLabel(fiscal, p.ptu)}</td>

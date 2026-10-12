@@ -1,3 +1,4 @@
+import { can } from "@/lib/permissions";
 import { type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { queryUnits } from "@/lib/queries/units";
@@ -15,7 +16,8 @@ export async function GET(req: NextRequest) {
   const db = await createClient();
   const { data: auth } = await db.auth.getUser();
   if (!auth.user) return new Response("unauthorized", { status: 401 });
-  const { data: profile } = await db.from("profiles").select("can_see_prices").eq("id", auth.user.id).single();
+  const { data: profile } = await db.from("profiles").select("can_see_prices, role, permissions, active").eq("id", auth.user.id).single();
+  if (!profile?.active || !can(profile, "magazyn")) return new Response("Brak dostępu do Magazynu.", { status: 403 });
   const p = Object.fromEntries(req.nextUrl.searchParams);
   const rows = [];
   for (let from = 0; ; from += 1000) {

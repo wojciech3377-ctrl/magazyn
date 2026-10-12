@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { SearchInput } from "@/components/SearchInput";
 import { notFound } from "next/navigation";
 import { requireProfile } from "@/lib/auth";
 import { CONTRACT_TYPE, dateOnly, money } from "@/lib/labels";
@@ -109,7 +110,7 @@ export default async function ContractPage({ params, searchParams }: { params: P
               <h2 className="h2">{c.template ? "W magazynie" : "Sztuki na tej umowie"} ({units?.length ?? 0})</h2>
               {c.template && <p className="text-sm text-muted">Sztuki utworzone z tej umowy – ich status (w drodze, na stanie, sprzedana).</p>}
             </div>
-            <table className="table">
+            <table className="table mtable mtable-flow">
               <thead><tr><th>Kod</th><th>Produkt</th><th>Rozmiar</th><th>Status</th><th /></tr></thead>
               <tbody>
                 {!units?.length && <tr><td colSpan={5} className="py-6 text-center text-muted">Brak przypiętych sztuk.</td></tr>}
@@ -135,7 +136,7 @@ export default async function ContractPage({ params, searchParams }: { params: P
             </table>
             {!c.template && <form action={attachUnits} className="flex flex-wrap gap-2 border-t border-line p-4">
               <input type="hidden" name="id" value={c.id} />
-              <input className="input flex-1 font-mono" name="units" placeholder="Dopnij sztuki: kody S000123 lub IMEI" aria-label="Kody sztuk" />
+              <SearchInput noIcon wrapperClassName="flex-1" className="font-mono" type="text" name="units" placeholder="Dopnij sztuki: kody S000123 lub IMEI" aria-label="Kody sztuk" />
               <SubmitButton className="btn-secondary">Dopnij</SubmitButton>
             </form>}
           </section>}
@@ -213,7 +214,7 @@ async function TemplateSection({ c, canSeePrices }: { c: TemplateContract; canSe
           {c.source === "general" && <Pill tone="blue">z ogólnego linku</Pill>}
           {sale && <Pill tone="blue">pod zamówienie {sale.order_ref}</Pill>}
         </div>
-        <table className="table">
+        <table className="table mtable mtable-flow">
           <thead><tr><th>Pozycja</th><th>Rozmiar</th><th className="text-right">Ilość</th>{canSeePrices && <th className="text-right">Cena</th>}</tr></thead>
           <tbody>
             {items.map((i, idx) => (

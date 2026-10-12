@@ -68,7 +68,7 @@ export async function AcceptTab() {
           </div>
           {i.note && <p className="rounded bg-panel p-2 text-sm">{i.note}</p>}
           <div className="overflow-x-auto">
-            <table className="table">
+            <table className="table mtable mtable-flow">
               <thead><tr><th>Rzecz</th><th>Rozmiar</th><th>Rozliczenie</th><th className="text-right">Kwota komisanta</th><th>Decyzja</th><th>Twoja kwota (oferta)</th></tr></thead>
               <tbody>
                 {[...i.items].sort((a, b) => a.position - b.position).filter((x) => x.status === "proposed").map((x) => (
@@ -210,7 +210,7 @@ export async function TransitTab() {
               {i.tracking && <span className="font-mono text-sm">{i.carrier ? `${i.carrier} · ` : ""}{i.tracking}</span>}
             </div>
             <div className="overflow-x-auto">
-              <table className="table">
+              <table className="table mtable mtable-flow">
                 <thead><tr><th>Dotarło</th><th>Rzecz</th><th>Rozmiar</th><th>Rozliczenie</th>{profile.can_see_prices && <th className="text-right">Kwota komisanta</th>}<th>Produkt z katalogu</th></tr></thead>
                 <tbody>
                   {items.map((x) => (

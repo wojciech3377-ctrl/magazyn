@@ -1,5 +1,7 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { requireProfile } from "@/lib/auth";
+import { can } from "@/lib/permissions";
 import { dateTime, money, SALE_STATUS } from "@/lib/labels";
 import { Notice, PageHeader, Pagination, Pill } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
@@ -17,6 +19,8 @@ import { OrderStatusPill, SALE_SELECT, SaleContract, UnitCell, type SaleUnit } f
 import { CONTRACT_LITE_FIELDS, contractStage, isSettled, MISSING_BTN, type ContractLite } from "@/lib/contracts/stage";
 import { ConsignorWaiting, ContractDone, ContractInProgress } from "@/components/ContractBadges";
 import { classifyShipment, ORDER_STATUS, paymentLabel, type Fulfillment, type OrderStatus } from "@/lib/orders/status";
+import { FilterField, ListToolbar } from "@/components/ListToolbar";
+import { activeFilters, filterChips } from "@/lib/list-params";
 import type { LineItem } from "@/lib/sync/shop-orders";
 
 const PER_PAGE = 100;
@@ -34,7 +38,12 @@ const ORDER_TABS: { key: string; label: string }[] = [
 export default async function SprzedazPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const sp = await searchParams;
   const page = Math.max(1, Number(sp.strona ?? 1));
-  if (sp.widok === "stacjonarna") return <PosList page={page} q={sp.q ?? ""} />;
+  // Uprawnienia: zamówienia i sprzedaż stacjonarna – „sprzedaz”, faktury i JPK – „faktury”.
+  const { profile: me } = await requireProfile();
+  const invoicesView = sp.widok === "jpk" || sp.widok === "faktury";
+  if (invoicesView && !can(me, "faktury")) redirect("/sprzedaz");
+  if (!invoicesView && !can(me, "sprzedaz")) redirect("/sprzedaz?widok=faktury");
+  if (sp.widok === "stacjonarna") return <PosList page={page} q={sp.q ?? ""} sp={sp} />;
   if (sp.widok === "linie") return <SaleLines sp={sp} page={page} />;
   if (sp.widok === "jpk" || sp.widok === "faktury") {
     return (
@@ -49,16 +58,23 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
   const { supabase, profile } = await requireProfile();
   const tab = ORDER_TABS.some((t) => t.key === sp.status) ? sp.status ?? "" : "";
 
+  const orderSort = ORDER_SORTS[sp.sort ?? ""] ? sp.sort! : "najnowsze";
   let query = supabase
     .from("orders")
     .select("id, name, ordered_at, receipt_id, customer_name, shipping_method, pickup_point, financial_status, cod, total, outstanding, currency, status, status_detail, line_items, fulfillments, return_status, refunded_amount, refund_pending, refunded_lines, email, phone, shipping_address, note, store:stores(name)", { count: "exact" })
-    .order("ordered_at", { ascending: false })
+    .order(ORDER_SORTS[orderSort].column, { ascending: ORDER_SORTS[orderSort].asc })
     .range((page - 1) * PER_PAGE, page * PER_PAGE - 1);
   if (tab) query = query.eq("status", tab);
+  if (sp.sklep) query = query.eq("store_id", sp.sklep);
+  if (sp.od) query = query.gte("ordered_at", `${sp.od}T00:00:00`);
+  if (sp.do) query = query.lte("ordered_at", `${sp.do}T23:59:59`);
+  if (sp.platnosc === "pobranie") query = query.eq("cod", true);
+  if (sp.platnosc === "oplacone") query = query.eq("financial_status", "PAID");
+  if (sp.platnosc === "nieoplacone") query = query.neq("financial_status", "PAID").eq("cod", false);
   const q = (sp.q ?? "").replace(/[%,()#*]/g, "").trim();
   if (q) query = query.or(`number.ilike.%${q}%,customer_name.ilike.%${q}%,email.ilike.%${q}%`);
 
-  const [{ data: orders, count }, counts, { count: problems }, { data: logs }] = await Promise.all([
+  const [{ data: orders, count }, counts, { count: problems }, { data: logs }, { data: storeList }] = await Promise.all([
     query,
     Promise.all(ORDER_TABS.map((t) => {
       let c = supabase.from("orders").select("id", { count: "exact", head: true });
@@ -68,7 +84,9 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
     // Wysłane, dostarczone, zwrócone i anulowane zamówienia nie są już problemem braku sztuki.
     supabase.from("sales").select("id, order:orders!inner(status)", { count: "exact", head: true }).eq("status", "no_unit").not("order.status", "in", "(shipped,delivered,returned,cancelled)"),
     supabase.from("sync_log").select("job, ok, message, created_at").in("job", ["base-orders", "shopify-orders", "furgonetka"]).order("created_at", { ascending: false }).limit(12),
+    supabase.from("stores").select("id, name").order("name"),
   ]);
+  const listParams = { q: sp.q, status: tab || undefined, sklep: sp.sklep, platnosc: sp.platnosc, od: sp.od, do: sp.do, sort: sp.sort };
   const lastOf = (job: string) => (logs ?? []).find((l) => l.job === job);
   const lastShop = lastOf("shopify-orders");
   const lastShip = lastOf("furgonetka");
@@ -119,7 +137,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
       {lastShip && !lastShip.ok && <div className="mb-4"><Notice tone="error">Odczyt przesyłek z Furgonetki nie udał się: {lastShip.message}</Notice></div>}
       {!!problems && <div className="mb-4"><Notice tone="error">{problems} {problems === 1 ? "linia zamówienia nie ma" : "linii zamówień nie ma"} sztuki na stanie. <Link className="font-medium underline" href="/sprzedaz?widok=linie&status=no_unit">Pokaż {problems === 1 ? "ją" : "je"}</Link> i przypisz sztukę skanem albo wygeneruj umowę.</Notice></div>}
 
-      <nav className="mb-4 flex flex-wrap gap-1 border-b border-line text-sm" aria-label="Status zamówień">
+      <nav className="-mx-4 mb-4 flex gap-1 overflow-x-auto whitespace-nowrap border-b border-line px-4 text-sm sm:mx-0 sm:flex-wrap sm:px-0" aria-label="Status zamówień">
         {ORDER_TABS.map((t, i) => (
           <Link
             key={t.key}
@@ -131,15 +149,44 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
         ))}
       </nav>
 
-      <form className="mb-4 flex flex-wrap gap-2" method="get">
-        {tab && <input type="hidden" name="status" value={tab} />}
-        <input className="input w-72" name="q" defaultValue={sp.q} placeholder="Numer zamówienia, klient albo e-mail" />
-        <button className="btn">Szukaj</button>
-      </form>
+      <ListToolbar
+        q={sp.q}
+        placeholder="Numer zamówienia, klient albo e-mail"
+        hidden={{ status: tab || undefined }}
+        sort={{ value: orderSort, options: Object.entries(ORDER_SORTS).map(([value, o]) => ({ value, label: o.label })) }}
+        dirParam={null}
+        active={activeFilters(sp, ["sklep", "platnosc", "od", "do"])}
+        resetHref={`/sprzedaz${tab ? `?status=${tab}` : ""}`}
+        chips={filterChips("/sprzedaz", listParams, {
+          q: (v) => `„${v}”`,
+          sklep: (v) => storeList?.find((x) => x.id === v)?.name,
+          platnosc: (v) => ({ pobranie: "za pobraniem", oplacone: "opłacone", nieoplacone: "nieopłacone" })[v],
+          od: (v) => `od ${v}`,
+          do: (v) => `do ${v}`,
+        })}
+      >
+        <FilterField label="Sklep">
+          <select className="input" name="sklep" defaultValue={sp.sklep ?? ""}>
+            <option value="">Wszystkie sklepy</option>
+            {storeList?.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+          </select>
+        </FilterField>
+        <FilterField label="Płatność">
+          <select className="input" name="platnosc" defaultValue={sp.platnosc ?? ""}>
+            <option value="">Wszystkie</option>
+            <option value="oplacone">Opłacone</option>
+            <option value="pobranie">Za pobraniem</option>
+            <option value="nieoplacone">Nieopłacone</option>
+          </select>
+        </FilterField>
+        <FilterField label="Data zamówienia (od – do)" wide>
+          <span className="flex items-center gap-1.5"><input className="input" type="date" name="od" defaultValue={sp.od} aria-label="Od" /><span className="text-muted">–</span><input className="input" type="date" name="do" defaultValue={sp.do} aria-label="Do" /></span>
+        </FilterField>
+      </ListToolbar>
 
-      <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={{ q: sp.q, status: tab || undefined }} top />
+      <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={listParams} top />
       <div className="card overflow-x-auto lg:overflow-visible">
-        <table className="table">
+        <table className="table mtable" style={{ "--m-areas": "'order pay' 'date status' 'prod prod' 'ship ship' 'act act'" } as React.CSSProperties}>
           <thead><tr><th>Data</th><th>Zamówienie</th><th>Produkty</th><th>Wysyłka</th><th>Płatność</th><th>Status</th><th /></tr></thead>
           <tbody>
             {!orders?.length && (
@@ -155,16 +202,16 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
               const status = o.status as OrderStatus;
               return (
                 <tr key={o.id} className={`group relative cursor-pointer transition-colors ${status === "problem" ? "bg-rose-50/60 hover:bg-rose-100/70" : "hover:bg-sky-50"}`}>
-                  <td className="whitespace-nowrap text-muted">{dateTime(o.ordered_at)}</td>
-                  <td className="whitespace-nowrap">
+                  <td className="whitespace-nowrap text-muted max-md:text-xs" style={{ gridArea: "date" }}>{dateTime(o.ordered_at)}</td>
+                  <td className="whitespace-nowrap" style={{ gridArea: "order" }}>
                     {/* Cały wiersz prowadzi do zamówienia (link rozciągnięty na wiersz); pozostałe linki są nad nim. */}
                     <Link className="font-medium text-accent after:absolute after:inset-0 after:content-[''] hover:underline" href={`/sprzedaz/${o.id}`}>{o.name}</Link>
                     <span className="block text-xs text-muted">{(o.store as unknown as { name: string } | null)?.name ?? ""}</span>
                     {o.customer_name && <span className="block text-xs">{o.customer_name}</span>}
                     <OrderPreview o={o as unknown as PreviewOrder} lines={lines} pay={pay} tracking={tracking} />
                   </td>
-                  <td className="min-w-64 max-w-96">
-                    <ul className="space-y-0.5 text-sm">
+                  <td className="min-w-64 max-w-96" style={{ gridArea: "prod" }}>
+                    <ul className="space-y-0.5 text-sm max-md:rounded-lg max-md:bg-slate-50 max-md:px-2.5 max-md:py-2">
                       {lines.map((l) => (
                         <li key={l.id} className="flex items-baseline gap-2">
                           <span className="line-clamp-1">{l.title} · <b>{l.variant_title ?? "–"}</b>{l.quantity > 1 ? ` ×${l.quantity}` : ""}</span>
@@ -178,23 +225,23 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
                         : s.status === "no_unit" && !FINISHED.has(status) ? <Pill key={i} tone="red">brak sztuki</Pill> : null)}
                     </div>
                   </td>
-                  <td className="text-sm">
+                  <td className="text-sm max-md:text-xs max-md:text-muted" style={{ gridArea: "ship" }}>
                     <span className="line-clamp-2">{o.shipping_method ?? "–"}</span>
                     {o.pickup_point && <span className="block font-mono text-xs text-muted">{o.pickup_point}</span>}
                     {tracking && (tracking.url
                       ? <a className="relative z-10 block font-mono text-xs text-accent hover:underline" href={tracking.url} target="_blank" rel="noreferrer">{tracking.number}</a>
                       : <span className="block font-mono text-xs">{tracking.number}</span>)}
                   </td>
-                  <td className="whitespace-nowrap">
+                  <td className="whitespace-nowrap max-md:text-right" style={{ gridArea: "pay" }}>
                     <Pill tone={pay.tone}>{pay.text}</Pill>
-                    <span className="block text-sm tabular-nums">{o.currency && o.currency !== "PLN" ? `${Number(o.total).toFixed(2)} ${o.currency}` : money(o.total)}</span>
+                    <span className="block text-sm tabular-nums max-md:text-base max-md:font-semibold">{o.currency && o.currency !== "PLN" ? `${Number(o.total).toFixed(2)} ${o.currency}` : money(o.total)}</span>
                   </td>
-                  <td className="max-w-56">
+                  <td className="max-w-56 max-md:text-right" style={{ gridArea: "status" }}>
                     <OrderStatusPill status={status} />
                     {o.status_detail && <span className={`mt-0.5 block text-xs ${status === "problem" ? "font-medium text-bad" : "text-muted"}`}>{o.status_detail}</span>}
                   </td>
-                  <td>
-                    <div className="flex flex-col items-start gap-1.5">
+                  <td style={{ gridArea: "act" }}>
+                    <div className="flex flex-col items-start gap-1.5 max-md:flex-row max-md:flex-wrap max-md:items-center max-md:pt-1">
                       <ContractAction pieces={matchPieces(o.id, (o.line_items ?? []) as LineItem[], oSales, (g) => variantOf.get(g))} saleContract={saleContract} cancelled={status === "cancelled"} back={`/sprzedaz${tab ? `?status=${tab}` : ""}`} />
                       {status === "new" && <Link className="btn-secondary relative z-10 whitespace-nowrap px-2.5 py-1 text-xs" href={`/sprzedaz/${o.id}#etykieta`}>Utwórz etykietę</Link>}
                       {status !== "cancelled" && status !== "returned" && <ReceiptButton orderId={o.id} receiptId={o.receipt_id as number | null} job={jobOf.get(o.id) ?? null} printer={printer} compact />}
@@ -207,7 +254,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
           </tbody>
         </table>
       </div>
-      <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={{ q: sp.q, status: tab || undefined }} />
+      <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={listParams} />
     </>
   );
 }
@@ -290,19 +337,26 @@ async function SaleLines({ sp, page }: { sp: Record<string, string | undefined>;
     <>
       <PageHeader title="Sprzedaż" sub={<>Linie zamówień: aplikacja bierze najpierw Twoje sztuki, potem komis, zawsze od najstarszej. Ostatni odczyt: {lastSync ? `${dateTime(lastSync.created_at)}${lastSync.ok ? "" : " (błąd)"}` : "jeszcze nie było"}.</>} />
       <Tabs active="lines" />
-      <form className="mb-4 flex flex-wrap gap-2" method="get">
-        <input type="hidden" name="widok" value="linie" />
-        <input className="input w-56" name="q" defaultValue={sp.q} placeholder="Numer zamówienia" />
-        <select className="input w-64" name="status" defaultValue={status}>
-          <option value="">Wszystkie (bez niepowiązanych)</option>
-          {Object.entries(SALE_STATUS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-        </select>
-        <button className="btn">Filtruj</button>
-      </form>
+      <ListToolbar
+        q={sp.q}
+        placeholder="Numer zamówienia"
+        hidden={{ widok: "linie" }}
+        active={status ? 1 : 0}
+        defaultOpen={!!status}
+        resetHref="/sprzedaz?widok=linie"
+        chips={filterChips("/sprzedaz", { widok: "linie", q: sp.q, status }, { q: (v) => `„${v}”`, status: (v) => SALE_STATUS[v] })}
+      >
+        <FilterField label="Status linii">
+          <select className="input" name="status" defaultValue={status}>
+            <option value="">Wszystkie (bez niepowiązanych)</option>
+            {Object.entries(SALE_STATUS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </select>
+        </FilterField>
+      </ListToolbar>
 
       <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={{ widok: "linie", q: sp.q, status: sp.status }} top />
       <div className="card overflow-x-auto">
-        <table className="table">
+        <table className="table mtable mtable-flow">
           <thead><tr><th>Data</th><th>Zamówienie</th><th>Produkt</th><th>Sztuka</th><th>Status</th><th>Umowa</th><th>Zmień sztukę przy pakowaniu</th><th /></tr></thead>
           <tbody>
             {!sales?.length && <tr><td colSpan={8} className="py-10 text-center text-muted">Brak sprzedaży.</td></tr>}
@@ -315,7 +369,7 @@ async function SaleLines({ sp, page }: { sp: Record<string, string | undefined>;
                     {s.order_id ? <Link className="text-accent hover:underline" href={`/sprzedaz/${s.order_id}`}>{s.order_ref}</Link> : s.order_ref}
                     <span className="block text-xs text-muted">{(s.store as unknown as { name: string } | null)?.name ?? ""}</span>
                   </td>
-                  <td>{variant ? <>{variant.product.title} · <b>{variant.option}</b></> : <span className="text-muted">{s.product_name}</span>}</td>
+                  <td className="m-full">{variant ? <>{variant.product.title} · <b>{variant.option}</b></> : <span className="text-muted">{s.product_name}</span>}</td>
                   <td className="whitespace-nowrap"><UnitCell unit={s.unit as unknown as SaleUnit} /></td>
                   <td>{s.status === "no_unit" && FINISHED.has((s.order as unknown as { status: string } | null)?.status ?? "")
                     ? <Pill tone="slate">zamówienie wysłane</Pill>
@@ -337,15 +391,18 @@ async function SaleLines({ sp, page }: { sp: Record<string, string | undefined>;
 /** Zamówienia wysłane / zakończone – brak sztuki z magazynu nie jest już problemem (także w JPK). */
 const FINISHED = new Set(["shipped", "delivered", "returned", "cancelled"]);
 
-function Tabs({ active }: { active: "orders" | "lines" | "pos" | "faktury" | "jpk" }) {
+async function Tabs({ active }: { active: "orders" | "lines" | "pos" | "faktury" | "jpk" }) {
+  const { profile } = await requireProfile();
   const cur = (on: boolean) => (on ? ("page" as const) : undefined);
+  const sales = can(profile, "sprzedaz");
+  const invoices = can(profile, "faktury");
   return (
-    <div className="mb-5">
-      <nav className="segmented" aria-label="Sprzedaż">
-        <Link href="/sprzedaz" aria-current={cur(active === "orders")}>Zamówienia</Link>
-        <Link href="/sprzedaz?widok=stacjonarna" aria-current={cur(active === "pos")}>Sprzedaż stacjonarna</Link>
-        <Link href="/sprzedaz?widok=faktury" aria-current={cur(active === "faktury")}>Faktury i paragony</Link>
-        <Link href="/sprzedaz?widok=jpk" aria-current={cur(active === "jpk" || active === "lines")}>JPK</Link>
+    <div className="-mx-4 mb-5 overflow-x-auto px-4 sm:mx-0 sm:px-0">
+      <nav className="segmented flex-nowrap whitespace-nowrap" aria-label="Sprzedaż">
+        {sales && <Link href="/sprzedaz" aria-current={cur(active === "orders")}>Zamówienia</Link>}
+        {sales && <Link href="/sprzedaz?widok=stacjonarna" aria-current={cur(active === "pos")}>Stacjonarna</Link>}
+        {invoices && <Link href="/sprzedaz?widok=faktury" aria-current={cur(active === "faktury")}>Faktury i paragony</Link>}
+        {invoices && <Link href="/sprzedaz?widok=jpk" aria-current={cur(active === "jpk" || active === "lines")}>JPK</Link>}
       </nav>
     </div>
   );
@@ -353,13 +410,34 @@ function Tabs({ active }: { active: "orders" | "lines" | "pos" | "faktury" | "jp
 
 const PAYMENT: Record<string, string> = { card: "karta", cash: "gotówka", blik: "BLIK", transfer: "przelew", other: "inna" };
 
-async function PosList({ page, q }: { page: number; q: string }) {
+const ORDER_SORTS: Record<string, { label: string; column: string; asc: boolean }> = {
+  najnowsze: { label: "Najnowsze", column: "ordered_at", asc: false },
+  najstarsze: { label: "Najstarsze", column: "ordered_at", asc: true },
+  drozsze: { label: "Kwota: najwyższa", column: "total", asc: false },
+  tansze: { label: "Kwota: najniższa", column: "total", asc: true },
+  numer: { label: "Numer zamówienia", column: "number", asc: false },
+};
+const POS_SORTS: Record<string, { label: string; column: string; asc: boolean }> = {
+  najnowsze: { label: "Najnowsze", column: "created_at", asc: false },
+  najstarsze: { label: "Najstarsze", column: "created_at", asc: true },
+  drozsze: { label: "Kwota: najwyższa", column: "total", asc: false },
+  tansze: { label: "Kwota: najniższa", column: "total", asc: true },
+};
+
+async function PosList({ page, q, sp }: { page: number; q: string; sp: Record<string, string | undefined> }) {
   const { supabase, profile } = await requireProfile();
+  const posSort = POS_SORTS[sp.sort ?? ""] ? sp.sort! : "najnowsze";
   let query = supabase
     .from("pos_orders")
     .select("id, code, total, payment_method, customer, created_at, base_sync_status, store:stores(name), items:pos_order_items(price, status, name, quantity, unit:units(id, code, identifier, owner_type, contract_id, variant:variants(option, product:products(title))))", { count: "exact" })
-    .order("created_at", { ascending: false })
+    .order(POS_SORTS[posSort].column, { ascending: POS_SORTS[posSort].asc })
     .range((page - 1) * PER_PAGE, page * PER_PAGE - 1);
+  if (sp.sklep) query = query.eq("store_id", sp.sklep);
+  if (sp.platnosc) query = query.eq("payment_method", sp.platnosc);
+  if (sp.od) query = query.gte("created_at", `${sp.od}T00:00:00`);
+  if (sp.do) query = query.lte("created_at", `${sp.do}T23:59:59`);
+  const { data: storeList } = await supabase.from("stores").select("id, name").order("name");
+  const listParams = { widok: "stacjonarna", q: q || undefined, sklep: sp.sklep, platnosc: sp.platnosc, od: sp.od, do: sp.do, sort: sp.sort };
   const text = q.replace(/[%,()*\\]/g, " ").trim();
   if (text) {
     // Szukanie po nazwie przedmiotu, SKU, kodzie sztuki, IMEI, numerze sprzedaży albo kliencie.
@@ -379,23 +457,49 @@ async function PosList({ page, q }: { page: number; q: string }) {
     <>
       <PageHeader title="Sprzedaż" sub="Sprzedaż stacjonarna z kasy." actions={<Link className="btn" href="/kasa">Nowa sprzedaż</Link>} />
       <Tabs active="pos" />
-      <form className="mb-4 flex flex-wrap gap-2" method="get">
-        <input type="hidden" name="widok" value="stacjonarna" />
-        <input className="input w-80" name="q" defaultValue={q} placeholder="Nazwa przedmiotu, SKU, kod sztuki, IMEI, numer, klient" aria-label="Szukaj sprzedaży stacjonarnej" />
-        <button className="btn">Szukaj</button>
-        {q && <Link className="btn-secondary" href="/sprzedaz?widok=stacjonarna">Wyczyść</Link>}
-      </form>
-      <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={{ widok: "stacjonarna", q: q || undefined }} top />
+      <ListToolbar
+        q={q}
+        placeholder="Przedmiot, SKU, kod sztuki, IMEI, numer, klient"
+        hidden={{ widok: "stacjonarna" }}
+        sort={{ value: posSort, options: Object.entries(POS_SORTS).map(([value, o]) => ({ value, label: o.label })) }}
+        dirParam={null}
+        active={activeFilters(sp, ["sklep", "platnosc", "od", "do"])}
+        resetHref="/sprzedaz?widok=stacjonarna"
+        chips={filterChips("/sprzedaz", listParams, {
+          q: (v) => `„${v}”`,
+          sklep: (v) => storeList?.find((x) => x.id === v)?.name,
+          platnosc: (v) => PAYMENT[v] ?? v,
+          od: (v) => `od ${v}`,
+          do: (v) => `do ${v}`,
+        })}
+      >
+        <FilterField label="Sklep">
+          <select className="input" name="sklep" defaultValue={sp.sklep ?? ""}>
+            <option value="">Wszystkie sklepy</option>
+            {storeList?.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+          </select>
+        </FilterField>
+        <FilterField label="Płatność">
+          <select className="input" name="platnosc" defaultValue={sp.platnosc ?? ""}>
+            <option value="">Wszystkie</option>
+            {Object.entries(PAYMENT).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </select>
+        </FilterField>
+        <FilterField label="Data (od – do)" wide>
+          <span className="flex items-center gap-1.5"><input className="input" type="date" name="od" defaultValue={sp.od} aria-label="Od" /><span className="text-muted">–</span><input className="input" type="date" name="do" defaultValue={sp.do} aria-label="Do" /></span>
+        </FilterField>
+      </ListToolbar>
+      <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={listParams} top />
       <div className="card overflow-x-auto">
-        <table className="table">
+        <table className="table mtable" style={{ "--m-areas": "'num total' 'date pay' 'items items' 'store state' 'del del'" } as React.CSSProperties}>
           <thead><tr><th>Data</th><th>Numer</th><th>Przedmioty</th><th>Sklep</th><th>Płatność</th><th className="text-right">Kwota</th><th>Stan</th>{profile.role === "admin" && <th />}</tr></thead>
           <tbody>
             {!data?.length && <tr><td colSpan={7} className="py-10 text-center text-muted">{q ? "Nic nie znaleziono." : "Brak sprzedaży stacjonarnej."}</td></tr>}
             {data?.map((o) => (
               <tr key={o.id}>
-                <td className="whitespace-nowrap text-muted">{dateTime(o.created_at)}</td>
-                <td><Link className="font-medium text-accent hover:underline" href={`/kasa/${o.id}`}>{o.code}</Link>{o.customer && <span className="block text-xs text-muted">{o.customer}</span>}</td>
-                <td className="min-w-64 max-w-96">
+                <td className="whitespace-nowrap text-muted max-md:text-xs" style={{ gridArea: "date" }}>{dateTime(o.created_at)}</td>
+                <td style={{ gridArea: "num" }}><Link className="font-medium text-accent hover:underline" href={`/kasa/${o.id}`}>{o.code}</Link>{o.customer && <span className="block text-xs text-muted">{o.customer}</span>}</td>
+                <td className="min-w-64 max-w-96" style={{ gridArea: "items" }}>
                   <ul className="space-y-0.5 text-sm">
                     {((o.items ?? []) as unknown as PosItem[]).map((i, k) => (
                       <li key={k}>
@@ -405,12 +509,12 @@ async function PosList({ page, q }: { page: number; q: string }) {
                     ))}
                   </ul>
                 </td>
-                <td>{(o.store as unknown as { name: string }).name}</td>
-                <td>{PAYMENT[o.payment_method] ?? o.payment_method}</td>
-                <td className="text-right tabular-nums">{money(o.total)}</td>
-                <td><Pill tone={o.base_sync_status === "ok" ? "green" : "red"}>{o.base_sync_status === "ok" ? "ok" : "do sprawdzenia"}</Pill></td>
+                <td className="max-md:text-xs max-md:text-muted" style={{ gridArea: "store" }}>{(o.store as unknown as { name: string }).name}</td>
+                <td className="max-md:text-right max-md:text-xs max-md:text-muted" style={{ gridArea: "pay" }}>{PAYMENT[o.payment_method] ?? o.payment_method}</td>
+                <td className="text-right tabular-nums max-md:font-semibold" style={{ gridArea: "total" }}>{money(o.total)}</td>
+                <td className="max-md:text-right" style={{ gridArea: "state" }}><Pill tone={o.base_sync_status === "ok" ? "green" : "red"}>{o.base_sync_status === "ok" ? "ok" : "do sprawdzenia"}</Pill></td>
                 {profile.role === "admin" && (
-                  <td>
+                  <td style={{ gridArea: "del" }}>
                     <form action={deletePosOrder}>
                       <input type="hidden" name="id" value={o.id} />
                       <input type="hidden" name="back" value={`/sprzedaz?widok=stacjonarna${q ? `&q=${encodeURIComponent(q)}` : ""}`} />
@@ -423,7 +527,7 @@ async function PosList({ page, q }: { page: number; q: string }) {
           </tbody>
         </table>
       </div>
-      <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={{ widok: "stacjonarna", q: q || undefined }} />
+      <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={listParams} />
     </>
   );
 }

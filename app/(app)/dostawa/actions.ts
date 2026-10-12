@@ -1,7 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { requireProfile } from "@/lib/auth";
+import { requireSection } from "@/lib/auth";
 import { fillContractNumber } from "@/lib/contracts/docnumber";
 import { findVariantIds } from "@/lib/queries/units";
 import { adjustStock } from "@/lib/stock";
@@ -17,7 +17,7 @@ export type VariantHit = {
 
 /** Wyszukiwarka produktów do przyjęcia dostawy (nazwa, SKU, EAN, skan). */
 export async function searchVariants(q: string, storeId: string): Promise<VariantHit[]> {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("dostawa", "umowy", "sprzedaz");
   const text = q.trim().replace(/[,()*%\\]/g, " ").trim();
   if (text.length < 2) return [];
   const ids = await findVariantIds(supabase, text);
@@ -45,7 +45,7 @@ export async function searchVariants(q: string, storeId: string): Promise<Varian
 type Line = { variantId: string; quantity: number; price: string; payout: string; identifiers: string };
 
 export async function createDelivery(_: unknown, formData: FormData): Promise<{ error?: string }> {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("dostawa");
   let deliveryId: string | null = null;
   try {
     const storeId = String(formData.get("store_id") ?? "");
@@ -138,7 +138,7 @@ export async function createDelivery(_: unknown, formData: FormData): Promise<{ 
 }
 
 async function saveBaseResult(
-  supabase: Awaited<ReturnType<typeof requireProfile>>["supabase"],
+  supabase: Awaited<ReturnType<typeof requireSection>>["supabase"],
   deliveryId: string,
   results: Awaited<ReturnType<typeof adjustStock>>,
 ) {
@@ -152,7 +152,7 @@ async function saveBaseResult(
 
 /** Ponowienie tych zmian stanu w Shopify, które za pierwszym razem się nie udały. */
 export async function retryDeliveryBase(formData: FormData) {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("dostawa");
   const id = String(formData.get("id"));
   const { data: d } = await supabase.from("deliveries").select("base_pending").eq("id", id).single();
   const pending = (d?.base_pending ?? []) as { variantId: string; locationId: string; delta: number }[];

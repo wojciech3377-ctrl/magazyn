@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useRef, useState, useTransition } from "react";
+import { SearchInput } from "@/components/SearchInput";
 import { finishPosOrder, pickUnitForVariant, scanUnit, searchCatalog, searchOwnProducts, searchUnits, type CatalogHit, type CatalogSize, type OwnProduct, type PosUnit, type ScanChoice } from "./actions";
 
 type UnitLine = PosUnit & { kind: "unit"; key: string; priceInput: string };
@@ -103,7 +104,11 @@ export function PosForm({ stores, printer, ptu, defaultPtu }: { stores: { id: st
   function onScan(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key !== "Enter") return;
     e.preventDefault();
-    const code = scan;
+    lookup(scan);
+  }
+
+  /** Kod ze skanera, aparatu albo wpisany: sztuka, SKU / EAN (wybór rozmiaru) albo nazwa. */
+  function lookup(code: string) {
     if (!code.trim()) return;
     start(async () => {
       const r = await scanUnit(code, storeId, unitIds);
@@ -149,16 +154,18 @@ export function PosForm({ stores, printer, ptu, defaultPtu }: { stores: { id: st
       <div className="min-w-0 space-y-5 lg:col-span-2">
         <section className="card space-y-3 p-4">
           <label className="label" htmlFor="scan">Skanuj kod albo wpisz nazwę</label>
-          <input
+          <SearchInput
             ref={scanRef}
             id="scan"
-            className="input py-3 font-mono text-lg"
+            large
+            className="font-mono"
             value={scan}
             onChange={(e) => setScan(e.target.value)}
             onKeyDown={onScan}
-            placeholder="Etykieta S000123, IMEI, SKU, EAN albo nazwa – potem Enter"
+            onScan={(code) => { setScan(code); lookup(code); }}
+            continuous
+            placeholder="Kod S000123, IMEI, SKU, EAN albo nazwa"
             autoFocus
-            autoComplete="off"
           />
           {busy && <p className="text-xs text-muted">Szukam…</p>}
           {message && <p className={`text-sm ${message.tone === "ok" ? "text-ok" : "text-bad"}`}>{message.text}</p>}
@@ -209,8 +216,9 @@ export function PosForm({ stores, printer, ptu, defaultPtu }: { stores: { id: st
             {manual.open && (
               <div className="space-y-3 border-t border-line p-3">
                 <div className="grid gap-2 sm:grid-cols-[1fr_7rem_5rem_9rem]">
-                  <input className="input" value={manual.name} onChange={(e) => { setManual({ ...manual, name: e.target.value }); setCatalogQ(e.target.value); }} placeholder="Szukaj w katalogu albo wpisz nazwę" aria-label="Nazwa albo wyszukiwanie w katalogu" maxLength={120}
-                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addManual(); } if (e.key === "Escape") setCatalogQ(""); }} autoComplete="off" />
+                  <SearchInput value={manual.name} onChange={(e) => { setManual({ ...manual, name: e.target.value }); setCatalogQ(e.target.value); }} placeholder="Szukaj w katalogu albo wpisz nazwę" aria-label="Nazwa albo wyszukiwanie w katalogu" maxLength={120}
+                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addManual(); } if (e.key === "Escape") setCatalogQ(""); }}
+                    onScan={(code) => { setManual((m) => ({ ...m, open: true, name: code })); setCatalogQ(code); }} />
                   <input ref={priceRef} className="input tabular-nums" inputMode="decimal" value={manual.price} onChange={(e) => setManual({ ...manual, price: e.target.value })} placeholder="Cena zł" aria-label="Cena"
                     onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addManual(); } }} />
                   <input className="input tabular-nums" inputMode="decimal" value={manual.qty} onChange={(e) => setManual({ ...manual, qty: e.target.value })} aria-label="Ilość" title="Ilość" />
@@ -270,7 +278,7 @@ export function PosForm({ stores, printer, ptu, defaultPtu }: { stores: { id: st
         </section>
 
         <section className="card overflow-x-auto">
-          <table className="table">
+          <table className="table mtable" style={{ "--m-cols": "minmax(0,1fr) 5rem 7.5rem", "--m-areas": "'name name del' 'code qty price'" } as React.CSSProperties}>
             <thead><tr><th>Kod</th><th>Pozycja</th><th className="w-20">Ilość</th><th className="w-36">Cena (zł)</th><th /></tr></thead>
             <tbody>
               {lines.length === 0 && <tr><td colSpan={5} className="py-8 text-center text-muted">Zeskanuj pierwszą sztukę albo wpisz nazwę.</td></tr>}
@@ -278,21 +286,21 @@ export function PosForm({ stores, printer, ptu, defaultPtu }: { stores: { id: st
                 <tr key={l.key}>
                   {l.kind === "unit" ? (
                     <>
-                      <td className="whitespace-nowrap font-mono text-xs">{l.code}{l.identifier && <span className="block text-muted">{l.identifier}</span>}</td>
-                      <td>{l.title} · <b>{l.option}</b>{l.owner && <span className="block text-xs text-muted">komis · {l.owner}</span>}</td>
-                      <td className="text-muted">1</td>
+                      <td className="whitespace-nowrap font-mono text-xs max-md:self-center" style={{ gridArea: "code" }}>{l.code}{l.identifier && <span className="block text-muted">{l.identifier}</span>}</td>
+                      <td style={{ gridArea: "name" }}>{l.title} · <b>{l.option}</b>{l.owner && <span className="block text-xs text-muted">komis · {l.owner}</span>}</td>
+                      <td className="text-muted max-md:self-center max-md:text-center" style={{ gridArea: "qty" }}>1 szt.</td>
                     </>
                   ) : (
                     <>
-                      <td className="text-xs text-muted">PTU {l.ptu}</td>
-                      <td>{l.name}<span className="block text-xs text-muted">{l.note} · {ptuText(l.ptu)}</span></td>
-                      <td><input className="input tabular-nums" inputMode="decimal" value={l.qtyInput} aria-label={`Ilość ${l.name}`} onChange={(e) => setLine(l.key, { qtyInput: e.target.value })} /></td>
+                      <td className="text-xs text-muted max-md:self-center" style={{ gridArea: "code" }}>PTU {l.ptu}</td>
+                      <td style={{ gridArea: "name" }}>{l.name}<span className="block text-xs text-muted">{l.note} · {ptuText(l.ptu)}</span></td>
+                      <td style={{ gridArea: "qty" }}><input className="input tabular-nums" inputMode="decimal" value={l.qtyInput} aria-label={`Ilość ${l.name}`} onChange={(e) => setLine(l.key, { qtyInput: e.target.value })} /></td>
                     </>
                   )}
-                  <td>
+                  <td style={{ gridArea: "price" }}>
                     <input className="input tabular-nums" inputMode="decimal" value={l.priceInput} aria-label="Cena" onChange={(e) => setLine(l.key, { priceInput: e.target.value })} />
                   </td>
-                  <td><button type="button" className="text-sm text-bad hover:underline" onClick={() => setLines((p) => p.filter((x) => x.key !== l.key))}>Usuń</button></td>
+                  <td className="max-md:text-right" style={{ gridArea: "del" }}><button type="button" className="text-sm text-bad hover:underline" onClick={() => setLines((p) => p.filter((x) => x.key !== l.key))}>Usuń</button></td>
                 </tr>
               ))}
             </tbody>

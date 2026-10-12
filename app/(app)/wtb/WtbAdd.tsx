@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useState } from "react";
+import { SearchInput } from "@/components/SearchInput";
 import { addFromCatalog, addManual, searchWtbCatalog, type CatalogResult, type WtbAddState } from "./actions";
 
 function thumb(url: string | null, w = 80) {
@@ -58,7 +59,7 @@ function FromCatalog() {
   if (!picked) {
     return (
       <div className="space-y-2">
-        <input className="input max-w-xl" placeholder="Szukaj modelu: nazwa albo SKU, np. Jordan 4 Seafoam" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Szukaj w katalogu" />
+        <SearchInput wrapperClassName="max-w-xl" placeholder="Szukaj modelu: nazwa albo SKU, np. Jordan 4 Seafoam" value={q} onChange={(e) => setQ(e.target.value)} onScan={setQ} aria-label="Szukaj w katalogu" />
         {busy && <p className="text-xs text-muted">Szukam…</p>}
         {state?.ok && <p className="text-sm text-ok">{state.ok}</p>}
         {hits.length > 0 && (

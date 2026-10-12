@@ -27,12 +27,13 @@ export function Pill({ children, tone = "slate" }: { children: React.ReactNode; 
 
 export function PageHeader({ title, sub, actions }: { title: string; sub?: React.ReactNode; actions?: React.ReactNode }) {
   return (
-    <div className="mb-6 flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+    <div className="mb-5 flex flex-col gap-3 sm:mb-6 sm:gap-4 xl:flex-row xl:items-end xl:justify-between">
       <div className="min-w-0">
         <h1 className="h1">{title}</h1>
-        {sub && <p className="mt-1.5 max-w-3xl text-sm leading-relaxed text-muted">{sub}</p>}
+        {sub && <p className="mt-1 max-w-3xl text-[13px] leading-relaxed text-muted sm:mt-1.5 sm:text-sm">{sub}</p>}
       </div>
-      {actions && <div className="flex flex-wrap items-center gap-2 xl:justify-end">{actions}</div>}
+      {/* Telefon: przyciski w jednym przewijanym rzędzie zamiast kilku linii. */}
+      {actions && <div className="-mx-4 flex items-center gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0 sm:pb-0 xl:justify-end [&>*]:shrink-0">{actions}</div>}
     </div>
   );
 }
@@ -57,7 +58,7 @@ export function Pagination({ page, total, perPage, params, top }: { page: number
     q.set("strona", String(p));
     return `?${q.toString()}`;
   };
-  const nums = [...new Set([1, cur - 2, cur - 1, cur, cur + 1, cur + 2, pages])].filter((n) => n >= 1 && n <= pages).sort((a, b) => a - b);
+  const nums = [...new Set([1, cur - 1, cur, cur + 1, pages])].filter((n) => n >= 1 && n <= pages).sort((a, b) => a - b);
   const btn = "inline-flex h-8 min-w-8 items-center justify-center rounded-lg border border-line bg-white px-2.5 text-sm text-ink shadow-sm transition-colors hover:border-slate-300 hover:bg-slate-50";
   const off = "inline-flex h-8 min-w-8 items-center justify-center rounded-lg border border-line bg-slate-50 px-2.5 text-sm text-muted opacity-50";
   return (
@@ -65,16 +66,16 @@ export function Pagination({ page, total, perPage, params, top }: { page: number
       <span>Strona {cur} z {pages} · {total} pozycji</span>
       <div className="flex flex-wrap items-center gap-1">
         {cur > 1 ? <Link className={btn} href={href(1)} aria-label="Pierwsza strona">«</Link> : <span className={off}>«</span>}
-        {cur > 1 ? <Link className={btn} href={href(cur - 1)}>‹ Poprzednia</Link> : <span className={off}>‹ Poprzednia</span>}
+        {cur > 1 ? <Link className={btn} href={href(cur - 1)}>‹<span className="hidden sm:inline">&nbsp;Poprzednia</span></Link> : <span className={off}>‹<span className="hidden sm:inline">&nbsp;Poprzednia</span></span>}
         {nums.map((n, i) => (
           <span key={n} className="flex items-center gap-1">
             {i > 0 && n - nums[i - 1] > 1 && <span className="px-1">…</span>}
             {n === cur ? <span className="inline-flex h-8 min-w-8 items-center justify-center rounded-lg bg-ink px-2.5 text-sm font-medium text-white shadow-sm" aria-current="page">{n}</span> : <Link className={btn} href={href(n)}>{n}</Link>}
           </span>
         ))}
-        {cur < pages ? <Link className={btn} href={href(cur + 1)}>Następna ›</Link> : <span className={off}>Następna ›</span>}
+        {cur < pages ? <Link className={btn} href={href(cur + 1)}><span className="hidden sm:inline">Następna&nbsp;</span>›</Link> : <span className={off}><span className="hidden sm:inline">Następna&nbsp;</span>›</span>}
         {cur < pages ? <Link className={btn} href={href(pages)} aria-label="Ostatnia strona">»</Link> : <span className={off}>»</span>}
-        <form method="get" className="ml-2 flex items-center gap-1">
+        <form method="get" className="ml-2 hidden items-center gap-1 sm:flex">
           {entries.map(([k, v]) => <input key={k} type="hidden" name={k} value={v} />)}
           <label className="text-xs" htmlFor={`strona-${top ? "g" : "d"}`}>Idź do</label>
           <input id={`strona-${top ? "g" : "d"}`} className="input h-8 w-16 px-2 py-1" type="number" name="strona" min={1} max={pages} defaultValue={cur} />

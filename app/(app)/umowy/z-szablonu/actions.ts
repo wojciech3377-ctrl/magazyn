@@ -1,14 +1,14 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { requireProfile } from "@/lib/auth";
+import { requireSection } from "@/lib/auth";
 import { getCompany } from "@/lib/contracts/settings";
 import { contractTotal } from "@/lib/contracts/purchase";
 
 type Line = { unit_id?: string; variant_id?: string; title: string; option: string; identifier?: string | null; qty: number; price: string };
 
 export async function createLinkContract(_: unknown, formData: FormData): Promise<{ error?: string }> {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("umowy");
   const lines = JSON.parse(String(formData.get("lines") ?? "[]")) as Line[];
   if (!lines.length) return { error: "Dodaj co najmniej jedną rzecz." };
   const items = [];

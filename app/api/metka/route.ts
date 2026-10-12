@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { requireProfile } from "@/lib/auth";
+import { requireSection } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { priceTags } from "@/lib/price-tag";
 import { renderPriceTags } from "@/lib/price-tag-pdf";
@@ -9,7 +9,7 @@ export const maxDuration = 60;
 
 /** PDF z metkami 57 × 32 mm (strona = metka). ?ids=… , opcjonalnie ?stan=nowe|uzywane. */
 export async function GET(req: NextRequest) {
-  await requireProfile();
+  await requireSection("magazyn", "kasa", "dostawa");
   const sp = req.nextUrl.searchParams;
   const ids = sp.getAll("ids").flatMap((x) => x.split(",")).map((x) => x.trim()).filter((x) => /^[0-9a-f-]{36}$/.test(x)).slice(0, 200);
   if (!ids.length) return NextResponse.json({ error: "Nie wybrano sztuk." }, { status: 400 });

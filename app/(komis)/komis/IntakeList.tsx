@@ -36,7 +36,7 @@ function Card({ i }: { i: IntakeCard }) {
       <form action={offerAction}>
         <input type="hidden" name="intake_id" value={i.id} />
         <div className="overflow-x-auto">
-          <table className="table">
+          <table className="table mtable mtable-flow">
             <thead><tr><th>Rzecz</th><th className="text-right">Twoja kwota</th><th className="text-right">Nasza oferta</th><th>Status</th></tr></thead>
             <tbody>
               {i.items.map((x) => (

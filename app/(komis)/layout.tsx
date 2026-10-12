@@ -1,4 +1,5 @@
 import { signOut } from "@/app/login/actions";
+import { TableLabels } from "@/components/TableLabels";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { Icon } from "@/components/icons";
@@ -30,7 +31,7 @@ export default async function KomisLayout({ children }: { children: React.ReactN
           <form action={signOut}><button className="btn-ghost"><Icon name="logout" className="h-4 w-4" /> Wyloguj</button></form>
         </div>
       </header>
-      <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:py-8">{children}</main>
+      <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:py-8">{children}<TableLabels /></main>
     </div>
   );
 }

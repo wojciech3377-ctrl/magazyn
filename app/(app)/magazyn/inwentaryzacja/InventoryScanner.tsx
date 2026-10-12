@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { summarizeInventory, type InvSummary } from "./actions";
+import { SearchInput } from "@/components/SearchInput";
 
 type Loc = { id: string; label: string };
 const KEY = (loc: string) => `inwentaryzacja:${loc}`;
@@ -53,8 +54,9 @@ export function InventoryScanner({ locations }: { locations: Loc[] }) {
           <span className="ml-auto rounded bg-ink px-2 py-1 text-sm font-semibold text-white tabular-nums">{scans.length} zeskanowanych</span>
         </div>
         <form onSubmit={(e) => { e.preventDefault(); add(); }} className="flex gap-2">
-          <input ref={input} className="input text-lg" value={code} onChange={(e) => setCode(e.target.value)} placeholder="Skanuj kod…" autoFocus aria-label="Kod kreskowy" />
-          <button className="btn">Dodaj</button>
+          <SearchInput ref={input} large noIcon wrapperClassName="flex-1" className="font-mono" value={code} onChange={(e) => setCode(e.target.value)} placeholder="Skanuj kod…" autoFocus aria-label="Kod kreskowy"
+            continuous onScan={(c) => setScans((s) => [c.trim().toUpperCase(), ...s])} />
+          <button className="btn h-12">Dodaj</button>
         </form>
         <div className="flex flex-wrap gap-2">
           <button className="btn-secondary" disabled={!scans.length} onClick={() => setScans((s) => s.slice(1))}>Cofnij ostatni</button>

@@ -48,7 +48,7 @@ export function SoldList({ rows }: { rows: SoldRow[] }) {
         </div>
       )}
       <div className="card overflow-x-auto">
-        <table className="table">
+        <table className="table mtable mtable-flow">
           <thead><tr><th className="w-8" /><th>Rzecz</th><th>Data sprzedaży</th><th className="text-right">Twoja kwota</th><th>Umowa / faktura</th><th>Rozliczenie</th></tr></thead>
           <tbody>
             {!rows.length && <tr><td colSpan={6} className="py-6 text-center text-muted">Jeszcze nic nie sprzedaliśmy.</td></tr>}

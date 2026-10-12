@@ -61,7 +61,7 @@ export default async function ConsignorPage({ params, searchParams }: { params: 
 
       <section className="card mb-5 overflow-x-auto">
         <h2 className="h2 p-4 pb-0">Zlecenia wysyłki do komisanta</h2>
-        <table className="table">
+        <table className="table mtable mtable-flow">
           <thead><tr><th>Data</th><th>Rzeczy</th><th>Sposób / adres</th><th>Status</th><th /></tr></thead>
           <tbody>
             {!shipments?.length && <tr><td colSpan={5} className="py-6 text-center text-muted">Brak zleceń.</td></tr>}
@@ -102,7 +102,7 @@ export default async function ConsignorPage({ params, searchParams }: { params: 
       <div className="grid gap-5 lg:grid-cols-3">
         <section className="card min-w-0 overflow-x-auto lg:col-span-2">
           <h2 className="h2 p-4 pb-0">Rzeczy w komisie</h2>
-          <table className="table">
+          <table className="table mtable mtable-flow">
             <thead><tr><th>Rzecz</th><th>Status</th><th>Data</th>{prices && <th className="text-right">Kwota komisanta</th>}<th>Rozliczenie</th></tr></thead>
             <tbody>
               {!units.length && <tr><td colSpan={5} className="py-6 text-center text-muted">Brak rzeczy.</td></tr>}

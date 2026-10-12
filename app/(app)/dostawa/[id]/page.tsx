@@ -46,7 +46,7 @@ export default async function DeliveryPage({ params }: { params: Promise<{ id: s
         )}
       </div>
       <div className="card overflow-x-auto">
-        <table className="table">
+        <table className="table mtable mtable-flow">
           <thead><tr><th>Kod</th><th>Produkt</th><th>Rozmiar</th><th>IMEI / nr</th>{profile.can_see_prices && <th className="text-right">Cena</th>}<th>Status</th></tr></thead>
           <tbody>
             {units?.map((u) => {

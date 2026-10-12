@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { requireProfile } from "@/lib/auth";
+import { requireSection } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { adjustStock } from "@/lib/stock";
 import { errorMessage } from "@/lib/errors";
@@ -15,7 +15,7 @@ const UUID = /^[0-9a-f-]{36}$/i;
  * (najstarsza jeszcze niezeskanowana sztuka tego rozmiaru). Tylko sztuki na stanie w magazynie źródłowym.
  */
 export async function lookupTransferUnit(fromId: string, scan: string, picked: string[]): Promise<TransferUnit | { error: string }> {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("magazyn");
   if (!UUID.test(fromId)) return { error: "Wybierz magazyn, z którego wysyłasz." };
   const code = scan.trim().replace(/[",()]/g, "").toUpperCase();
   if (code.length < 2) return { error: "Pusty kod." };
@@ -48,7 +48,7 @@ export type TransferState = { error?: string } | null;
 
 /** Utworzenie przesunięcia: sztuki „w drodze” do magazynu docelowego, stan w Shopify −1 w źródle. Potem druk listy. */
 export async function createTransfer(_: TransferState, fd: FormData): Promise<TransferState> {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("magazyn");
   const from = String(fd.get("from") ?? "");
   const to = String(fd.get("to") ?? "");
   const ids = [...new Set(fd.getAll("unit").map(String).filter((x) => UUID.test(x)))];

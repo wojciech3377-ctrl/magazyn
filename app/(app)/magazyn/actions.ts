@@ -4,7 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { runAutoCatalog } from "@/lib/sync/auto-catalog";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { requireAdmin, requireProfile } from "@/lib/auth";
+import { requireAdmin, requireSection } from "@/lib/auth";
 import { adjustStock, type StockChange } from "@/lib/stock";
 import { parseAmount } from "@/lib/contracts/upload";
 import { errorMessage } from "@/lib/errors";
@@ -25,7 +25,7 @@ function baseSummary(results: { ok: boolean; message: string }[]) {
 
 /** Akcje zbiorcze z listy Magazyn. */
 export async function bulkAction(formData: FormData) {
-  const { supabase, profile } = await requireProfile();
+  const { supabase, profile } = await requireSection("magazyn");
   const ids = formData.getAll("ids").map(String).filter(Boolean);
   const action = String(formData.get("action") ?? "");
   const returnTo = String(formData.get("returnTo") ?? "/magazyn");
@@ -124,7 +124,7 @@ export async function bulkAction(formData: FormData) {
 
 /** Edycja danych sztuki (karta sztuki). */
 export async function updateUnit(formData: FormData) {
-  const { supabase, profile } = await requireProfile();
+  const { supabase, profile } = await requireSection("magazyn");
   const id = String(formData.get("id"));
   const path = `/magazyn/${id}`;
   const ownerType = String(formData.get("owner_type") ?? "own");
@@ -160,7 +160,7 @@ export async function updateUnit(formData: FormData) {
 
 /** Zmiana statusu z karty sztuki, z korektą stanu w Shopify tam, gdzie to potrzebne. */
 export async function changeStatus(formData: FormData) {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("magazyn");
   const id = String(formData.get("id"));
   const to = String(formData.get("to"));
   const path = `/magazyn/${id}`;

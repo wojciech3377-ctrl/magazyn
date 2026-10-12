@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { SearchInput } from "@/components/SearchInput";
 import { createDelivery, searchVariants, type VariantHit } from "./actions";
 import { ContractFileInput } from "@/components/ContractFileInput";
 
@@ -53,6 +54,19 @@ export function DeliveryForm({
   const total = lines.reduce((s, l) => s + (Number(l.quantity) || 0), 0);
   const location = locations.find((l) => l.id === locationId);
 
+  /** Wyszukanie (Enter albo kod z aparatu): skan EAN z jednym wynikiem od razu dodaje rozmiar. */
+  function find(text: string) {
+    if (!text.trim()) return;
+    startSearch(async () => {
+      const r = await searchVariants(text, storeId);
+      setHits(r);
+      if (r.length === 1 && r[0].variants.length === 1) {
+        addLine(r[0], r[0].variants[0]);
+        setQuery("");
+      }
+    });
+  }
+
   return (
     <form action={action} className="grid gap-5 lg:grid-cols-3">
       <input type="hidden" name="lines" value={JSON.stringify(lines.map(({ variantId, quantity, price, payout, identifiers }) => ({ variantId, quantity: Number(quantity), price, payout, identifiers })))} />
@@ -60,23 +74,15 @@ export function DeliveryForm({
       <div className="min-w-0 space-y-5 lg:col-span-2">
         <section className="card p-4">
           <h2 className="h2 mb-3">1. Produkty</h2>
-          <input
+          <SearchInput
             ref={searchRef}
-            className="input"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            onScan={(code) => { setQuery(code); find(code); }}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 e.preventDefault();
-                startSearch(async () => {
-                  const r = await searchVariants(query, storeId);
-                  setHits(r);
-                  // Skan EAN z jednym wynikiem → od razu dodaj rozmiar.
-                  if (r.length === 1 && r[0].variants.length === 1) {
-                    addLine(r[0], r[0].variants[0]);
-                    setQuery("");
-                  }
-                });
+                find(query);
               }
             }}
             placeholder="Szukaj albo zeskanuj: nazwa, SKU, EAN"
@@ -118,7 +124,7 @@ export function DeliveryForm({
         </section>
 
         <section className="card overflow-x-auto">
-          <table className="table">
+          <table className="table mtable mtable-flow">
             <thead>
               <tr>
                 <th>Produkt</th>

@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { requireProfile } from "@/lib/auth";
+import { requireSection } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { adjustStock } from "@/lib/stock";
 
@@ -10,7 +10,7 @@ const back = (msg: string, ok = true): never => redirect(`/dostawa?zakladka=w-dr
 
 /** Przesunięcie dotarło: zaznaczone sztuki na stan w magazynie docelowym (+1 w Shopify). */
 export async function receiveTransfer(fd: FormData) {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("dostawa", "magazyn");
   const id = String(fd.get("transfer_id") ?? "");
   const picked = fd.getAll("unit").map(String);
   if (!picked.length) back("Zaznacz rzeczy, które dotarły.", false);
@@ -27,7 +27,7 @@ export async function receiveTransfer(fd: FormData) {
 
 /** Anulowanie przesunięcia: rzeczy jeszcze w drodze wracają na stan magazynu źródłowego (+1 w Shopify tam). */
 export async function cancelTransfer(fd: FormData) {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("dostawa", "magazyn");
   const { data, error } = await supabase.rpc("cancel_stock_transfer", { p_id: String(fd.get("transfer_id") ?? "") });
   if (error) back(error.message, false);
   const rows = (data ?? []) as { unit_id: string; variant_id: string; location_id: string }[];

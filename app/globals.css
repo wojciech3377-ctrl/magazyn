@@ -66,3 +66,34 @@ body { background: var(--color-canvas); color: var(--color-ink); font-feature-se
 
 /* Cienkie paski przewijania w tabelach i menu. */
 * { scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
+
+/*
+ * Telefon: tabele list jako karty. `.mtable` – każdy wiersz to siatka z obszarami (--m-cols, --m-areas,
+ * komórki mają style gridArea); `.mtable-flow` – komórki układają się jedna za drugą jak tekst.
+ */
+@layer components {
+@media (max-width: 767.98px) {
+  .mtable, .mtable tbody { display: block; }
+  .mtable thead { display: none; }
+  .mtable tr { display: grid; grid-template-columns: var(--m-cols, minmax(0, 1fr) auto); grid-template-areas: var(--m-areas, none); column-gap: 0.75rem; row-gap: 0.4rem; padding: 0.85rem 1rem; border-bottom: 1px solid var(--color-line); position: relative; }
+  .mtable tbody tr:last-child { border-bottom: 0; }
+  .mtable td { padding: 0 !important; border: 0 !important; min-width: 0 !important; max-width: none !important; }
+  .mtable td[colspan] { grid-column: 1 / -1; }
+  .mtable tbody tr:hover td { background: transparent; }
+  .mtable .m-hide { display: none !important; }
+  .mtable-flow tr { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem 0.75rem; }
+  .mtable-flow td { flex: 0 1 auto; }
+  .mtable-flow td.m-full, .mtable-flow td[colspan] { flex-basis: 100%; }
+  .mtable-flow td.m-right { margin-left: auto; text-align: right; }
+  /* Podpis kolumny nad wartością (TableLabels). */
+  .mtable-flow td[data-label]:not(.m-full):not(:empty)::before { content: attr(data-label); display: block; margin-bottom: 1px; font-size: 10.5px; font-weight: 500; line-height: 1.2; color: var(--color-muted); }
+}
+}
+
+/* iPhone powiększa stronę przy polach z czcionką < 16 px – na telefonie pola mają 16 px. */
+@media (max-width: 639.98px) {
+  .input { font-size: 16px; }
+}
+
+/* Aplikacja na telefonie (ekran początkowy): bez podświetlenia stuknięć i z płynnym przewijaniem. */
+html { -webkit-tap-highlight-color: transparent; }

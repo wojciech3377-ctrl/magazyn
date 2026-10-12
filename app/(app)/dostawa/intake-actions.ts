@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { requireProfile } from "@/lib/auth";
+import { requireSection } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { adjustStock } from "@/lib/stock";
 import { appUrl } from "@/lib/app-url";
@@ -22,7 +22,7 @@ const amount = (v: FormDataEntryValue | null) => {
 
 /** Decyzje do zgłoszenia komisanta: Tak / Nie / Oferta (z kwotą) przy każdej rzeczy → e-mail do komisanta. */
 export async function decideIntake(fd: FormData) {
-  await requireProfile();
+  await requireSection("dostawa", "komisanci");
   const db = createAdminClient();
   const intakeId = String(fd.get("intake_id") ?? "");
   const { data: intake } = await db.from("consignor_intakes").select("id, consignor_id, status").eq("id", intakeId).maybeSingle();
@@ -58,7 +58,7 @@ export async function decideIntake(fd: FormData) {
 
 /** Paczka od komisanta dotarła: zaznaczone rzeczy trafiają na stan (komis, kwota komisanta), reszta „nie dotarło”. */
 export async function receiveIntake(fd: FormData) {
-  const { supabase, profile } = await requireProfile();
+  const { supabase, profile } = await requireSection("dostawa", "komisanci");
   const db = createAdminClient();
   const intakeId = String(fd.get("intake_id") ?? "");
   const { data: intake } = await db.from("consignor_intakes").select("id, consignor_id, location_id, status, location:locations(store_id)").eq("id", intakeId).maybeSingle();
@@ -121,7 +121,7 @@ export async function receiveIntake(fd: FormData) {
 
 /** Umowa podpisana przez sprzedającego: nasza oferta cenowa (nowe kwoty pozycji) → e-mail z linkiem do akceptacji. */
 export async function offerContract(fd: FormData) {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("dostawa", "komisanci");
   const id = String(fd.get("id") ?? "");
   const { data: c } = await supabase.from("contracts").select("id, status, items, sign_token, seller_email, number, currency, location_id").eq("id", id).maybeSingle();
   if (!c || c.status !== "signed" || !c.sign_token) back("akceptacja", "Ofertę można złożyć tylko do podpisanej umowy, która czeka na zatwierdzenie.", false);
@@ -157,7 +157,7 @@ export async function offerContract(fd: FormData) {
 
 /** Towar z umowy („w drodze”) dotarł – na stan albo od razu do zamówienia. */
 export async function receiveContractUnits(fd: FormData) {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("dostawa", "komisanci");
   const contractId = String(fd.get("contract_id") ?? "");
   const { data: units } = await supabase.from("units").select("id").eq("contract_id", contractId).eq("status", "in_transit");
   const picked = new Set(fd.getAll("unit").map(String));

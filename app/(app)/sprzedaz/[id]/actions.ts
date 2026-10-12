@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireAdmin, requireProfile } from "@/lib/auth";
+import { requireAdmin, requireSection } from "@/lib/auth";
 import { errorMessage } from "@/lib/errors";
 import { adjustStock, type StockChange } from "@/lib/stock";
 import type { LineItem } from "@/lib/sync/shop-orders";
@@ -103,7 +103,7 @@ export type QuoteState = { prices: Partial<Record<ServiceKey, { price: number | 
 
 /** Ceny przesyłki dla każdej usługi (wycena w Furgonetce, bez tworzenia przesyłki). */
 export async function quoteLabel(fd: FormData): Promise<QuoteState> {
-  await requireProfile();
+  await requireSection("sprzedaz");
   const db = createAdminClient();
   if (!(await furgonetkaConnection(db))) return { prices: {}, error: "Furgonetka nie jest połączona." };
   const keys = Object.keys(SERVICE_LABEL) as ServiceKey[];
@@ -123,7 +123,7 @@ export async function quoteLabel(fd: FormData): Promise<QuoteState> {
 
 /** Etykieta z poziomu zamówienia: przesyłka w Furgonetce (InPost / DPD), nadanie, numer do Shopify. */
 export async function createLabel(_: LabelState, fd: FormData): Promise<LabelState> {
-  const { profile } = await requireProfile();
+  const { profile } = await requireSection("sprzedaz");
   const db = createAdminClient();
   const orderId = str(fd, "order_id");
   const { data: order } = await db.from("orders").select("*, store:stores(code, shopify_domain)").eq("id", orderId).maybeSingle();
@@ -206,7 +206,7 @@ export async function createLabel(_: LabelState, fd: FormData): Promise<LabelSta
 
 /** Odświeżenie jednego zamówienia ze Shopify i stanów przesyłek. */
 export async function refreshOrder(fd: FormData) {
-  await requireProfile();
+  await requireSection("sprzedaz");
   const db = createAdminClient();
   const id = str(fd, "id");
   const { data: order } = await db.from("orders").select("id, store_id, shopify_order_id, store:stores(code, shopify_domain)").eq("id", id).maybeSingle();
@@ -240,7 +240,7 @@ async function loadOrder(id: string) {
  * Linie bez sprzedanej sztuki (brak sztuki, towar w drodze) są anulowane.
  */
 async function releaseSales(saleIds: string[], backToStock: boolean, notes: string[]) {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("sprzedaz");
   if (!saleIds.length) return;
   const { data: sales } = await supabase.from("sales").select("id, status, unit:units(id, code, status, variant_id, location_id)").in("id", saleIds);
   const changes: StockChange[] = [];

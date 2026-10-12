@@ -1,3 +1,4 @@
+import { can } from "@/lib/permissions";
 import type { NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { loadJpkLines, loadJpkLinesByKeys } from "@/lib/jpk";
@@ -19,8 +20,8 @@ export async function POST(req: NextRequest) {
   const db = await createClient();
   const { data: auth } = await db.auth.getClaims();
   if (!auth?.claims?.sub) return new Response("unauthorized", { status: 401 });
-  const { data: profile } = await db.from("profiles").select("can_see_prices, active").eq("id", auth.claims.sub).single();
-  if (!profile?.active) return new Response("forbidden", { status: 403 });
+  const { data: profile } = await db.from("profiles").select("can_see_prices, active, role, permissions").eq("id", auth.claims.sub).single();
+  if (!profile?.active || !can(profile, "faktury")) return new Response("forbidden", { status: 403 });
 
   const fd = await req.formData();
   const keys = fd.getAll("l").map(String).filter((k) => KEY.test(k)).slice(0, 5000);

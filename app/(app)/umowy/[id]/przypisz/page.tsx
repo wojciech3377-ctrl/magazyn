@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { SearchInput } from "@/components/SearchInput";
 import { notFound } from "next/navigation";
 import { requireProfile } from "@/lib/auth";
 import { dateTime, money, UNIT_STATUS } from "@/lib/labels";
@@ -79,13 +80,13 @@ export default async function AssignContractPage({ params, searchParams }: { par
       </nav>
       <form className="mb-4 flex flex-wrap gap-2" method="get">
         <input type="hidden" name="zrodlo" value={source} />
-        <input className="input w-96" name="q" defaultValue={sp.q} placeholder={source === "magazyn" ? "Nazwa, rozmiar, kod sztuki, IMEI, SKU" : "Numer zamówienia, klient, e-mail"} autoFocus />
+        <SearchInput wrapperClassName="w-full sm:w-96" name="q" defaultValue={sp.q} placeholder={source === "magazyn" ? "Nazwa, rozmiar, kod sztuki, IMEI, SKU" : "Numer zamówienia, klient, e-mail"} autoFocus />
         <button className="btn">Szukaj</button>
       </form>
 
       {source === "magazyn" ? (
         <div className="card overflow-x-auto">
-          <table className="table">
+          <table className="table mtable mtable-flow">
             <thead><tr><th>Produkt</th><th>Rozmiar</th><th>Kod</th><th>Status</th><th>Lokalizacja</th><th>Data</th><th /></tr></thead>
             <tbody>
               {!units.length && <tr><td colSpan={7} className="py-8 text-center text-muted">Brak sztuk bez umowy{q ? " dla tego wyszukiwania" : ""}.</td></tr>}
@@ -111,7 +112,7 @@ export default async function AssignContractPage({ params, searchParams }: { par
         </div>
       ) : (
         <div className="card overflow-x-auto">
-          <table className="table">
+          <table className="table mtable mtable-flow">
             <thead><tr><th>Zamówienie</th><th>Data</th><th>Przedmiot bez umowy</th><th /></tr></thead>
             <tbody>
               {!orders.length && <tr><td colSpan={4} className="py-8 text-center text-muted">Brak zamówień.</td></tr>}

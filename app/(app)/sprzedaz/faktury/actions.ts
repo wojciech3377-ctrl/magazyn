@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { requireAdmin, requireProfile } from "@/lib/auth";
+import { requireAdmin, requireSection } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { errorMessage } from "@/lib/errors";
 import { issueInvoice, issueReceipt, receiptPreview, refreshKsefStatus, sendInvoiceToKsef, type DraftItem, type InvoiceDraft, type PaymentMethod } from "@/lib/invoices/service";
@@ -79,7 +79,7 @@ export type ReceiptState = { error?: string; id?: string; number?: string; note?
 
 /** „Podgląd dokumentu”: PDF paragonu bez nadawania numeru (base64). */
 export async function previewReceiptAction(fd: FormData): Promise<{ error?: string; pdf?: string }> {
-  await requireProfile();
+  await requireSection("faktury");
   const db = createAdminClient();
   const parsed = parseItems(fd);
   if ("error" in parsed) return parsed;
@@ -96,7 +96,7 @@ export async function previewReceiptAction(fd: FormData): Promise<{ error?: stri
 
 /** „Wydrukuj dokument”: wystawia paragon (PAR/miesiąc/n) i zwraca jego id do wydruku. */
 export async function issueReceiptAction(_: ReceiptState, fd: FormData): Promise<ReceiptState> {
-  const { profile } = await requireProfile();
+  const { profile } = await requireSection("faktury");
   const db = createAdminClient();
   const parsed = parseItems(fd);
   if ("error" in parsed) return parsed;
@@ -122,7 +122,7 @@ export async function issueReceiptAction(_: ReceiptState, fd: FormData): Promise
 
 /** Wystawienie faktury z formularza (i opcjonalnie wysyłka do KSeF). */
 export async function createInvoiceAction(_: InvoiceFormState, fd: FormData): Promise<InvoiceFormState> {
-  const { profile } = await requireProfile();
+  const { profile } = await requireSection("faktury");
   const db = createAdminClient();
   const parsed = parseItems(fd);
   if ("error" in parsed) return parsed;
@@ -196,7 +196,7 @@ export async function createInvoiceAction(_: InvoiceFormState, fd: FormData): Pr
 }
 
 export async function sendToKsefAction(fd: FormData) {
-  await requireProfile();
+  await requireSection("faktury");
   const id = s(fd, "id");
   let msg: string;
   let ok = true;
@@ -213,7 +213,7 @@ export async function sendToKsefAction(fd: FormData) {
 }
 
 export async function checkKsefAction(fd: FormData) {
-  await requireProfile();
+  await requireSection("faktury");
   const id = s(fd, "id");
   let msg = "Status sprawdzony.";
   try {
@@ -254,7 +254,7 @@ export type NipLookupResult = { ok: true; name: string; address1: string; addres
 
 /** Dane nabywcy po NIP (GUS / biała lista VAT). */
 export async function lookupNipAction(raw: string): Promise<NipLookupResult> {
-  await requireProfile();
+  await requireSection("faktury");
   const nip = onlyDigits(raw);
   if (!nipValid(nip)) return { ok: false, error: "Nieprawidłowy NIP." };
   try {
@@ -286,7 +286,7 @@ export type CustomerHit = { id: string; name: string; company: boolean; nip: str
 
 /** Zapisani nabywcy: wyszukiwanie po nazwie, NIP albo e-mailu. */
 export async function searchCustomersAction(q: string): Promise<CustomerHit[]> {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("faktury");
   const text = q.trim().replace(/[,()*%\\]/g, " ").trim();
   let query = supabase.from("customers").select("id, name, company, nip, address1, address2, country, email").order("updated_at", { ascending: false }).limit(8);
   if (text) query = query.or(`name.ilike.%${text}%,nip.ilike.%${onlyDigits(text) || text}%,email.ilike.%${text}%`);
@@ -295,13 +295,13 @@ export async function searchCustomersAction(q: string): Promise<CustomerHit[]> {
 }
 
 export async function deleteCustomerAction(id: string) {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("faktury");
   await supabase.from("customers").delete().eq("id", id);
 }
 
 /** Ręczna wysyłka faktury e-mailem (na adres nabywcy albo inny podany). */
 export async function emailInvoiceAction(fd: FormData) {
-  await requireProfile();
+  await requireSection("faktury");
   const id = s(fd, "id");
   let q: string;
   try {
@@ -318,7 +318,7 @@ export type InvoiceItemHit = { key: string; name: string; detail: string; price:
 
 /** Pozycje faktury z magazynu (sztuki na stanie – z formą zakupu i IMEI) albo z katalogu (rozmiar bez sztuki). */
 export async function searchInvoiceItemsAction(q: string): Promise<InvoiceItemHit[]> {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("faktury");
   const text = q.trim().replace(/[,()*%\\]/g, " ").trim();
   if (text.length < 2) return [];
   const like = `%${text}%`;
@@ -401,7 +401,7 @@ export async function deleteInvoiceAction(fd: FormData) {
 
 /** Faktura korygująca do faktury przyjętej w KSeF; od razu wysyłana do KSeF (gdy jest skonfigurowany). */
 export async function issueCorrectionAction(_: InvoiceFormState, fd: FormData): Promise<InvoiceFormState> {
-  const { profile } = await requireProfile();
+  const { profile } = await requireSection("faktury");
   const db = createAdminClient();
   const originalId = s(fd, "original_id");
   let items: { name: string; quantity: number; unit: string; unit_price_gross: number; vat: "23" | "margin" }[];

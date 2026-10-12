@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { diagnoseStock } from "@/lib/stock-diagnose";
 import { requireProfile } from "@/lib/auth";
 import { dateTime } from "@/lib/labels";
@@ -9,7 +10,7 @@ import { getBuyerSignature, getCompany } from "@/lib/contracts/settings";
 import { getSmtpSettings, mailConfig } from "@/lib/mail";
 import { ContractSettings } from "./ContractSettings";
 import { FiscalSettings } from "./FiscalSettings";
-import { addExclusion, createUser, deleteExclusion, disconnectFurgonetka, purgeExcluded, purgeNonShopify, registerWebhooks, runStockNow, saveSmtp, saveInvoiceSettings, saveLocation, saveSender, saveShopifyLocation, saveStockMaster, saveStore, saveUser, checkOmnibus, fixProductStockNow } from "./actions";
+import { addExclusion, deleteExclusion, disconnectFurgonetka, purgeExcluded, purgeNonShopify, registerWebhooks, runStockNow, saveSmtp, saveInvoiceSettings, saveLocation, saveSender, saveShopifyLocation, saveStockMaster, saveStore, checkOmnibus, fixProductStockNow } from "./actions";
 import { compareStock, getStockMaster, planPushToShopify, shopifyLocations, type ShopifyLocation } from "@/lib/sync/shopify-stock";
 import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/furgonetka";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -36,20 +37,20 @@ const SETTINGS_TABS = [
   { key: "sklepy", label: "Sklepy i lokalizacje" },
   { key: "stany", label: "Stany magazynowe" },
   { key: "wykluczenia", label: "Wykluczenia" },
-  { key: "uzytkownicy", label: "Użytkownicy" },
   { key: "dziennik", label: "Dziennik" },
 ] as const;
 
 export default async function UstawieniaPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const sp = await searchParams;
+  if (sp.zakladka === "uzytkownicy") redirect("/pracownicy");
   const tab = SETTINGS_TABS.find((t) => t.key === sp.zakladka)?.key ?? "polaczenia";
   const { supabase, profile } = await requireProfile();
   const isAdmin = profile.role === "admin";
 
-  const [{ data: stores }, { data: locations }, { data: users }, { data: logs }, { data: imported }, { data: exclusions }] = await Promise.all([
+  const [{ data: stores }, { data: locations }, , { data: logs }, { data: imported }, { data: exclusions }] = await Promise.all([
     supabase.from("stores").select("*").order("name"),
     supabase.from("locations").select("*").order("name"),
-    supabase.from("profiles").select("*").order("created_at"),
+    Promise.resolve({ data: null }),
     supabase.from("sync_log").select("*").order("created_at", { ascending: false }).limit(15),
     supabase.from("sync_state").select("value").eq("key", "initial_stock_imported").maybeSingle(),
     supabase.from("catalog_exclusions").select("id, kind, value").order("created_at"),
@@ -502,40 +503,6 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
                 <SubmitButton className="btn-danger" pendingText="Usuwam…">Usuń wykluczone z magazynu</SubmitButton>
               </form>
             </div>
-          </section>
-          )}
-
-          {tab === "uzytkownicy" && (
-          <section className="card overflow-x-auto p-4">
-            <h2 className="h2 mb-3">Użytkownicy</h2>
-            <table className="table">
-              <thead><tr><th>E-mail</th><th>Imię</th><th>Rola</th><th>Widzi ceny</th><th>Aktywny</th><th /></tr></thead>
-              <tbody>
-                {users?.map((u) => (
-                  <tr key={u.id}>
-                    <td>{u.email}</td>
-                    <td colSpan={5}>
-                      <form action={saveUser} className="flex flex-wrap items-center gap-3">
-                        <input type="hidden" name="id" value={u.id} />
-                        <input className="input w-40 py-1" name="full_name" defaultValue={u.full_name ?? ""} aria-label="Imię" />
-                        <select className="input w-36 py-1" name="role" defaultValue={u.role} aria-label="Rola">
-                          <option value="staff">pracownik</option>
-                          <option value="admin">administrator</option>
-                        </select>
-                        <label className="flex items-center gap-1.5 text-sm"><input type="checkbox" name="can_see_prices" defaultChecked={u.can_see_prices} /> ceny zakupu</label>
-                        <label className="flex items-center gap-1.5 text-sm"><input type="checkbox" name="active" defaultChecked={u.active} /> aktywny</label>
-                        <SubmitButton className="btn-secondary py-1">Zapisz</SubmitButton>
-                      </form>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <form action={createUser} className="mt-3 flex flex-wrap items-end gap-2 border-t border-line pt-3">
-              <input className="input w-64" type="email" name="email" placeholder="e-mail pracownika" aria-label="E-mail" />
-              <input className="input w-56" type="text" name="password" placeholder="hasło startowe (min. 10 znaków)" aria-label="Hasło startowe" autoComplete="off" />
-              <SubmitButton>Dodaj konto</SubmitButton>
-            </form>
           </section>
           )}
 

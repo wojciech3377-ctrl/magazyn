@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { FilterField, ListToolbar } from "@/components/ListToolbar";
+import { filterChips } from "@/lib/list-params";
 import { requireProfile } from "@/lib/auth";
 import { PageHeader, Pagination } from "@/components/ui";
 import { describeEvent } from "@/lib/history";
@@ -41,15 +43,27 @@ export default async function HistoryPage({ searchParams }: { searchParams: Prom
   return (
     <>
       <PageHeader title="Historia magazynu" sub="Wszystko, co działo się ze sztukami: przyjęcia, sprzedaż, zmiany statusu, umowy, przesunięcia, komis i wypłaty." actions={<Link className="btn-secondary" href="/magazyn">Wróć do Magazynu</Link>} />
-      <form className="card mb-4 grid gap-3 p-4 sm:grid-cols-[1fr_14rem_12rem_auto]" method="get">
-        <input className="input" name="q" defaultValue={sp.q} placeholder="Kod sztuki, IMEI, nazwa, SKU albo komisant" aria-label="Szukaj" />
-        <select className="input" name="typ" defaultValue={type} aria-label="Rodzaj zdarzenia">{TYPES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select>
-        <select className="input" name="wlasciciel" defaultValue={sp.wlasciciel ?? ""} aria-label="Właściciel"><option value="">Własne i komis</option><option value="wlasne">Tylko własne</option><option value="komis">Tylko komis</option></select>
-        <button className="btn">Pokaż</button>
-      </form>
+      <ListToolbar
+        q={sp.q}
+        placeholder="Kod sztuki, IMEI, nazwa, SKU albo komisant"
+        active={[type, sp.wlasciciel].filter(Boolean).length}
+        resetHref="/magazyn/historia"
+        chips={filterChips("/magazyn/historia", { q: sp.q, typ: type || undefined, wlasciciel: sp.wlasciciel }, {
+          q: (v) => `„${v}”`,
+          typ: (v) => TYPES.find(([k]) => k === v)?.[1],
+          wlasciciel: (v) => (v === "wlasne" ? "tylko własne" : "tylko komis"),
+        })}
+      >
+        <FilterField label="Rodzaj zdarzenia">
+          <select className="input" name="typ" defaultValue={type}>{TYPES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select>
+        </FilterField>
+        <FilterField label="Właściciel">
+          <select className="input" name="wlasciciel" defaultValue={sp.wlasciciel ?? ""}><option value="">Własne i komis</option><option value="wlasne">Tylko własne</option><option value="komis">Tylko komis</option></select>
+        </FilterField>
+      </ListToolbar>
       <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={{ q: sp.q, typ: type || undefined, wlasciciel: sp.wlasciciel }} top />
       <div className="card overflow-x-auto">
-        <table className="table">
+        <table className="table mtable mtable-flow">
           <thead><tr><th>Kiedy</th><th>Sztuka</th><th>Zdarzenie</th></tr></thead>
           <tbody>
             {!data?.length && <tr><td colSpan={3} className="py-10 text-center text-muted">Brak zdarzeń dla tych filtrów.</td></tr>}
@@ -57,12 +71,12 @@ export default async function HistoryPage({ searchParams }: { searchParams: Prom
               const d = describeEvent(e);
               return (
                 <tr key={e.id}>
-                  <td className="whitespace-nowrap text-sm text-muted">{dateTime(e.created_at)}</td>
-                  <td className="min-w-56">
+                  <td className="m-full whitespace-nowrap text-sm text-muted max-md:text-xs">{dateTime(e.created_at)}</td>
+                  <td className="m-full min-w-56">
                     {e.unit ? <Link className="font-medium hover:underline" href={`/magazyn/${e.unit.id}`}>{e.unit.variant?.product.title} · {e.unit.variant?.option}</Link> : "–"}
                     <span className="block font-mono text-xs text-muted">{e.unit?.code}{e.unit?.owner_type === "consignment" ? <span className="font-sans"> · komis {e.unit.consignor?.name ?? ""}</span> : ""}</span>
                   </td>
-                  <td className="text-sm"><span className="inline-flex items-start gap-2"><span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${dot[d.tone]}`} /><span><b className="font-medium">{d.title}</b>{d.detail && <span className="text-muted"> · {d.detail}</span>}</span></span></td>
+                  <td className="m-full text-sm"><span className="inline-flex items-start gap-2"><span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${dot[d.tone]}`} /><span><b className="font-medium">{d.title}</b>{d.detail && <span className="text-muted"> · {d.detail}</span>}</span></span></td>
                 </tr>
               );
             })}

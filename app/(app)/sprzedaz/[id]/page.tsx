@@ -158,7 +158,7 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
 
       <section className="card mt-5 overflow-x-auto">
         <h2 className="h2 p-4 pb-0">Produkty</h2>
-        <table className="table">
+        <table className="table mtable mtable-flow">
           <thead><tr><th /><th>Produkt</th><th>Rozmiar</th><th>SKU</th><th className="text-right">Ilość</th><th className="text-right">Cena</th><th /></tr></thead>
           <tbody>
             {lines.map((l, i) => (
@@ -192,7 +192,7 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
         {!sales?.length ? (
           <p className="p-4 text-sm text-muted">Linie z magazynu pojawią się po odczycie zamówienia (ze Shopify).</p>
         ) : (
-          <table className="table">
+          <table className="table mtable mtable-flow">
             <thead><tr><th>Produkt</th><th>Sztuka</th><th>Status</th><th>Umowa</th><th>Zmień sztukę przy pakowaniu</th></tr></thead>
             <tbody>
               {sales.map((s) => {

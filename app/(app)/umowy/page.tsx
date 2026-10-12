@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { FilterField, ListToolbar } from "@/components/ListToolbar";
+import { activeFilters, filterChips } from "@/lib/list-params";
 import { requireProfile } from "@/lib/auth";
 import { CONTRACT_TYPE, dateOnly, money } from "@/lib/labels";
 import { Notice, PageHeader, Pagination, Pill } from "@/components/ui";
@@ -7,6 +9,14 @@ import { deleteContract, markPaid } from "./actions";
 import { ConfirmSubmit } from "@/components/ConfirmSubmit";
 
 const PER_PAGE = 100;
+
+const CONTRACT_SORTS: Record<string, { label: string; column: string; asc: boolean }> = {
+  najnowsze: { label: "Najnowsze", column: "created_at", asc: false },
+  najstarsze: { label: "Najstarsze", column: "created_at", asc: true },
+  data: { label: "Data umowy", column: "contract_date", asc: false },
+  osoba: { label: "Osoba A–Z", column: "counterparty", asc: true },
+  kwota: { label: "Kwota: najwyższa", column: "amount", asc: false },
+};
 
 const TABS = [
   { key: "", label: "Wszystkie", categories: [] as string[] },
@@ -42,10 +52,11 @@ export default async function UmowyPage({ searchParams }: { searchParams: Promis
   const page = Math.max(1, Number(sp.strona ?? 1));
   const tab = TABS.some((t) => t.key === sp.kategoria) ? sp.kategoria ?? "" : "";
 
+  const sort = CONTRACT_SORTS[sp.sort ?? ""] ? sp.sort! : "najnowsze";
   let query = supabase
     .from(sp.kategoria === "bez-rzeczy" ? "contract_overview_unused" : "contract_overview")
     .select("*", { count: "exact" })
-    .order("created_at", { ascending: false })
+    .order(CONTRACT_SORTS[sort].column, { ascending: CONTRACT_SORTS[sort].asc, nullsFirst: false })
     .range((page - 1) * PER_PAGE, page * PER_PAGE - 1);
   const active = TABS.find((t) => t.key === tab)!;
   if (active.categories.length) query = query.in("category", [...active.categories]);
@@ -54,6 +65,9 @@ export default async function UmowyPage({ searchParams }: { searchParams: Promis
   if (sp.q) query = query.ilike("counterparty", `%${sp.q.replace(/[%,()]/g, "")}%`);
   if (sp.typ) query = query.eq("type", sp.typ);
   if (sp.plik === "brak") query = query.is("file_path", null);
+  if (sp.oplacona === "tak") query = query.not("paid_at", "is", null);
+  if (sp.oplacona === "nie") query = query.is("paid_at", null);
+  const listParams = { kategoria: tab || undefined, q: sp.q, typ: sp.typ, plik: sp.plik, oplacona: sp.oplacona, sort: sp.sort };
 
   const counts = await Promise.all(
     TABS.map((t) => {
@@ -106,7 +120,7 @@ export default async function UmowyPage({ searchParams }: { searchParams: Promis
 
       {sp.ok && <div className="mb-4"><Notice tone="ok">{sp.ok}</Notice></div>}
       {sp.blad && <div className="mb-4"><Notice tone="error">{sp.blad}</Notice></div>}
-      <nav className="mb-4 flex flex-wrap gap-1 border-b border-line text-sm" aria-label="Kategorie umów">
+      <nav className="-mx-4 mb-4 flex gap-1 overflow-x-auto whitespace-nowrap border-b border-line px-4 text-sm sm:mx-0 sm:flex-wrap sm:px-0" aria-label="Kategorie umów">
         {TABS.map((t, i) => (
           <Link
             key={t.key}
@@ -118,23 +132,45 @@ export default async function UmowyPage({ searchParams }: { searchParams: Promis
         ))}
       </nav>
 
-      <form className="mb-4 flex flex-wrap gap-2" method="get">
-        {tab && <input type="hidden" name="kategoria" value={tab} />}
-        <input className="input w-64" name="q" defaultValue={sp.q} placeholder="Szukaj po osobie lub firmie" />
-        <select className="input w-48" name="typ" defaultValue={sp.typ ?? ""}>
-          <option value="">Wszystkie typy</option>
-          {Object.entries(CONTRACT_TYPE).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-        </select>
-        <select className="input w-40" name="plik" defaultValue={sp.plik ?? ""}>
-          <option value="">Z plikiem i bez</option>
-          <option value="brak">bez pliku</option>
-        </select>
-        <button className="btn">Filtruj</button>
-      </form>
+      <ListToolbar
+        q={sp.q}
+        placeholder="Osoba lub firma"
+        hidden={{ kategoria: tab || undefined }}
+        sort={{ value: sort, options: Object.entries(CONTRACT_SORTS).map(([value, o]) => ({ value, label: o.label })) }}
+        dirParam={null}
+        active={activeFilters(sp, ["typ", "plik", "oplacona"])}
+        resetHref={href(tab)}
+        chips={filterChips("/umowy", listParams, {
+          q: (v) => `„${v}”`,
+          typ: (v) => CONTRACT_TYPE[v],
+          plik: () => "bez pliku",
+          oplacona: (v) => (v === "tak" ? "opłacone" : "nieopłacone"),
+        })}
+      >
+        <FilterField label="Typ umowy">
+          <select className="input" name="typ" defaultValue={sp.typ ?? ""}>
+            <option value="">Wszystkie typy</option>
+            {Object.entries(CONTRACT_TYPE).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </select>
+        </FilterField>
+        <FilterField label="Plik umowy">
+          <select className="input" name="plik" defaultValue={sp.plik ?? ""}>
+            <option value="">Z plikiem i bez</option>
+            <option value="brak">Bez pliku</option>
+          </select>
+        </FilterField>
+        <FilterField label="Opłacona">
+          <select className="input" name="oplacona" defaultValue={sp.oplacona ?? ""}>
+            <option value="">Wszystkie</option>
+            <option value="tak">Opłacone</option>
+            <option value="nie">Nieopłacone</option>
+          </select>
+        </FilterField>
+      </ListToolbar>
 
-      <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={{ kategoria: tab || undefined, q: sp.q, typ: sp.typ, plik: sp.plik }} top />
+      <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={listParams} top />
       <div className="card overflow-x-auto lg:overflow-visible">
-        <table className="table [&_td]:px-2 [&_th]:px-2">
+        <table className="table mtable mtable-flow [&_td]:px-2 [&_th]:px-2">
           <thead>
             <tr>
               <th>Numer</th><th>Imię i nazwisko</th><th>Stan</th>{profile.can_see_prices && <th className="text-right">Do opłaty</th>}<th>Konto</th><th>Opłacone</th>
@@ -151,10 +187,10 @@ export default async function UmowyPage({ searchParams }: { searchParams: Promis
                     <Link className="text-accent after:absolute after:inset-0 after:content-[''] hover:underline" href={`/umowy/${c.id}`}>{nr(c)}</Link>
                     <ContractPreview c={c} e={e} nr={nr(c)} person={person(c)} amount={profile.can_see_prices ? amountText(c) : null} products={productsOf.get(c.id) ?? []} />
                   </td>
-                  <td className="min-w-32">{person(c)}</td>
+                  <td className="min-w-32 max-md:font-medium">{person(c)}</td>
                   <td><StatePill c={c} /></td>
                   {profile.can_see_prices && <td className="whitespace-nowrap text-right tabular-nums">{toPay(c) ? <b>{amountText(c)}</b> : "–"}</td>}
-                  <td className="max-w-40 break-all text-xs">{e?.seller_bank_account ? e.seller_bank_account : e?.payment_method === "cash" || (!e?.seller_bank_account && c.template) ? "gotówka" : "–"}</td>
+                  <td className="max-w-40 break-all text-xs max-md:hidden">{e?.seller_bank_account ? e.seller_bank_account : e?.payment_method === "cash" || (!e?.seller_bank_account && c.template) ? "gotówka" : "–"}</td>
                   <td className="whitespace-nowrap">
                     {c.paid_at ? <span className="text-sm text-ok">tak · {dateOnly(c.paid_at)}</span> : toPay(c) ? (
                       <form action={markPaid} className="relative z-10">
@@ -167,8 +203,8 @@ export default async function UmowyPage({ searchParams }: { searchParams: Promis
                   <td className="text-sm">{CONTRACT_TYPE[c.type]}</td>
                   <td className="whitespace-nowrap text-sm">{dateOnly(c.contract_date ?? c.created_at)}</td>
                   {profile.can_see_prices && <td className="whitespace-nowrap text-right tabular-nums">{amountText(c)}</td>}
-                  <td className="max-w-64"><Products names={productsOf.get(c.id) ?? []} /></td>
-                  <td className="max-w-48 text-xs text-muted">{e?.seller_address ?? "–"}</td>
+                  <td className="m-full max-w-64"><Products names={productsOf.get(c.id) ?? []} /></td>
+                  <td className="max-w-48 text-xs text-muted max-md:hidden">{e?.seller_address ?? "–"}</td>
                   <td className="relative z-10 whitespace-nowrap">
                     {tab === "bez-rzeczy" && <Link className="btn-secondary mb-1 inline-block px-2.5 py-1 text-xs" href={`/umowy/${c.id}/przypisz`}>Przypisz</Link>}
                     {c.file_path && <a className="block text-xs text-accent hover:underline" href={`/api/umowy/${c.id}/pdf`} target="_blank" rel="noreferrer">plik</a>}
@@ -185,7 +221,7 @@ export default async function UmowyPage({ searchParams }: { searchParams: Promis
           </tbody>
         </table>
       </div>
-      <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={{ kategoria: tab || undefined, q: sp.q, typ: sp.typ, plik: sp.plik }} />
+      <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={listParams} />
     </>
   );
 }

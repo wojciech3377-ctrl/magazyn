@@ -13,6 +13,17 @@ const PATHS: Record<string, string> = {
   menu: "M4 6h16M4 12h16M4 18h16",
   close: "M6 6l12 12M18 6 6 18",
   chevron: "m9 6 6 6-6 6",
+  search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14Zm9 2-4.3-4.3",
+  camera: "M4 8h3l1.5-2.5h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Zm8 9a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z",
+  scan: "M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 9v6M10 9v6M13 9v6M17 9v6",
+  filter: "M4 5h16l-6 7.5V19l-4-2v-4.5L4 5Z",
+  sort: "M7 4v16m0 0-3-3m3 3 3-3M17 20V4m0 0-3 3m3-3 3 3",
+  shield: "M12 3 5 6v5c0 4.5 3 8.3 7 10 4-1.7 7-5.5 7-10V6l-7-3Zm-3 9 2 2 4-4",
+  key: "M14.5 13a4.5 4.5 0 1 0-4.2-2.9L4 16.4V20h3.6v-2h2v-2h2l1.6-1.6a4.5 4.5 0 0 0 1.3-1.4ZM16 8.5v.01",
+  plus: "M12 5v14M5 12h14",
+  check: "m5 12 5 5 9-10",
+  flash: "M13 3 5 13h6l-1 8 8-10h-6l1-8Z",
+  lock: "M7 11V8a5 5 0 0 1 10 0v3M6 11h12v9H6z",
 };
 
 export type IconName = keyof typeof PATHS;

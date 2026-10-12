@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { SearchInput } from "@/components/SearchInput";
 import { notFound, redirect } from "next/navigation";
 import { requireProfile } from "@/lib/auth";
 import { dateOnly, money } from "@/lib/labels";
@@ -94,7 +95,7 @@ export default async function AttachContractPage({ searchParams }: { searchParam
       <form className="mb-3 flex flex-wrap gap-2" method="get">
         {saleId ? <input type="hidden" name="sprzedaz" value={saleId} /> : <input type="hidden" name="sztuka" value={unitParam!} />}
         <input type="hidden" name="back" value={back} />
-        <input className="input w-96" name="q" defaultValue={sp.q} placeholder="Sprzedający, produkt (nazwa, rozmiar) albo numer umowy" />
+        <SearchInput wrapperClassName="w-full sm:w-96" name="q" defaultValue={sp.q} placeholder="Sprzedający, produkt (nazwa, rozmiar) albo numer umowy" />
         <button className="btn">Szukaj</button>
         {variant && !q && (
           <Link className="btn-secondary" href={`/sprzedaz/umowa?${saleId ? `sprzedaz=${saleId}` : `sztuka=${unitParam}`}&back=${encodeURIComponent(back)}&q=${encodeURIComponent(variant.product.title.split(" ").slice(0, 4).join(" "))}`}>Pokaż umowy z „{variant.product.title.split(" ").slice(0, 4).join(" ")}”</Link>
@@ -110,7 +111,7 @@ export default async function AttachContractPage({ searchParams }: { searchParam
         </div>
       )}
       <div className="card overflow-x-auto">
-        <table className="table">
+        <table className="table mtable mtable-flow">
           <thead><tr><th>Numer</th><th>Sprzedający</th><th>Pozycje</th><th>Data</th><th className="text-right">Kwota</th><th /></tr></thead>
           <tbody>
             {!list.length && <tr><td colSpan={6} className="py-8 text-center text-muted">Brak niewykorzystanych umów{q ? " dla tego wyszukiwania" : ""}.</td></tr>}

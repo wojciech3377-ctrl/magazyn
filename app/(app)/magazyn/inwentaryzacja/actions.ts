@@ -1,6 +1,6 @@
 "use server";
 
-import { requireProfile } from "@/lib/auth";
+import { requireSection } from "@/lib/auth";
 
 export type InvLine = { unitId: string | null; code: string | null; title: string; option: string; status?: string; note?: string };
 export type InvSummary = { expected: number; scanned: number; matched: number; missing: InvLine[]; extra: (InvLine & { scan: string })[]; reportId: string | null } | { error: string };
@@ -12,7 +12,7 @@ const PRESENT = ["in_stock", "reserved", "consignor_hold", "returned"];
  * porównane ze sztukami, które według aplikacji leżą w tej lokalizacji.
  */
 export async function summarizeInventory(locationId: string, scans: string[]): Promise<InvSummary> {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("magazyn");
   if (!/^[0-9a-f-]{36}$/.test(locationId)) return { error: "Wybierz lokalizację." };
   const codes = scans.map((s) => s.trim().toUpperCase()).filter(Boolean).slice(0, 5000);
   const { data: expectedRows } = await supabase.from("units_list").select("id, code, identifier, title, option, status, variant_id")

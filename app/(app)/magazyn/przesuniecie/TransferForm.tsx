@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useRef, useState } from "react";
+import { SearchInput } from "@/components/SearchInput";
 import { createTransfer, lookupTransferUnit, type TransferState, type TransferUnit } from "./actions";
 
 type Loc = { id: string; label: string };
@@ -16,8 +17,8 @@ export function TransferForm({ locations, defaultFrom }: { locations: Loc[]; def
   const [busy, setBusy] = useState(false);
   const input = useRef<HTMLInputElement>(null);
 
-  async function add() {
-    const code = scan.trim();
+  async function add(scanned?: string) {
+    const code = (scanned ?? scan).trim();
     if (!code || busy) return;
     setBusy(true);
     const r = await lookupTransferUnit(from, code, units.map((u) => u.id));
@@ -55,14 +56,15 @@ export function TransferForm({ locations, defaultFrom }: { locations: Loc[]; def
       <div className="card space-y-3 p-4">
         <label className="label" htmlFor="tr-scan">Zeskanuj albo wpisz kod (kod sztuki, IMEI, SKU, EAN) i Enter</label>
         <div className="flex gap-2">
-          <input id="tr-scan" ref={input} className="input max-w-md font-mono" value={scan} disabled={!from} autoFocus autoComplete="off"
+          <SearchInput id="tr-scan" ref={input} noIcon wrapperClassName="max-w-md flex-1" className="font-mono" value={scan} disabled={!from} autoFocus
             onChange={(e) => setScan(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void add(); } }}
+            continuous onScan={(c) => void add(c)}
             placeholder={from ? "np. S000123" : "najpierw wybierz magazyn źródłowy"} />
-          <button type="button" className="btn-secondary" onClick={add} disabled={!from || busy}>{busy ? "Szukam…" : "Dodaj"}</button>
+          <button type="button" className="btn-secondary" onClick={() => add()} disabled={!from || busy}>{busy ? "Szukam…" : "Dodaj"}</button>
         </div>
         {msg && <p className={`text-sm ${msg.ok ? "text-ok" : "text-bad"}`} role="status">{msg.text}</p>}
         <div className="overflow-x-auto">
-          <table className="table">
+          <table className="table mtable mtable-flow">
             <thead><tr><th>#</th><th>Kod</th><th>Rzecz</th><th>Rozmiar</th><th>Półka</th><th /></tr></thead>
             <tbody>
               {!units.length && <tr><td colSpan={6} className="py-6 text-center text-muted">Zeskanowane rzeczy pojawią się tutaj.</td></tr>}

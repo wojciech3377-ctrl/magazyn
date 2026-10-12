@@ -83,7 +83,7 @@ export default async function PosOrderPage({ params, searchParams }: { params: P
         />
       </div>
       <div className="card overflow-x-auto">
-        <table className="table">
+        <table className="table mtable mtable-flow">
           <thead><tr><th>Sztuka</th><th>Produkt</th><th className="text-right">Cena</th></tr></thead>
           <tbody>
             {items?.map((i) => {

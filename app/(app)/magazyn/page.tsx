@@ -10,11 +10,35 @@ import { bulkAction, runAutoCatalogNow } from "./actions";
 import { CONTRACT_LITE_FIELDS, contractStage, isSettled, MISSING_BTN, type ContractLite } from "@/lib/contracts/stage";
 import { ConsignorWaiting, ContractDone, ContractInProgress } from "@/components/ContractBadges";
 import { Barcode } from "@/app/etykiety/Barcode";
+import { FilterField, ListToolbar } from "@/components/ListToolbar";
+import { BulkBar } from "@/components/BulkBar";
+import { activeFilters, filterChips } from "@/lib/list-params";
 
 // Przycisk „Sprawdź nowe produkty i stany” czyta cały katalog Shopify – potrzebuje dłuższego czasu.
 export const maxDuration = 300;
 
 const PER_PAGE = 100;
+
+const FILTER_KEYS = ["sklep", "lokalizacja", "status", "umowa", "wlasciciel", "komisant", "forma", "rozmiar", "cena_od", "cena_do", "zakup_od", "zakup_do", "od", "do", "imei"];
+
+function sortOptions(prices: boolean) {
+  return [
+    { value: "przyjeta:desc", label: "Najnowsze" },
+    { value: "przyjeta:asc", label: "Najstarsze" },
+    { value: "nazwa:asc", label: "Nazwa A–Z" },
+    { value: "nazwa:desc", label: "Nazwa Z–A" },
+    { value: "cena:desc", label: "Najdroższe" },
+    { value: "cena:asc", label: "Najtańsze" },
+    ...(prices ? [{ value: "zakup:desc", label: "Zakup: najwyższy" }, { value: "zakup:asc", label: "Zakup: najniższy" }] : []),
+    { value: "rozmiar:asc", label: "Rozmiar ↑" },
+    { value: "rozmiar:desc", label: "Rozmiar ↓" },
+    { value: "kod:desc", label: "Kod: najnowszy" },
+    { value: "kod:asc", label: "Kod: najstarszy" },
+    { value: "lokalizacja:asc", label: "Lokalizacja" },
+    { value: "status:asc", label: "Status" },
+    { value: "komisant:asc", label: "Komisant" },
+  ];
+}
 
 /** Cena w sklepie, z którego jest lokalizacja sztuki (albo z dowolnego sklepu). */
 function shopPrice(u: UnitRow) {
@@ -35,7 +59,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
     forma: sp.forma, rozmiar: sp.rozmiar, cena_od: sp.cena_od, cena_do: sp.cena_do, zakup_od: sp.zakup_od, zakup_do: sp.zakup_do,
     od: sp.od, do: sp.do, imei: sp.imei, sort: sp.sort, kier: sp.kier,
   };
-  const more = ["komisant", "forma", "rozmiar", "cena_od", "cena_do", "zakup_od", "zakup_do", "od", "do", "imei"].some((k) => sp[k]);
+  const more = false;
 
   const [{ rows, count }, { data: stores }, { data: locations }, { data: contracts }, { count: noContract }, { data: consignors }] = await Promise.all([
     queryUnits(supabase, filters, [(page - 1) * PER_PAGE, page * PER_PAGE - 1]),
@@ -121,74 +145,105 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
       {sp.ok && <div className="mb-4"><Notice tone="ok">{sp.ok}</Notice></div>}
       {sp.blad && <div className="mb-4"><Notice tone="error">{sp.blad}</Notice></div>}
 
-      <form className="mb-4 space-y-2" method="get">
-        <div className="grid grid-cols-2 gap-2 md:grid-cols-4 lg:grid-cols-7">
-          <input className="input col-span-2" name="q" defaultValue={sp.q} placeholder="Szukaj: nazwa, SKU, EAN, kod sztuki, IMEI" />
+      <ListToolbar
+        q={sp.q}
+        placeholder="Nazwa, SKU, EAN, kod sztuki, IMEI"
+        sort={{ value: `${activeSort}:${activeAsc ? "asc" : "desc"}`, options: sortOptions(profile.can_see_prices) }}
+        active={activeFilters(sp, FILTER_KEYS)}
+        defaultOpen={more}
+        resetHref={`/magazyn${sp.q ? `?q=${encodeURIComponent(sp.q)}` : ""}`}
+        chips={filterChips("/magazyn", filterParams, {
+          q: (v) => `„${v}”`,
+          sklep: (v) => storeName.get(v) ?? null,
+          lokalizacja: (v) => locations?.find((l) => l.id === v)?.name ?? null,
+          status: (v) => UNIT_STATUS[v] ?? null,
+          umowa: (v) => (v === "brak" ? "bez umowy" : "z umową"),
+          wlasciciel: (v) => (v === "own" ? "własne" : "komis"),
+          komisant: (v) => consignors?.find((c) => c.id === v)?.name ?? "komisant",
+          forma: (v) => PURCHASE_FORM[v] ?? null,
+          rozmiar: (v) => `rozmiar ${v}`,
+          imei: (v) => (v === "jest" ? "z IMEI" : "bez IMEI"),
+          cena_od: (v) => `cena od ${v} zł`,
+          cena_do: (v) => `cena do ${v} zł`,
+          zakup_od: (v) => `zakup od ${v} zł`,
+          zakup_do: (v) => `zakup do ${v} zł`,
+          od: (v) => `przyjęta od ${v}`,
+          do: (v) => `przyjęta do ${v}`,
+        })}
+      >
+        <FilterField label="Sklep">
           <select className="input" name="sklep" defaultValue={sp.sklep ?? ""}>
             <option value="">Wszystkie sklepy</option>
             {stores?.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
+        </FilterField>
+        <FilterField label="Lokalizacja">
           <select className="input" name="lokalizacja" defaultValue={sp.lokalizacja ?? ""}>
             <option value="">Wszystkie lokalizacje</option>
             {locations?.map((l) => <option key={l.id} value={l.id}>{storeName.get(l.store_id)} · {l.name}</option>)}
           </select>
+        </FilterField>
+        <FilterField label="Status">
           <select className="input" name="status" defaultValue={MAGAZYN_STATUSES.includes(sp.status ?? "") ? sp.status : ""}>
             <option value="">Dostępne (na stanie, w drodze, rezerwacje)</option>
             {MAGAZYN_STATUSES.map((k) => <option key={k} value={k}>{UNIT_STATUS[k]}</option>)}
           </select>
-          <select className="input" name="umowa" defaultValue={sp.umowa ?? ""}>
-            <option value="">Umowa: wszystkie</option>
-            <option value="brak">bez umowy</option>
-            <option value="jest">z umową</option>
-          </select>
+        </FilterField>
+        <FilterField label="Własne / komis">
           <select className="input" name="wlasciciel" defaultValue={sp.wlasciciel ?? ""}>
             <option value="">Własne i komis</option>
-            <option value="own">własne</option>
-            <option value="consignment">komis</option>
+            <option value="own">Własne</option>
+            <option value="consignment">Komis</option>
           </select>
-        </div>
-        <details className="rounded-md border border-line px-3 py-2" open={more}>
-          <summary className="cursor-pointer text-sm font-medium">Więcej filtrów</summary>
-          <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4 lg:grid-cols-6">
-            <select className="input" name="komisant" defaultValue={sp.komisant ?? ""} aria-label="Komisant">
-              <option value="">Komisant: każdy</option>
-              {consignors?.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
-            <select className="input" name="forma" defaultValue={sp.forma ?? ""} aria-label="Forma sprzedaży">
-              <option value="">Forma: każda</option>
-              {Object.entries(PURCHASE_FORM).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-            </select>
-            <input className="input" name="rozmiar" defaultValue={sp.rozmiar} placeholder="Rozmiar, np. 42" aria-label="Rozmiar" />
-            <select className="input" name="imei" defaultValue={sp.imei ?? ""} aria-label="IMEI / numer seryjny">
-              <option value="">IMEI: wszystkie</option>
-              <option value="jest">z IMEI / nr seryjnym</option>
-              <option value="brak">bez IMEI</option>
-            </select>
-            <div className="flex items-center gap-1"><input className="input" name="cena_od" inputMode="decimal" defaultValue={sp.cena_od} placeholder="Cena sklep od" aria-label="Cena w sklepie od" /><input className="input" name="cena_do" inputMode="decimal" defaultValue={sp.cena_do} placeholder="do" aria-label="Cena w sklepie do" /></div>
-            {profile.can_see_prices && <div className="flex items-center gap-1"><input className="input" name="zakup_od" inputMode="decimal" defaultValue={sp.zakup_od} placeholder="Zakup od" aria-label="Cena zakupu od" /><input className="input" name="zakup_do" inputMode="decimal" defaultValue={sp.zakup_do} placeholder="do" aria-label="Cena zakupu do" /></div>}
-            <label className="text-xs text-muted">Przyjęta od<input className="input mt-0.5" type="date" name="od" defaultValue={sp.od} /></label>
-            <label className="text-xs text-muted">Przyjęta do<input className="input mt-0.5" type="date" name="do" defaultValue={sp.do} /></label>
-          </div>
-        </details>
-        <div className="flex flex-wrap items-center gap-2">
-          <select className="input w-56" name="sort" defaultValue={activeSort} aria-label="Sortuj według">
-            {Object.entries(UNIT_SORTS).map(([k, v]) => <option key={k} value={k}>Sortuj: {v.label}</option>)}
+        </FilterField>
+        <FilterField label="Komisant">
+          <select className="input" name="komisant" defaultValue={sp.komisant ?? ""}>
+            <option value="">Każdy</option>
+            {consignors?.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
-          <select className="input w-40" name="kier" defaultValue={activeAsc ? "asc" : "desc"} aria-label="Kierunek">
-            <option value="desc">malejąco</option>
-            <option value="asc">rosnąco</option>
+        </FilterField>
+        <FilterField label="Umowa">
+          <select className="input" name="umowa" defaultValue={sp.umowa ?? ""}>
+            <option value="">Wszystkie</option>
+            <option value="brak">Bez umowy</option>
+            <option value="jest">Z umową</option>
           </select>
-          <button className="btn">Filtruj</button>
-          {Object.keys(filterParams).length > 0 && <Link className="text-sm text-muted underline" href="/magazyn">Wyczyść filtry</Link>}
-        </div>
-      </form>
+        </FilterField>
+        <FilterField label="Forma sprzedaży">
+          <select className="input" name="forma" defaultValue={sp.forma ?? ""}>
+            <option value="">Każda</option>
+            {Object.entries(PURCHASE_FORM).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </select>
+        </FilterField>
+        <FilterField label="IMEI / numer seryjny">
+          <select className="input" name="imei" defaultValue={sp.imei ?? ""}>
+            <option value="">Wszystkie</option>
+            <option value="jest">Z IMEI / nr seryjnym</option>
+            <option value="brak">Bez IMEI</option>
+          </select>
+        </FilterField>
+        <FilterField label="Rozmiar">
+          <input className="input" name="rozmiar" defaultValue={sp.rozmiar} placeholder="np. 42" />
+        </FilterField>
+        <FilterField label="Cena w sklepie (zł)">
+          <span className="flex items-center gap-1.5"><input className="input" name="cena_od" inputMode="decimal" defaultValue={sp.cena_od} placeholder="od" aria-label="Cena od" /><span className="text-muted">–</span><input className="input" name="cena_do" inputMode="decimal" defaultValue={sp.cena_do} placeholder="do" aria-label="Cena do" /></span>
+        </FilterField>
+        {profile.can_see_prices && (
+          <FilterField label="Cena zakupu (zł)">
+            <span className="flex items-center gap-1.5"><input className="input" name="zakup_od" inputMode="decimal" defaultValue={sp.zakup_od} placeholder="od" aria-label="Zakup od" /><span className="text-muted">–</span><input className="input" name="zakup_do" inputMode="decimal" defaultValue={sp.zakup_do} placeholder="do" aria-label="Zakup do" /></span>
+          </FilterField>
+        )}
+        <FilterField label="Przyjęta (od – do)" wide>
+          <span className="flex items-center gap-1.5"><input className="input" type="date" name="od" defaultValue={sp.od} aria-label="Przyjęta od" /><span className="text-muted">–</span><input className="input" type="date" name="do" defaultValue={sp.do} aria-label="Przyjęta do" /></span>
+        </FilterField>
+      </ListToolbar>
 
       <form action={bulkAction}>
         <input type="hidden" name="returnTo" value={returnTo} />
         <input type="hidden" name="wroc" value={returnTo} />
         <Pagination page={page} total={count} perPage={PER_PAGE} params={filterParams} top />
         <div className="card overflow-x-auto xl:overflow-visible">
-          <table className="table [&_td]:px-2 [&_th]:px-2">
+          <table className="table mtable [&_td]:px-2 [&_th]:px-2" style={{ "--m-cols": "1.5rem minmax(0,1fr) auto", "--m-areas": "'chk prod prod' '. size price' '. place place' '. code buy' '. owner owner' '. act act'" } as React.CSSProperties}>
             <thead>
               <tr>
                 <th className="w-8"><SelectAll /></th>
@@ -213,8 +268,8 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
                 const stage = c ? contractStage(c) : null;
                 return (
                 <tr key={u.id}>
-                  <td><input type="checkbox" name="ids" value={u.id} className="h-4 w-4" aria-label={`Zaznacz ${u.code}`} /></td>
-                  <td className="min-w-48">
+                  <td style={{ gridArea: "chk" }}><input type="checkbox" name="ids" value={u.id} className="h-4 w-4 max-md:mt-3" aria-label={`Zaznacz ${u.code}`} /></td>
+                  <td className="min-w-48" style={{ gridArea: "prod" }}>
                     <Link href={`/magazyn/${u.id}`} className="flex items-center gap-2.5">
                       <Thumb src={u.variant.product.image_url} alt="" />
                       <span className="min-w-0">
@@ -229,34 +284,34 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
                       </span>
                     </Link>
                   </td>
-                  <td className="font-medium">
-                    {u.variant.option}
+                  <td className="font-medium" style={{ gridArea: "size" }}>
+                    <span className="mr-1 text-xs font-normal text-muted md:hidden">Rozmiar</span>{u.variant.option}
                     {sku && <span className="block break-all text-xs font-normal text-muted">{sku}</span>}
                   </td>
-                  <td className="font-mono text-xs">
+                  <td className="font-mono text-xs" style={{ gridArea: "code" }}>
                     {u.code}
-                    {u.identifier && <span className="block break-all text-muted">{u.identifier}</span>}
-                    <span className="mt-1 block" title={`Kod kreskowy sztuki: ${u.code}`}><Barcode value={u.code} className="h-[18px] w-[92px]" /></span>
+                    {u.identifier && <span className="block break-all text-muted max-md:ml-2 max-md:inline">IMEI {u.identifier}</span>}
+                    <span className="mt-1 block max-md:hidden" title={`Kod kreskowy sztuki: ${u.code}`}><Barcode value={u.code} className="h-[18px] w-[92px]" /></span>
                   </td>
-                  <td className="text-sm">
-                    <span className="block leading-tight">{u.location.name}</span>
-                    <span className="block text-xs text-muted">{u.location.store.name}{u.shelf ? ` · ${u.shelf}` : ""}</span>
-                    <span className="mt-1 block">{u.status === "in_stock" && shop.draft
+                  <td className="text-sm max-md:flex max-md:flex-wrap max-md:items-center max-md:gap-x-2" style={{ gridArea: "place" }}>
+                    <span className="block leading-tight max-md:text-xs max-md:text-muted">{u.location.name}<span className="md:hidden"> · {u.location.store.name}{u.shelf ? ` · ${u.shelf}` : ""}</span></span>
+                    <span className="block text-xs text-muted max-md:hidden">{u.location.store.name}{u.shelf ? ` · ${u.shelf}` : ""}</span>
+                    <span className="mt-1 block max-md:order-first max-md:mt-0">{u.status === "in_stock" && shop.draft
                       ? <span className="inline-flex items-center whitespace-nowrap rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 ring-1 ring-inset ring-slate-300" title="Produkt w Shopify jest wersją roboczą (niewidoczny w sklepie)">na stanie – wersja robocza</span>
                       : <StatusBadge status={u.status} />}</span>
                   </td>
-                  <td className="max-w-44">
+                  <td className="max-w-44 max-md:flex max-md:flex-wrap max-md:items-baseline max-md:gap-x-2 max-md:text-xs" style={{ gridArea: "owner" }}>
                     {u.owner_type === "consignment" ? (
                       <>
                         <Link href={`/magazyn?wlasciciel=consignment&komisant=${u.consignor?.id}`} className="line-clamp-2 break-words text-sm font-medium leading-tight text-accent hover:underline" title={u.consignor?.name}>{u.consignor?.name}</Link>
                         {profile.can_see_prices && u.payout_amount !== null && <span className="block text-xs text-muted">w komisie {money(u.payout_amount)}</span>}
                       </>
                     ) : (
-                      <span className="text-sm text-muted">– {OWNER_TYPE.own}</span>
+                      <span className="text-sm text-muted max-md:text-xs">– {OWNER_TYPE.own}</span>
                     )}
-                    <span className="block text-xs text-muted">{PURCHASE_FORM[u.purchase_form]}</span>
+                    <span className="block text-xs text-muted max-md:before:content-['·_']">{PURCHASE_FORM[u.purchase_form]}</span>
                   </td>
-                  <td className="whitespace-nowrap text-right tabular-nums">
+                  <td className="whitespace-nowrap text-right tabular-nums max-md:text-base" style={{ gridArea: "price" }}>
                     {shopPrice(u) !== null ? <b>{money(shopPrice(u))}</b> : u.price_error ? (
                       <span className="group relative inline-block cursor-help" tabIndex={0} aria-label={`Błąd ceny: ${u.price_error}`}>
                         <span className="rounded bg-rose-100 px-1.5 py-0.5 text-xs font-bold text-bad">BŁĄD</span>
@@ -265,7 +320,8 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
                     ) : "–"}
                   </td>
                   {profile.can_see_prices && (
-                    <td className="whitespace-nowrap text-right tabular-nums">
+                    <td className="whitespace-nowrap text-right tabular-nums max-md:text-xs max-md:text-muted" style={{ gridArea: "buy" }}>
+                      <span className="md:hidden">zakup </span>
                       {(() => {
                         // Komis bez ceny zakupu: kwota komisanta. Waluta z umowy (np. EUR).
                         const value = u.purchase_price ?? (u.owner_type === "consignment" ? u.payout_amount : null);
@@ -275,8 +331,8 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
                       })()}
                     </td>
                   )}
-                  <td className="text-right">
-                    <div className="flex flex-col items-end gap-1">
+                  <td className="text-right" style={{ gridArea: "act" }}>
+                    <div className="flex flex-col items-end gap-1 max-md:flex-row max-md:flex-wrap max-md:items-center max-md:justify-start max-md:gap-2 max-md:pt-1">
                       <span className="text-xs text-muted">{dateOnly(u.received_at)}</span>
                       {c && isSettled(stage) ? <ContractDone c={c} stage={stage!} label={`${c.counterparty ?? "umowa"} ✓`} />
                         : c && stage && stage !== "dead" ? <ContractInProgress c={c} stage={stage} />
@@ -292,17 +348,16 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
           </table>
         </div>
 
-        <div className="sticky bottom-0 mt-3 flex flex-wrap items-end gap-2 rounded-lg border border-line bg-white/95 p-3 backdrop-blur">
-          <span className="mr-2 text-sm text-muted">Zaznaczone:</span>
-          <div className="flex items-end gap-2">
-            <select className="input w-56" name="location_id" defaultValue="">
+        <BulkBar>
+          <div className="flex w-full items-end gap-2 md:w-auto">
+            <select className="input min-w-0 flex-1 md:w-56 md:flex-none" name="location_id" defaultValue="">
               <option value="">Przenieś do…</option>
               {locations?.map((l) => <option key={l.id} value={l.id}>{storeName.get(l.store_id)} · {l.name}</option>)}
             </select>
             <SubmitButton className="btn-secondary" name="action" value="move">Przenieś</SubmitButton>
           </div>
-          <div className="flex items-end gap-2">
-            <select className="input w-64" name="contract_id" defaultValue="">
+          <div className="flex w-full items-end gap-2 md:w-auto">
+            <select className="input min-w-0 flex-1 md:w-64 md:flex-none" name="contract_id" defaultValue="">
               <option value="">Odepnij umowę / wybierz umowę…</option>
               {contracts?.map((c) => <option key={c.id} value={c.id}>{c.counterparty}{c.contract_date ? ` · ${dateOnly(c.contract_date)}` : ""}</option>)}
             </select>
@@ -316,11 +371,11 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
           <button type="submit" className="btn-secondary" formAction="/etykiety" formMethod="get" formTarget="_blank">Drukuj etykietę</button>
           <button type="submit" className="btn-secondary" formAction="/metka" formMethod="get" formTarget="_blank">Wydrukuj metki</button>
           {profile.role === "admin" && (
-            <ConfirmSubmit name="action" value="delete" className="btn-danger ml-auto" message="Usunąć zaznaczone sztuki z aplikacji? Stan w Shopify się nie zmieni. Sztuk ze sprzedażą nie da się usunąć.">
+            <ConfirmSubmit name="action" value="delete" className="btn-danger md:ml-auto" message="Usunąć zaznaczone sztuki z aplikacji? Stan w Shopify się nie zmieni. Sztuk ze sprzedażą nie da się usunąć.">
               Usuń zaznaczone
             </ConfirmSubmit>
           )}
-        </div>
+        </BulkBar>
       </form>
 
       <Pagination page={page} total={count} perPage={PER_PAGE} params={filterParams} />

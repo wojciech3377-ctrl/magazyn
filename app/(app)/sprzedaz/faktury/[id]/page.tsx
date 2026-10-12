@@ -125,7 +125,7 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
       </div>
 
       <section className="card mt-5 overflow-x-auto">
-        <table className="table">
+        <table className="table mtable mtable-flow">
           <thead><tr><th>Lp.</th><th>Nazwa</th><th className="text-right">Ilość</th><th className="text-right">Cena brutto</th><th className="text-right">Wartość</th><th>VAT</th></tr></thead>
           <tbody>
             {items?.map((i) => (

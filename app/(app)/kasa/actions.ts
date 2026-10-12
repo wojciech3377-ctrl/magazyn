@@ -1,7 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { requireProfile } from "@/lib/auth";
+import { requireSection } from "@/lib/auth";
 import { findVariantIds } from "@/lib/queries/units";
 import { adjustStock } from "@/lib/stock";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -47,7 +47,7 @@ const OWN_FIELDS = "id, name, price, ptu, track_stock, stock, code";
 
 /** Własne produkty (np. „Renowacja obuwia”) po nazwie albo kodzie. */
 export async function searchOwnProducts(q: string): Promise<OwnProduct[]> {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("kasa");
   const text = q.trim().replace(/[,()*%\\]/g, " ").trim();
   if (text.length < 2) return [];
   let query = supabase.from("pos_products").select(OWN_FIELDS).eq("active", true).limit(15);
@@ -65,7 +65,7 @@ export type CatalogHit = { productId: string; title: string; image: string | nul
  * z rozmiarami, ceną w wybranym sklepie i liczbą sztuk na stanie.
  */
 export async function searchCatalog(q: string, storeId: string): Promise<CatalogHit[]> {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("kasa");
   const text = q.trim().replace(/[,()*%\\"']/g, " ").replace(/\s+/g, " ").trim();
   if (text.length < 2) return [];
   let byTitle = supabase.from("products").select("id").order("updated_at", { ascending: false }).limit(10);
@@ -113,7 +113,7 @@ export type ScanChoice = { variantId: string; title: string; option: string; inS
 
 /** Najstarsza wolna sztuka rozmiaru: najpierw własne, potem komis; najpierw z lokalizacji sklepu. */
 export async function pickUnitForVariant(variantId: string, storeId: string, exclude: string[] = []): Promise<{ unit?: PosUnit; error?: string }> {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("kasa");
   let q = supabase.from("units").select(SELECT).eq("variant_id", variantId).eq("status", "in_stock");
   if (exclude.length) q = q.not("id", "in", `(${exclude.filter((x) => /^[0-9a-f-]{36}$/.test(x)).join(",")})`);
   const { data } = await q.order("received_at").limit(200);
@@ -131,7 +131,7 @@ export async function pickUnitForVariant(variantId: string, storeId: string, exc
  * SKU rozmiaru, EAN albo SKU modelu ze Shopify (wtedy wybór rozmiaru).
  */
 export async function scanUnit(code: string, storeId: string, exclude: string[] = []): Promise<{ unit?: PosUnit; choices?: ScanChoice[]; error?: string }> {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("kasa");
   const raw = code.trim();
   const c = raw.toUpperCase().replace(/[^A-Z0-9_./-]/g, "");
   if (!c) return { error: "Pusty kod." };
@@ -166,7 +166,7 @@ export async function scanUnit(code: string, storeId: string, exclude: string[] 
 
 /** Ręczne wyszukiwanie: sztuki na stanie pasujące do nazwy, SKU albo EAN. */
 export async function searchUnits(q: string, storeId: string): Promise<PosUnit[]> {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("kasa");
   const text = q.trim().replace(/[,()*%\\]/g, " ").trim();
   if (text.length < 2) return [];
   const variantIds = await findVariantIds(supabase, text);
@@ -178,7 +178,7 @@ export async function searchUnits(q: string, storeId: string): Promise<PosUnit[]
 }
 
 export async function finishPosOrder(_: unknown, formData: FormData): Promise<{ error?: string }> {
-  const { supabase, profile } = await requireProfile();
+  const { supabase, profile } = await requireSection("kasa");
   const storeId = String(formData.get("store_id") ?? "");
   type In = { unit_id?: string; price: string; name?: string; ptu?: string; quantity?: string; product_id?: string; save?: boolean };
   const items = JSON.parse(String(formData.get("items") ?? "[]")) as In[];
@@ -239,7 +239,7 @@ export async function finishPosOrder(_: unknown, formData: FormData): Promise<{ 
 }
 
 export async function retryPosBase(formData: FormData) {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("kasa");
   const id = String(formData.get("id"));
   const { data: o } = await supabase.from("pos_orders").select("base_pending").eq("id", id).single();
   const results = await adjustStock(supabase, (o?.base_pending ?? []) as { variantId: string; locationId: string; delta: number }[]);

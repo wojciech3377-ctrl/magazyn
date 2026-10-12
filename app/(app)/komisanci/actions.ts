@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { requireAdmin, requireProfile } from "@/lib/auth";
+import { requireAdmin, requireSection } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { adjustStock } from "@/lib/stock";
 import { errorMessage } from "@/lib/errors";
@@ -11,7 +11,7 @@ const s = (fd: FormData, k: string) => String(fd.get(k) ?? "").trim();
 const back = (id: string, msg: string, ok = true): never => redirect(`/komisanci/${id}?${ok ? "ok" : "blad"}=${encodeURIComponent(msg)}`);
 
 export async function saveConsignor(formData: FormData) {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("komisanci");
   const id = s(formData, "id");
   const row = {
     name: s(formData, "name"),
@@ -104,7 +104,7 @@ export async function deletePayout(formData: FormData) {
 
 /** Zlecenie wysyłki do komisanta: wysłane (rzeczy wychodzą z magazynu) albo anulowane (wracają na stan). */
 export async function processShipment(formData: FormData) {
-  const { supabase, profile } = await requireProfile();
+  const { supabase, profile } = await requireSection("komisanci");
   const id = s(formData, "id");
   const shipmentId = s(formData, "shipment_id");
   const op = s(formData, "op");
@@ -141,7 +141,7 @@ export async function processShipment(formData: FormData) {
 
 /** Pobranie etykiety dołączonej przez komisanta (link ważny 5 minut). */
 export async function openLabel(formData: FormData) {
-  await requireProfile();
+  await requireSection("komisanci");
   const db = createAdminClient();
   const { data: sh } = await db.from("consignor_shipments").select("label_path, consignor_id").eq("id", s(formData, "shipment_id")).maybeSingle();
   if (!sh?.label_path) back(s(formData, "id"), "Brak etykiety.", false);

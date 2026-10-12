@@ -116,7 +116,7 @@ export async function Jpk({ sp }: { sp: Record<string, string | undefined> }) {
           </div>
         </div>
         <div className="card overflow-x-auto">
-          <table className="table">
+          <table className="table mtable mtable-flow">
             <thead>
               <tr>
                 <th className="w-8" /><th>Dokument</th><th>Data</th><th>Nazwa przedmiotu</th><th className="text-right">Kwota</th><th>VAT</th>
@@ -196,7 +196,7 @@ export async function Invoices({ sp }: { sp: Record<string, string | undefined> 
         <Link className="btn ml-auto" href="/sprzedaz/faktury/nowa">Nowa faktura / paragon</Link>
       </div>
       <div className="card overflow-x-auto">
-        <table className="table">
+        <table className="table mtable mtable-flow">
           <thead><tr><th>Numer</th><th>Data</th><th>Nabywca</th><th className="text-right">Kwota</th><th>KSeF</th><th>Sprzedaż</th></tr></thead>
           <tbody>
             {!rows?.length && <tr><td colSpan={6} className="py-10 text-center text-muted">Brak faktur. Fakturę wystawisz z zamówienia, ze sprzedaży stacjonarnej albo przyciskiem „Nowa faktura”.</td></tr>}

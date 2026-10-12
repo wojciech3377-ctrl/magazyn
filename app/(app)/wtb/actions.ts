@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { requireProfile } from "@/lib/auth";
+import { requireSection } from "@/lib/auth";
 import { errorMessage } from "@/lib/errors";
 import type { LineItem } from "@/lib/sync/shop-orders";
 import { parseSizes } from "@/lib/wtb-group";
@@ -14,7 +14,7 @@ const collator = new Intl.Collator("pl", { numeric: true });
 
 /** Wyszukiwarka modeli z katalogu (nazwa albo SKU). */
 export async function searchWtbCatalog(q: string): Promise<CatalogResult[]> {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("wtb");
   const text = q.trim().replace(/[,()*%\\]/g, " ").trim().slice(0, 60);
   if (text.length < 2) return [];
   const fields = "id, title, style_sku, image_url, variants(id, option)";
@@ -33,7 +33,7 @@ export async function searchWtbCatalog(q: string): Promise<CatalogResult[]> {
 
 /** „Dodaj do WTB” przy pozycji zamówienia albo linii sprzedaży. */
 export async function addToWtb(_: WtbAddState, fd: FormData): Promise<WtbAddState> {
-  const { supabase, profile } = await requireProfile();
+  const { supabase, profile } = await requireSection("wtb", "sprzedaz");
   const orderId = String(fd.get("order_id") ?? "");
   const saleId = String(fd.get("sale_id") ?? "");
   try {
@@ -78,7 +78,7 @@ export async function addToWtb(_: WtbAddState, fd: FormData): Promise<WtbAddStat
 
 /** „Dodaj do WTB” przy zamówieniu: wszystkie produkty zamówienia (bez usług) na listę WTB, bez duplikatów. */
 export async function addOrderToWtb(_: WtbAddState, fd: FormData): Promise<WtbAddState> {
-  const { supabase, profile } = await requireProfile();
+  const { supabase, profile } = await requireSection("wtb", "sprzedaz");
   const orderId = String(fd.get("order_id") ?? "");
   const { data: order } = await supabase.from("orders").select("id, name, line_items").eq("id", orderId).maybeSingle();
   if (!order) return { error: "Nie ma takiego zamówienia." };
@@ -110,7 +110,7 @@ export async function addOrderToWtb(_: WtbAddState, fd: FormData): Promise<WtbAd
 
 /** Dodanie modelu z katalogu w kilku rozmiarach naraz. */
 export async function addFromCatalog(_: WtbAddState, fd: FormData): Promise<WtbAddState> {
-  const { supabase, profile } = await requireProfile();
+  const { supabase, profile } = await requireSection("wtb");
   const productId = String(fd.get("product_id") ?? "");
   const variantIds = fd.getAll("variant_id").map(String).filter(Boolean);
   const note = String(fd.get("note") ?? "").trim() || null;
@@ -133,7 +133,7 @@ export async function addFromCatalog(_: WtbAddState, fd: FormData): Promise<WtbA
 
 /** Pozycja wpisana ręcznie (spoza katalogu). */
 export async function addManual(_: WtbAddState, fd: FormData): Promise<WtbAddState> {
-  const { supabase, profile } = await requireProfile();
+  const { supabase, profile } = await requireSection("wtb");
   const title = String(fd.get("title") ?? "").trim().slice(0, 200);
   if (!title) return { error: "Wpisz nazwę modelu." };
   const sizes = parseSizes(String(fd.get("sizes") ?? ""));
@@ -148,7 +148,7 @@ export async function addManual(_: WtbAddState, fd: FormData): Promise<WtbAddSta
 
 /** Zmiana stanu zaznaczonych pozycji: kupione / usunięte / z powrotem na liście. */
 export async function updateWtb(fd: FormData) {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("wtb");
   const ids = fd.getAll("ids").map(String).filter(Boolean);
   const to = String(fd.get("to") ?? "");
   const back = String(fd.get("back") ?? "/wtb");
@@ -162,7 +162,7 @@ export async function updateWtb(fd: FormData) {
 
 /** Zmiana nazwy, rozmiaru albo SKU pozycji (to trafia na grafikę). */
 export async function editWtbItem(fd: FormData) {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("wtb");
   const id = String(fd.get("id") ?? "");
   const back = String(fd.get("back") ?? "/wtb");
   const title = String(fd.get("title") ?? "").trim().slice(0, 200);
@@ -176,7 +176,7 @@ export async function editWtbItem(fd: FormData) {
 
 /** Edycja karty modelu: nazwa i SKU dla wszystkich rozmiarów, lista rozmiarów (nowe dopisane, usunięte zdjęte z listy). */
 export async function editWtbGroup(fd: FormData) {
-  const { supabase, profile } = await requireProfile();
+  const { supabase, profile } = await requireSection("wtb");
   const ids = fd.getAll("ids").map(String).filter((x) => /^[0-9a-f-]{36}$/i.test(x)).slice(0, 100);
   const back = String(fd.get("back") ?? "/wtb");
   const fail = (m: string) => redirect(`${back}${back.includes("?") ? "&" : "?"}blad=${encodeURIComponent(m)}`);

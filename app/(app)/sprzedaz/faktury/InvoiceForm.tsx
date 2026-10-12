@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { SearchInput } from "@/components/SearchInput";
 import Link from "next/link";
 import { createInvoiceAction, issueReceiptAction, lookupNipAction, previewReceiptAction, searchCustomersAction, searchInvoiceItemsAction, type CustomerHit, type InvoiceFormState, type InvoiceItemHit, type ReceiptState } from "./actions";
 import type { InvoiceDraft } from "@/lib/invoices/service";
@@ -196,7 +197,7 @@ export function InvoiceForm({ draft, ksefReady, receipt = false }: { draft: Invo
         <div className="mb-3 flex flex-wrap items-center gap-3">
           <h2 className="h2">Pozycje</h2>
           <div className="relative w-full sm:ml-auto sm:w-96">
-            <input className="input" value={itemQ} onChange={(e) => setItemQ(e.target.value)} placeholder="Dodaj z magazynu / katalogu: nazwa, kod S…, IMEI, SKU" aria-label="Szukaj pozycji w magazynie i katalogu" />
+            <SearchInput value={itemQ} onChange={(e) => setItemQ(e.target.value)} onScan={setItemQ} placeholder="Dodaj z magazynu / katalogu: nazwa, kod S…, IMEI, SKU" aria-label="Szukaj pozycji w magazynie i katalogu" />
             {itemHits.length > 0 && (
               <ul className="absolute right-0 z-30 mt-1 max-h-80 w-full overflow-auto rounded-md border border-line bg-white py-1 text-sm shadow-lg">
                 {itemHits.map((h) => (

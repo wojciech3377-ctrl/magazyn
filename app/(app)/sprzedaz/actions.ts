@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { requireAdmin, requireProfile } from "@/lib/auth";
+import { requireAdmin, requireSection } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { syncFurgonetkaShipments, syncShopifyOrders } from "@/lib/sync/shop-orders";
 import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/furgonetka";
@@ -11,7 +11,7 @@ import { parsePieceRef } from "@/lib/orders/pieces";
 
 /** Zamiana sztuki przy pakowaniu: skan kodu sztuki, IMEI albo numeru seryjnego. */
 export async function swapUnit(_: unknown, formData: FormData): Promise<{ ok?: string; error?: string }> {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("sprzedaz");
   const saleId = String(formData.get("sale_id"));
   const code = String(formData.get("code") ?? "").trim();
   if (!code) return { error: "Zeskanuj albo wpisz kod sztuki." };
@@ -46,7 +46,7 @@ export async function pullOrdersNow() {
  * Przycisk podaje „<zamówienie>|<pozycja>|<sztuka>” w polu umowa_dla.
  */
 export async function attachContractForPiece(formData: FormData) {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("sprzedaz");
   const ref = parsePieceRef(String(formData.get("umowa_dla") ?? ""));
   const back = safeBack(String(formData.get("back") ?? ""));
   const fail = (msg: string) => redirect(`${back}${back.includes("?") ? "&" : "?"}blad=${encodeURIComponent(msg)}`);
@@ -71,7 +71,7 @@ function safeBack(v: string) {
  * umowa tworzy sprzedaną sztukę. 1 umowa na przedmiot.
  */
 export async function attachExistingContract(formData: FormData) {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("sprzedaz");
   const contractId = String(formData.get("contract_id") ?? "");
   const saleId = String(formData.get("sale_id") ?? "");
   const unitParam = String(formData.get("unit_id") ?? "");

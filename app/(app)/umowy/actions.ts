@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { requireAdmin, requireProfile } from "@/lib/auth";
+import { requireAdmin, requireSection } from "@/lib/auth";
 import { parseAmount, uploadedFile } from "@/lib/contracts/upload";
 import { fillContractNumber } from "@/lib/contracts/docnumber";
 import { errorMessage } from "@/lib/errors";
@@ -11,7 +11,7 @@ function codes(text: string) {
   return text.split(/[\s,;]+/).map((s) => s.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "")).filter(Boolean);
 }
 
-async function attachByCodes(supabase: Awaited<ReturnType<typeof requireProfile>>["supabase"], contractId: string, text: string) {
+async function attachByCodes(supabase: Awaited<ReturnType<typeof requireSection>>["supabase"], contractId: string, text: string) {
   const list = codes(text);
   if (!list.length) return { attached: 0, missing: [] as string[] };
   const { data: units } = await supabase.from("units").select("id, code, identifier").or(
@@ -27,7 +27,7 @@ async function attachByCodes(supabase: Awaited<ReturnType<typeof requireProfile>
 }
 
 export async function createContract(_: unknown, formData: FormData): Promise<{ error?: string }> {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("umowy", "dostawa");
   let id: string;
   let note = "";
   try {
@@ -69,7 +69,7 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
 }
 
 export async function attachUnits(formData: FormData) {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("umowy", "dostawa");
   const id = String(formData.get("id"));
   const r = await attachByCodes(supabase, id, String(formData.get("units") ?? ""));
   revalidatePath(`/umowy/${id}`);
@@ -79,7 +79,7 @@ export async function attachUnits(formData: FormData) {
 
 /** Odpięcie umowy od rzeczy. Gdy przy umowie nie zostaje żadna rzecz, wraca do niewykorzystanych umów. */
 export async function detachUnit(formData: FormData) {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("umowy", "dostawa");
   const id = String(formData.get("id"));
   const unitId = String(formData.get("unit_id"));
   const b = String(formData.get("back") ?? "");
@@ -99,7 +99,7 @@ export async function detachUnit(formData: FormData) {
 }
 
 export async function replaceFile(formData: FormData) {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("umowy", "dostawa");
   const id = String(formData.get("id"));
   let msg = "ok=" + encodeURIComponent("Plik zapisany.");
   try {
@@ -130,7 +130,7 @@ export async function deleteContract(formData: FormData) {
 
 /** Link do podpisu e-mailem (SMTP z Vercel). */
 export async function sendSigningEmail(formData: FormData) {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("umowy", "dostawa");
   const id = String(formData.get("id"));
   const to = String(formData.get("email") ?? "").trim().toLowerCase();
   const { data: contract } = await supabase.from("contracts").select("status, sign_token").eq("id", id).single();
@@ -158,7 +158,7 @@ export async function sendSigningEmail(formData: FormData) {
 }
 
 export async function cancelContract(formData: FormData) {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("umowy", "dostawa");
   const id = String(formData.get("id"));
   // Warunek na status: jeśli sprzedający właśnie podpisał, anulowanie nie przejdzie.
   const { data: cancelled } = await supabase.from("contracts").update({ status: "cancelled" }).eq("id", id).eq("status", "sent").select("id");
@@ -170,7 +170,7 @@ export async function cancelContract(formData: FormData) {
 
 /** Umowa z ogólnego linku: przypisanie pozycji do katalogu i utworzenie sztuk „w drodze”. */
 export async function assignGeneralItems(_: unknown, formData: FormData): Promise<{ error?: string }> {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("umowy", "dostawa");
   const id = String(formData.get("id"));
   const variants = JSON.parse(String(formData.get("variants") ?? "[]")) as (string | null)[];
   const locationId = String(formData.get("location_id") ?? "");
@@ -192,7 +192,7 @@ export async function assignGeneralItems(_: unknown, formData: FormData): Promis
 
 /** Ponowne utworzenie sztuk z podpisanej umowy, gdy automatyczny krok po podpisie się nie udał. */
 export async function retryFinalize(formData: FormData) {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("umowy", "dostawa");
   const id = String(formData.get("id"));
   const { data, error } = await supabase.rpc("finalize_contract", { p_contract_id: id });
   revalidatePath(`/umowy/${id}`);
@@ -208,7 +208,7 @@ function decisionTarget(formData: FormData, id: string) {
 const withMsg = (url: string, key: "ok" | "blad", msg: string) => `${url}${url.includes("?") ? "&" : "?"}${key}=${encodeURIComponent(msg)}`;
 
 export async function acceptContract(formData: FormData) {
-  const { supabase, profile } = await requireProfile();
+  const { supabase, profile } = await requireSection("umowy", "dostawa");
   const id = String(formData.get("id"));
   const target = decisionTarget(formData, id);
   const locationId = String(formData.get("location_id") ?? "") || null;
@@ -236,7 +236,7 @@ export async function acceptContract(formData: FormData) {
 }
 
 export async function rejectContract(formData: FormData) {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("umowy", "dostawa");
   const id = String(formData.get("id"));
   const target = decisionTarget(formData, id);
   const { data: rejected } = await supabase.from("contracts").update({ status: "rejected" }).eq("id", id).in("status", ["signed", "offer"]).select("id");
@@ -249,7 +249,7 @@ export async function rejectContract(formData: FormData) {
 
 /** Oznaczenie zapłaty sprzedającemu (przelew wysłany / gotówka wypłacona) → zakładka „Gotowe”. */
 export async function markPaid(formData: FormData) {
-  const { supabase, profile } = await requireProfile();
+  const { supabase, profile } = await requireSection("umowy", "dostawa");
   const id = String(formData.get("id"));
   const undo = formData.get("undo") === "1";
   const { data } = await supabase.from("contracts")
@@ -263,7 +263,7 @@ export async function markPaid(formData: FormData) {
 
 /** Numer umowy z dokumentu i waluta (do JPK). */
 export async function updateContractMeta(formData: FormData) {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("umowy", "dostawa");
   const id = String(formData.get("id"));
   const currency = String(formData.get("currency") ?? "");
   const { error } = await supabase.from("contracts").update({
@@ -276,7 +276,7 @@ export async function updateContractMeta(formData: FormData) {
 
 /** Umowa bez rzeczy → sztuka z magazynu (albo sprzedana sztuka) bez umowy. */
 export async function assignContractToUnit(formData: FormData) {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("umowy", "dostawa");
   const contractId = String(formData.get("contract_id") ?? "");
   const unitId = String(formData.get("unit_id") ?? "");
   const back = `/umowy/${contractId}/przypisz`;
@@ -298,7 +298,7 @@ export async function assignContractToUnit(formData: FormData) {
 
 /** Umowa bez rzeczy → sprzedana pozycja zamówienia (linia sprzedaży powstaje w razie potrzeby). */
 export async function assignContractToPiece(formData: FormData) {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("umowy", "dostawa");
   const contractId = String(formData.get("contract_id") ?? "");
   const back = `/umowy/${contractId}/przypisz?zrodlo=sprzedaz`;
   const fail = (m: string) => redirect(`${back}&blad=${encodeURIComponent(m)}`);
@@ -328,7 +328,7 @@ export async function assignContractToPiece(formData: FormData) {
 
 /** Faktura wgrana przez komisanta: zatwierdzenie albo odrzucenie (wtedy komisant może wgrać nową). */
 export async function decideConsignorInvoice(formData: FormData) {
-  const { supabase, profile } = await requireProfile();
+  const { supabase, profile } = await requireSection("umowy", "dostawa");
   const id = String(formData.get("id"));
   const accept = formData.get("decision") === "accept";
   const note = String(formData.get("reason") ?? "").trim().slice(0, 300);

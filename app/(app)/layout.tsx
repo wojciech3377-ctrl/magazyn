@@ -1,5 +1,7 @@
 import { requireProfile } from "@/lib/auth";
+import { can, SECTIONS } from "@/lib/permissions";
 import { Nav } from "./Nav";
+import { TableLabels } from "@/components/TableLabels";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 /** Zgłoszenia komisantów czekające na nas: nowe zgłoszenia rzeczy i zlecenia wysyłki do komisanta. */
@@ -44,17 +46,25 @@ async function badges() {
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const { profile } = await requireProfile();
   const [alerts, delivery] = await badges();
+  // Menu: działy z uprawnień (Faktury są zakładką w Sprzedaży), Ustawienia i Pracownicy – administrator.
+  const allowed = [
+    ...SECTIONS.filter((s) => s.key !== "faktury" && can(profile, s.key)).map((s) => s.href),
+    ...(can(profile, "faktury") && !can(profile, "sprzedaz") ? ["/sprzedaz"] : []),
+    ...(profile.role === "admin" ? ["/ustawienia", "/pracownicy"] : []),
+  ];
   return (
     <div className="min-h-screen">
       <Nav
         user={profile.full_name || profile.email || ""}
+        allowed={allowed}
         badges={{
           "/komisanci": [{ n: alerts, tone: "red", title: "Zgłoszenia komisantów do obsłużenia" }],
           "/dostawa": [{ n: delivery.accept, tone: "green", title: "Do akceptacji" }, { n: delivery.transit, tone: "orange", title: "W drodze" }],
         }}
       />
-      <main className="min-w-0 px-4 py-5 sm:px-6 lg:ml-64 lg:px-8 lg:py-7 print:m-0 print:p-0">
+      <main className="min-w-0 px-4 pb-[calc(5.5rem+env(safe-area-inset-bottom))] pt-[max(1rem,env(safe-area-inset-top))] sm:px-6 lg:ml-64 lg:px-8 lg:py-7 print:m-0 print:p-0">
         <div className="mx-auto max-w-[1500px]">{children}</div>
+        <TableLabels />
       </main>
     </div>
   );

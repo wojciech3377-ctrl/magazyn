@@ -1,6 +1,7 @@
 import { cache } from "react";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { can, homeFor, SECTIONS, type Section } from "@/lib/permissions";
 
 export type Profile = {
   id: string;
@@ -9,6 +10,8 @@ export type Profile = {
   role: "admin" | "staff";
   can_see_prices: boolean;
   active: boolean;
+  /** Działy dostępne dla pracownika (administrator ma wszystkie). */
+  permissions: string[] | null;
 };
 
 /**
@@ -34,5 +37,32 @@ export const requireProfile = cache(async () => {
 export async function requireAdmin() {
   const ctx = await requireProfile();
   if (ctx.profile.role !== "admin") throw new Error("Ta czynność jest dostępna tylko dla administratora.");
+  return ctx;
+}
+
+/**
+ * Akcje serwera działu: pracownik musi mieć dostęp do któregoś z podanych działów
+ * (administrator zawsze). Bez dostępu – błąd (przycisków i tak nie widzi).
+ */
+export async function requireSection(...sections: Section[]) {
+  const ctx = await requireProfile();
+  if (!sections.some((s) => can(ctx.profile, s))) {
+    const names = sections.map((s) => SECTIONS.find((x) => x.key === s)?.label ?? s).join(" / ");
+    throw new Error(`Brak uprawnień do działu: ${names}. Poproś administratora o dostęp (Pracownicy).`);
+  }
+  return ctx;
+}
+
+/** Strony działu (layout): bez dostępu → pierwszy dział, do którego pracownik ma dostęp. */
+export async function guardSection(...sections: Section[]) {
+  const ctx = await requireProfile();
+  if (!sections.some((s) => can(ctx.profile, s))) redirect(homeFor(ctx.profile));
+  return ctx;
+}
+
+/** Strony tylko dla administratora (Ustawienia, Pracownicy). */
+export async function guardAdmin() {
+  const ctx = await requireProfile();
+  if (ctx.profile.role !== "admin") redirect(homeFor(ctx.profile));
   return ctx;
 }

@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireAdmin, requireProfile } from "@/lib/auth";
+import { requireAdmin, requireSection } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { importCatalogPage, type Store } from "@/lib/sync/catalog";
 import { redirect } from "next/navigation";
@@ -62,7 +62,7 @@ const money = (v: FormDataEntryValue | null) => {
 
 /** „Dodaj produkt” / zmiana: nazwa, cena, stawka PTU, opcjonalnie liczony stan i własny kod. */
 export async function saveOwnProduct(fd: FormData) {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("katalog");
   const id = String(fd.get("id") ?? "");
   const name = String(fd.get("name") ?? "").replace(/\s+/g, " ").trim().slice(0, 120);
   const price = money(fd.get("price"));
@@ -80,7 +80,7 @@ export async function saveOwnProduct(fd: FormData) {
 }
 
 export async function toggleOwnProduct(fd: FormData) {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("katalog");
   const active = fd.get("active") === "1";
   await supabase.from("pos_products").update({ active }).eq("id", String(fd.get("id") ?? ""));
   revalidatePath("/katalog");

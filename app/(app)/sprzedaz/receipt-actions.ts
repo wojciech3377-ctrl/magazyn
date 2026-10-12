@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireProfile } from "@/lib/auth";
+import { requireSection } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { enqueueOrderReceipt, enqueuePosReceipt } from "@/lib/fiscal/jobs";
 import { errorMessage } from "@/lib/errors";
@@ -11,7 +11,7 @@ const UUID = /^[0-9a-f-]{36}$/i;
 
 /** Stan paragonu w kolejce (odświeżany na ekranie, dopóki drukarka nie skończy). */
 export async function receiptJobStatus(id: string): Promise<JobView | null> {
-  const { supabase } = await requireProfile();
+  const { supabase } = await requireSection("sprzedaz", "kasa");
   if (!UUID.test(id)) return null;
   const { data } = await supabase.from("receipt_jobs").select("id, status, receipt_number, error, claimed_at, number").eq("id", id).maybeSingle();
   return (data as JobView | null) ?? null;
@@ -19,7 +19,7 @@ export async function receiptJobStatus(id: string): Promise<JobView | null> {
 
 /** Paragon do sprzedaży w Kasie albo do zamówienia ze sklepu – do kolejki drukarki fiskalnej. */
 export async function enqueueReceipt(kind: "pos" | "order", id: string): Promise<{ job?: JobView; error?: string }> {
-  const { profile } = await requireProfile();
+  const { profile } = await requireSection("sprzedaz", "kasa");
   if (!UUID.test(id)) return { error: "Zła sprzedaż." };
   const db = createAdminClient();
   try {
@@ -36,7 +36,7 @@ export async function enqueueReceipt(kind: "pos" | "order", id: string): Promise
  * wcześniej sprawdź na drukarce, czy paragon nie wyszedł, żeby nie wydrukować go dwa razy.
  */
 export async function retryReceiptJob(id: string): Promise<{ job?: JobView; error?: string }> {
-  await requireProfile();
+  await requireSection("sprzedaz", "kasa");
   if (!UUID.test(id)) return { error: "Złe zadanie." };
   const db = createAdminClient();
   const stuck = new Date(Date.now() - 120_000).toISOString();
@@ -49,7 +49,7 @@ export async function retryReceiptJob(id: string): Promise<{ job?: JobView; erro
 
 /** Anulowanie paragonu, który jeszcze się nie wydrukował (np. błąd i sprzedaż idzie na fakturę). */
 export async function cancelReceiptJob(id: string): Promise<{ job?: JobView; error?: string }> {
-  await requireProfile();
+  await requireSection("sprzedaz", "kasa");
   if (!UUID.test(id)) return { error: "Złe zadanie." };
   const db = createAdminClient();
   const { data } = await db.from("receipt_jobs").update({ status: "cancelled" }).eq("id", id).in("status", ["queued", "error"])
