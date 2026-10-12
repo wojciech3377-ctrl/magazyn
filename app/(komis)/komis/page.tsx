@@ -9,6 +9,7 @@ import { dateOnly, dateTime, money } from "@/lib/labels";
 import { Pill } from "@/components/ui";
 import { ShipRequestForm } from "./ShipRequestForm";
 import { cancelShipmentByConsignor } from "./actions";
+import { consignorTimeline, describeEvent } from "@/lib/history";
 
 export const metadata = { title: "Panel komisanta" };
 
@@ -36,7 +37,7 @@ function docOf(c: ConsignorContract | undefined): SoldRow["doc"] {
 
 export default async function KomisPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const sp = await searchParams;
-  const tab = sp.zakladka === "sprzedane" ? "sprzedane" : sp.zakladka === "wyslij" ? "wyslij" : "aktywne";
+  const tab = sp.zakladka === "sprzedane" ? "sprzedane" : sp.zakladka === "wyslij" ? "wyslij" : sp.zakladka === "historia" ? "historia" : "aktywne";
   const { db, consignor } = await requireConsignor();
   const units = await consignorUnits(db, consignor.id);
   const [bal, fee, { data: shipments }] = await Promise.all([
@@ -101,7 +102,10 @@ export default async function KomisPage({ searchParams }: { searchParams: Promis
         <Link href="/komis?zakladka=wyslij" className={`-mb-px border-b-2 px-3 py-2 ${tab === "wyslij" ? "border-accent font-medium text-ink" : "border-transparent text-muted hover:text-ink"}`}>
           Wyślij do nas {waitingOnMe > 0 && <span className="ml-1 rounded bg-bad px-1.5 py-0.5 text-xs text-white">{waitingOnMe} do zrobienia</span>}
         </Link>
+        <Link href="/komis?zakladka=historia" className={`-mb-px border-b-2 px-3 py-2 ${tab === "historia" ? "border-accent font-medium text-ink" : "border-transparent text-muted hover:text-ink"}`}>Historia</Link>
       </nav>
+
+      {tab === "historia" && <History rows={await consignorTimeline(db, consignor.id, units.map((u) => ({ id: u.id, code: u.code, title: u.title, option: u.option, status: u.status, received_at: u.received_at })))} />}
 
       {tab === "aktywne" && missing > 0 && (
         <div className="mb-5 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm">
@@ -190,5 +194,40 @@ export default async function KomisPage({ searchParams }: { searchParams: Promis
       )}
       </>}
     </>
+  );
+}
+
+/** Historia rzeczy komisanta: wszystko, co działo się z jego rzeczami, od najnowszych. */
+function History({ rows }: { rows: Awaited<ReturnType<typeof consignorTimeline>> }) {
+  if (!rows.length) return <p className="text-sm text-muted">Jeszcze nic się nie wydarzyło.</p>;
+  const byDay = new Map<string, typeof rows>();
+  for (const r of rows) {
+    const day = dateOnly(r.created_at);
+    byDay.set(day, [...(byDay.get(day) ?? []), r]);
+  }
+  const dot = { green: "bg-emerald-500", blue: "bg-blue-500", amber: "bg-amber-500", slate: "bg-slate-400", red: "bg-red-500" };
+  return (
+    <div className="space-y-5">
+      {[...byDay.entries()].map(([day, list]) => (
+        <section key={day}>
+          <h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">{day}</h3>
+          <ol className="card divide-y divide-line">
+            {list.map((r, i) => {
+              const d = describeEvent(r, true);
+              return (
+                <li key={i} className="flex items-start gap-3 px-4 py-2.5 text-sm">
+                  <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${dot[d.tone]}`} />
+                  <span className="min-w-0 flex-1">
+                    <span className="font-medium">{d.title}</span>{d.detail && <span className="text-muted"> · {d.detail}</span>}
+                    {r.label && <span className="block text-xs text-muted">{r.label}{r.code ? ` · ${r.code}` : ""}</span>}
+                  </span>
+                  <span className="shrink-0 text-xs tabular-nums text-muted">{new Date(r.created_at).toLocaleTimeString("pl-PL", { timeZone: "Europe/Warsaw", hour: "2-digit", minute: "2-digit" })}</span>
+                </li>
+              );
+            })}
+          </ol>
+        </section>
+      ))}
+    </div>
   );
 }

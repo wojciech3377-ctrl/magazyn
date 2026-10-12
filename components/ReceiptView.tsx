@@ -1,4 +1,4 @@
-/** Podgląd paragonu fiskalnego (jak wydruk z drukarki / Base): nagłówek firmy, pozycje, PTU, suma. */
+/** Podgląd paragonu fiskalnego (jak wydruk z drukarki): nagłówek firmy, pozycje, PTU, suma. */
 export type ReceiptLine = { name: string; qty: number; price: number; rate: number | null };
 const LETTER: Record<string, string> = { "23": "A", "8": "B", "5": "C", "0": "D" };
 const f2 = (n: number) => n.toFixed(2);

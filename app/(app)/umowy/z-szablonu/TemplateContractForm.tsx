@@ -59,7 +59,7 @@ export function TemplateContractForm({
         {(!saleId || initialLines.length === 0) && (
           <section className="card space-y-2 p-4">
             <label className="label" htmlFor="q">{saleId ? "Pozycja zamówienia nie jest powiązana z katalogiem – wybierz produkt i rozmiar" : "Dodaj produkt, który dopiero kupujesz"}</label>
-            <input id="q" className="input" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Nazwa, SKU modelu, SKU z Base, EAN" />
+            <input id="q" className="input" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Nazwa, SKU, EAN" />
             <div className="space-y-2">
               {hits.map((h) => (
                 <div key={h.productId} className="rounded-md border border-line p-2">

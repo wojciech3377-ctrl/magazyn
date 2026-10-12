@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { requireProfile } from "@/lib/auth";
 import { loadJpkLines, sortBy, type DocKind, type JpkSort } from "@/lib/jpk";
-import { attachContractForPiece, deletePosOrder, fetchMissingReceipts } from "./actions";
+import { attachContractForPiece, deletePosOrder } from "./actions";
 import { SubmitButton } from "@/components/SubmitButton";
 import { dateOnly, money } from "@/lib/labels";
 import { monthLabel, monthRange, previousMonthKey, warsawMidnight } from "@/lib/month";
@@ -58,8 +58,6 @@ export async function Jpk({ sp }: { sp: Record<string, string | undefined> }) {
   const prev = previousMonthKey();
   const total = lines.reduce((s, l) => s + (l.price ?? 0), 0);
   const prices = profile.can_see_prices;
-  const missingBase = [...new Set(lines.filter((l) => !l.kind && l.baseOrderId).map((l) => l.baseOrderId!))];
-  const { data: lastReceipts } = await supabase.from("sync_log").select("ok, message, created_at").eq("job", "base-receipts").order("created_at", { ascending: false }).limit(1).maybeSingle();
   const qs = new URLSearchParams(Object.entries({ widok: "jpk", miesiac: custom ? undefined : month.key, od: custom ? fromDay ?? undefined : undefined, do: custom ? toDay ?? undefined : undefined, rodzaj: kind, sort }).filter((e): e is [string, string] => !!e[1])).toString();
 
   return (
@@ -99,18 +97,8 @@ export async function Jpk({ sp }: { sp: Record<string, string | undefined> }) {
           <input type="hidden" name="miesiac" value={prev} />
           <button className="btn-secondary" name="eksport" value="umowy">Pobierz umowy z ostatniego miesiąca</button>
         </form>
-        {missingBase.length > 0 && process.env.BASE_API_TOKEN && (
-          <form action={fetchMissingReceipts}>
-            <input type="hidden" name="base_orders" value={missingBase.join(",")} />
-            <input type="hidden" name="back" value={`/sprzedaz?${qs}`} />
-            <SubmitButton className="btn-secondary" pendingText="Pobieram z Base…">Pobierz brakujące paragony z Base ({missingBase.length})</SubmitButton>
-          </form>
-        )}
-        <span className="text-xs text-muted sm:ml-auto">
-          Paragony: najpierw z naszego systemu, potem z Base{lastReceipts ? ` · ostatni odczyt z Base ${dateOnly(lastReceipts.created_at)}${lastReceipts.ok ? "" : " (błąd)"}` : " · z Base jeszcze nie pobrano"}
-        </span>
+        <span className="text-xs text-muted sm:ml-auto">Paragony z drukarki fiskalnej i faktury wysłane do KSeF.</span>
       </div>
-      {lastReceipts && !lastReceipts.ok && <div className="mb-4"><Notice tone="error">Paragony z Base: {lastReceipts.message}</Notice></div>}
       {error && <div className="mb-4"><Notice tone="error">{error}</Notice></div>}
       {kind === "none" && <div className="mb-4"><Notice>Sprzedaże ({range.label}), do których nie ma jeszcze paragonu ani faktury.</Notice></div>}
 

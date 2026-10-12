@@ -20,7 +20,7 @@ export async function searchCatalog(q: string): Promise<CatalogHit[]> {
   const { db } = await requireConsignor();
   const text = q.trim().replace(/[,()*%\\]/g, " ").trim();
   if (text.length < 2) return [];
-  // Nazwa, SKU modelu, SKU rozmiaru (Shopify / Base), EAN; spacje i myślniki traktowane jak dowolny znak
+  // Nazwa, SKU modelu, SKU rozmiaru, EAN; spacje i myślniki traktowane jak dowolny znak
   // (np. „dd1391 100” znajdzie DD1391-100), a słowa nazwy w dowolnej kolejności.
   const loose = `%${text.split(/[\s\-_/]+/).filter(Boolean).join("%")}%`;
   const tokens = text.split(/\s+/).filter((t) => t.length >= 2).slice(0, 6);

@@ -4,7 +4,7 @@ import { supabaseUrl } from "./url";
 
 /**
  * Klient z kluczem service_role – omija RLS. Tylko dla zadań bez zalogowanej osoby
- * (webhooki Shopify, cykliczny odczyt zamówień z Base).
+ * (webhooki Shopify, cykliczny odczyt zamówień).
  */
 export function createAdminClient() {
   const url = supabaseUrl();

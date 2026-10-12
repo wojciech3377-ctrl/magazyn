@@ -2,7 +2,6 @@
 
 import { revalidatePath } from "next/cache";
 import { requireAdmin, requireProfile } from "@/lib/auth";
-import { addReceipt } from "@/lib/integrations/base";
 import { errorMessage } from "@/lib/errors";
 import { adjustStock, type StockChange } from "@/lib/stock";
 import type { LineItem } from "@/lib/sync/shop-orders";
@@ -237,7 +236,7 @@ async function loadOrder(id: string) {
 }
 
 /**
- * Sztuki z linii sprzedaży wracają na stan (+1 w Base) albo „do sprawdzenia”.
+ * Sztuki z linii sprzedaży wracają na stan (+1 w Shopify) albo „do sprawdzenia”.
  * Linie bez sprzedanej sztuki (brak sztuki, towar w drodze) są anulowane.
  */
 async function releaseSales(saleIds: string[], backToStock: boolean, notes: string[]) {
@@ -355,7 +354,7 @@ export async function returnOrderAction(_: OrderOpState, fd: FormData): Promise<
   }
 
   if (goods !== "keep" && picked.length) {
-    // Pozycje Shopify → linie sprzedaży tej pozycji (albo z Base z tym samym rozmiarem) w tym zamówieniu.
+    // Pozycje Shopify → linie sprzedaży tej pozycji (albo z tym samym rozmiarem) w tym zamówieniu.
     const { data: sales } = await supabase.from("sales").select("id, variant_id, status, shopify_line_id, shopify_line_index").eq("order_id", order.id);
     const variantIds = await Promise.all(picked.map(async (p) => {
       if (!p.line.shopify_variant_id) return null;
@@ -389,33 +388,3 @@ export async function returnOrderAction(_: OrderOpState, fd: FormData): Promise<
   return { ok: `Zwrot zapisany.${summary}`, notes };
 }
 
-export type ReceiptState = { ok?: string; error?: string } | null;
-
-/** „Drukuj paragon”: paragon w Base do zamówienia (raz), wydruk na drukarce fiskalnej podpiętej do Base. */
-export async function issueReceipt(_: ReceiptState, fd: FormData): Promise<ReceiptState> {
-  const { profile } = await requireProfile();
-  const db = createAdminClient();
-  const orderId = str(fd, "order_id");
-  const { data: order } = await db.from("orders").select("id, name, cancelled_at, receipt_id").eq("id", orderId).maybeSingle();
-  if (!order) return { error: "Nie ma takiego zamówienia." };
-  if (order.receipt_id) return { ok: `Paragon już wystawiony (nr ${order.receipt_id}).` };
-  if (order.cancelled_at) return { error: "Zamówienie jest anulowane." };
-  const { data: sale } = await db.from("sales").select("base_order_id").eq("order_id", order.id).limit(1).maybeSingle();
-  if (!sale?.base_order_id) return { error: "Nie znalazłem tego zamówienia w Base – poczekaj na odczyt zamówień (co 5 minut) i spróbuj ponownie." };
-  // Blokada przed podwójnym kliknięciem: rezerwujemy wystawienie przed wywołaniem Base.
-  const { data: locked } = await db.from("orders").update({ receipt_at: new Date().toISOString(), receipt_by: profile.id })
-    .eq("id", order.id).is("receipt_id", null).or(`receipt_at.is.null,receipt_at.lt.${new Date(Date.now() - 60_000).toISOString()}`).select("id");
-  if (!locked?.length) return { error: "Paragon jest właśnie wystawiany – odśwież stronę za chwilę." };
-  try {
-    const receiptId = await addReceipt(Number(sale.base_order_id));
-    await db.from("orders").update({ receipt_id: receiptId }).eq("id", order.id);
-    // Paragon wystawiony – zarezerwowane sztuki zamówienia stają się sprzedane.
-    await db.rpc("settle_order_units").then(() => null, () => null);
-    revalidatePath(`/sprzedaz/${order.id}`);
-    revalidatePath("/sprzedaz");
-    return { ok: `Paragon wysłany do drukarki (nr ${receiptId}).` };
-  } catch (e) {
-    await db.from("orders").update({ receipt_at: null, receipt_by: null }).eq("id", order.id).is("receipt_id", null);
-    return { error: errorMessage(e) };
-  }
-}

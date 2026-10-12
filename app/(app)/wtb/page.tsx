@@ -5,7 +5,7 @@ import { Notice, PageHeader } from "@/components/ui";
 import { SelectAll } from "@/components/SelectAll";
 import { WtbAdd } from "./WtbAdd";
 import { editWtbGroup, updateWtb } from "./actions";
-import { GroupCheck, WtbEditDialog } from "./WtbControls";
+import { GroupCheck, WtbCopyList, WtbEditDialog } from "./WtbControls";
 import { groupWtb } from "@/lib/wtb-group";
 
 const TABS = [
@@ -50,6 +50,12 @@ export default async function WtbPage({ searchParams }: { searchParams: Promise<
               <img src={`/api/wtb?strona=1&v=${version}`} alt="Podgląd grafiki WTB" className="w-full rounded" loading="lazy" />
             </Link>
           )}
+        </div>
+      )}
+
+      {active && groups.length > 0 && (
+        <div className="mb-5">
+          <WtbCopyList lines={groups.flatMap((g) => (g.items.length ? g.items : []).map((it) => [g.title, g.sku, it.size].filter((x) => x && String(x).trim()).join(" - ")))} />
         </div>
       )}
 

@@ -76,6 +76,38 @@ export async function addToWtb(_: WtbAddState, fd: FormData): Promise<WtbAddStat
   return { ok: "Dodano do WTB." };
 }
 
+/** „Dodaj do WTB” przy zamówieniu: wszystkie produkty zamówienia (bez usług) na listę WTB, bez duplikatów. */
+export async function addOrderToWtb(_: WtbAddState, fd: FormData): Promise<WtbAddState> {
+  const { supabase, profile } = await requireProfile();
+  const orderId = String(fd.get("order_id") ?? "");
+  const { data: order } = await supabase.from("orders").select("id, name, line_items").eq("id", orderId).maybeSingle();
+  if (!order) return { error: "Nie ma takiego zamówienia." };
+  const lines = ((order.line_items ?? []) as LineItem[]).filter((l) => !l.service);
+  if (!lines.length) return { error: "Zamówienie nie ma produktów." };
+  const { data: existing } = await supabase.from("wtb_items").select("order_line_id").eq("order_id", order.id).eq("status", "active");
+  const have = new Set((existing ?? []).map((e) => e.order_line_id as string));
+  const todo = lines.filter((l) => !have.has(l.id));
+  if (!todo.length) return { ok: "Już w WTB." };
+  const gids = todo.map((l) => l.shopify_variant_id).filter((x): x is string => !!x);
+  const { data: links } = gids.length
+    ? await supabase.from("variant_store_links").select("variant_id, shopify_variant_id, variant:variants(product_id, product:products(image_url, style_sku))").in("shopify_variant_id", gids)
+    : { data: [] };
+  type L = { variant_id: string; shopify_variant_id: string; variant: { product_id: string; product: { image_url: string | null; style_sku: string | null } } | null };
+  const byGid = new Map(((links ?? []) as unknown as L[]).map((l) => [l.shopify_variant_id, l]));
+  const rows = todo.map((l) => {
+    const k = l.shopify_variant_id ? byGid.get(l.shopify_variant_id) : undefined;
+    return {
+      title: l.title, size: l.variant_title, sku: l.sku ?? k?.variant?.product.style_sku ?? null, image_url: l.image ?? k?.variant?.product.image_url ?? null,
+      variant_id: k?.variant_id ?? null, product_id: k?.variant?.product_id ?? null,
+      source: "order", order_id: order.id, order_line_id: l.id, note: `z zamówienia ${order.name}`, created_by: profile.id,
+    };
+  });
+  const { error } = await supabase.from("wtb_items").insert(rows);
+  if (error) return { error: errorMessage(error) };
+  revalidatePath("/wtb");
+  return { ok: rows.length === 1 ? "Dodano do WTB." : `Dodano ${rows.length} produkty do WTB.` };
+}
+
 /** Dodanie modelu z katalogu w kilku rozmiarach naraz. */
 export async function addFromCatalog(_: WtbAddState, fd: FormData): Promise<WtbAddState> {
   const { supabase, profile } = await requireProfile();

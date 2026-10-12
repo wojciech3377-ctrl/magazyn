@@ -4,9 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireAdmin, requireProfile } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { syncBaseOrders } from "@/lib/sync/orders";
 import { syncFurgonetkaShipments, syncShopifyOrders } from "@/lib/sync/shop-orders";
-import { fetchReceiptsForOrders, syncBaseReceipts } from "@/lib/sync/receipts";
 import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/furgonetka";
 import { errorMessage } from "@/lib/errors";
 import { parsePieceRef } from "@/lib/orders/pieces";
@@ -23,14 +21,12 @@ export async function swapUnit(_: unknown, formData: FormData): Promise<{ ok?: s
   return { ok: "Sztuka zmieniona." };
 }
 
-/** Ręczne pobranie: linie z Base, zamówienia ze Shopify i przesyłki z Furgonetki (to samo robi zadanie co 5 minut). */
+/** Ręczne pobranie: zamówienia ze Shopify i przesyłki z Furgonetki (to samo robi zadanie cykliczne). */
 export async function pullOrdersNow() {
   await requireAdmin();
   const db = createAdminClient();
   const jobs: [string, () => Promise<unknown>][] = [
-    ["base-orders", () => syncBaseOrders(db)],
     ["shopify-orders", () => syncShopifyOrders(db)],
-    ["base-receipts", () => syncBaseReceipts(db)],
   ];
   if (furgonetkaConfigured() && (await furgonetkaConnection(db))) jobs.push(["furgonetka", () => syncFurgonetkaShipments(db)]);
   for (const [job, fn] of jobs) {
@@ -123,26 +119,6 @@ export async function attachExistingContract(formData: FormData) {
   redirect(`${back}${back.includes("?") ? "&" : "?"}ok=${encodeURIComponent(`Umowa ${c.number ? `nr ${c.number} ` : ""}przypisana.`)}`);
 }
 
-/** JPK: pobranie z Base paragonów, których brakuje w naszym systemie. */
-export async function fetchMissingReceipts(formData: FormData) {
-  await requireProfile();
-  const db = createAdminClient();
-  const back = String(formData.get("back") ?? "/sprzedaz?widok=jpk");
-  const ids = String(formData.get("base_orders") ?? "").split(",").map(Number).filter((n) => Number.isInteger(n) && n > 0);
-  let msg: string;
-  let ok = true;
-  try {
-    const synced = await syncBaseReceipts(db);
-    const r = ids.length ? await fetchReceiptsForOrders(db, ids) : { checked: 0, found: 0 };
-    msg = `Base: nowych paragonów ${synced.receipts}, do brakujących zamówień znaleziono ${r.found} z ${r.checked}.`;
-  } catch (e) {
-    ok = false;
-    msg = `Base: ${e instanceof Error ? e.message : String(e)}`;
-  }
-  revalidatePath("/sprzedaz");
-  redirect(`${back.startsWith("/sprzedaz") ? back : "/sprzedaz?widok=jpk"}&${ok ? "ok" : "blad"}=${encodeURIComponent(msg)}`);
-}
-
 /**
  * Usunięcie sprzedaży stacjonarnej (administrator): sprzedane sztuki wracają na stan (+1 w Shopify),
  * paragon z aplikacji znika z JPK. Sprzedaży z fakturą nie usuwa się – najpierw faktura.
@@ -158,7 +134,7 @@ export async function deletePosOrder(formData: FormData) {
   const { data: inv } = await db.from("invoices").select("number").eq("pos_order_id", id).not("status", "in", "(rejected,cancelled)").limit(1).maybeSingle();
   if (inv) return go("blad", `Do tej sprzedaży jest faktura ${inv.number} – najpierw ją usuń albo skoryguj.`);
   const { data: items } = await db.from("pos_order_items").select("unit_id, status").eq("order_id", id);
-  const unitIds = (items ?? []).filter((i) => i.status === "sold").map((i) => i.unit_id as string);
+  const unitIds = (items ?? []).filter((i) => i.status === "sold" && i.unit_id).map((i) => i.unit_id as string);
   let back1: { id: string; variant_id: string; location_id: string }[] = [];
   if (unitIds.length) {
     const { data } = await db.from("units").update({ status: "in_stock", sold_at: null }).in("id", unitIds).in("status", ["sold", "shipped"]).select("id, variant_id, location_id");

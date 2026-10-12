@@ -7,6 +7,8 @@ import { SubmitButton } from "@/components/SubmitButton";
 import { retryPosBase } from "../actions";
 import { ReceiptView } from "@/components/ReceiptView";
 import { getCompany } from "@/lib/contracts/settings";
+import { getFiscalSettings, rateOf } from "@/lib/fiscal/jobs";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { PosReceiptButton } from "@/components/PosReceiptButton";
 import type { JobView } from "@/app/(app)/sprzedaz/receipt-actions";
 
@@ -20,11 +22,12 @@ export default async function PosOrderPage({ params, searchParams }: { params: P
   if (!o) notFound();
   const { data: receipt } = await supabase.from("receipts").select("number, issued_at, source, items, base_receipt_id").eq("pos_order_id", id).order("issued_at", { ascending: false }).limit(1).maybeSingle();
   const company = await getCompany(supabase);
+  const fiscal = await getFiscalSettings(createAdminClient());
   const { data: receiptJob } = await supabase.from("receipt_jobs").select("id, status, receipt_number, error, claimed_at, number").eq("pos_order_id", id).neq("status", "cancelled").order("created_at", { ascending: false }).limit(1).maybeSingle();
   const { data: invoice } = await supabase.from("invoices").select("id, number").eq("pos_order_id", id).not("status", "in", "(rejected,cancelled)").limit(1).maybeSingle();
   const { data: items } = await supabase
     .from("pos_order_items")
-    .select("id, price, status, unit:units(id, code, identifier, purchase_form, variant:variants(option, product:products(title)))")
+    .select("id, price, status, name, ptu, quantity, unit:units(id, code, identifier, purchase_form, variant:variants(option, product:products(title)))")
     .eq("order_id", id);
 
   return (
@@ -73,7 +76,8 @@ export default async function PosOrderPage({ params, searchParams }: { params: P
           lines={((receipt?.items as { name: string; price_brutto: number; tax_rate: number; quantity?: number }[] | null) ?? []).length
             ? (receipt!.items as { name: string; price_brutto: number; tax_rate: number; quantity?: number }[]).map((r) => ({ name: r.name, qty: Number(r.quantity ?? 1), price: Number(r.price_brutto), rate: Number(r.tax_rate) }))
             : (items ?? []).filter((i) => i.status !== "returned").map((i) => {
-                const u = i.unit as unknown as { purchase_form: string; variant: { option: string; product: { title: string } } };
+                const u = i.unit as unknown as { purchase_form: string; variant: { option: string; product: { title: string } } } | null;
+                if (!u) return { name: i.name ?? "Pozycja", qty: Number(i.quantity ?? 1), price: Number(i.price), rate: rateOf(fiscal, i.ptu ?? "A") };
                 return { name: `${u.variant.product.title} ${u.variant.option}`, qty: 1, price: Number(i.price), rate: u.purchase_form === "vat_23" ? 23 : 0 };
               })}
         />
@@ -83,7 +87,14 @@ export default async function PosOrderPage({ params, searchParams }: { params: P
           <thead><tr><th>Sztuka</th><th>Produkt</th><th className="text-right">Cena</th></tr></thead>
           <tbody>
             {items?.map((i) => {
-              const u = i.unit as unknown as { id: string; code: string; identifier: string | null; variant: { option: string; product: { title: string } } };
+              const u = i.unit as unknown as { id: string; code: string; identifier: string | null; variant: { option: string; product: { title: string } } } | null;
+              if (!u) return (
+                <tr key={i.id}>
+                  <td className="text-xs text-muted">spoza magazynu · PTU {i.ptu}</td>
+                  <td>{i.name}{Number(i.quantity ?? 1) !== 1 && <b> × {Number(i.quantity)}</b>}</td>
+                  <td className="text-right tabular-nums">{money(Number(i.price) * Number(i.quantity ?? 1))}</td>
+                </tr>
+              );
               return (
                 <tr key={i.id}>
                   <td className="font-mono text-xs"><Link className="text-accent hover:underline" href={`/magazyn/${u.id}`}>{u.code}</Link>{u.identifier && <span className="block text-muted">{u.identifier}</span>}</td>

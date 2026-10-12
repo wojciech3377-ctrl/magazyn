@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { signOut } from "@/app/login/actions";
 import { Icon, type IconName } from "@/components/icons";
+import { LiveSync } from "./LiveSync";
 
 const GROUPS: { title: string; links: { href: string; label: string; icon: IconName }[] }[] = [
   {
@@ -81,7 +82,8 @@ export function Nav({ badges = {}, user }: { badges?: Record<string, Badge[]>; u
           </div>
         ))}
       </nav>
-      <form action={signOut} className="m-3 flex items-center gap-2.5 rounded-xl border border-line bg-slate-50/80 p-2.5">
+      <LiveSync />
+      <form action={signOut} className="m-3 mt-2 flex items-center gap-2.5 rounded-xl border border-line bg-slate-50/80 p-2.5">
         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-200 text-xs font-semibold text-slate-700">{initials || "?"}</span>
         <span className="min-w-0 flex-1 truncate text-sm text-slate-700" title={user}>{user}</span>
         <button className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-white hover:text-ink" title="Wyloguj" aria-label="Wyloguj"><Icon name="logout" className="h-4 w-4" /></button>

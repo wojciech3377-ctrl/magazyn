@@ -4,7 +4,8 @@ import { revalidatePath } from "next/cache";
 import { requireAdmin, requireProfile } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { importCatalogPage, type Store } from "@/lib/sync/catalog";
-import { baseCatalogChunk, startBaseCatalogSync } from "@/lib/sync/base-catalog";
+import { redirect } from "next/navigation";
+import { errorMessage } from "@/lib/errors";
 
 type Result<T> = { ok: true; data: T } | { ok: false; error: string };
 
@@ -48,82 +49,40 @@ export async function shopifyImportFinish(storeId: string, startedAt: string): P
   }
 }
 
-export async function baseSyncStart(inventoryId: number): Promise<Result<{ total: number }>> {
-  await requireAdmin();
-  try {
-    return { ok: true, data: await startBaseCatalogSync(createAdminClient(), inventoryId) };
-  } catch (e) {
-    return fail(e);
-  }
-}
 
-export async function baseSyncChunk(inventoryId: number): Promise<Result<{ done: boolean; processed: number; total: number }>> {
-  await requireAdmin();
-  try {
-    return { ok: true, data: await baseCatalogChunk(createAdminClient(), inventoryId) };
-  } catch (e) {
-    return fail(e);
-  }
-}
+/* ---------- Własne produkty (spoza Shopify, np. usługa „Renowacja obuwia”) ---------- */
 
-export async function applyLinks(storeId: string): Promise<Result<{ linked: number; unlinked: number; base_storage_id: string | null }>> {
-  await requireAdmin();
-  try {
-    const db = createAdminClient();
-    const { data, error } = await db.rpc("apply_base_links", { p_store_id: storeId });
-    if (error) throw error;
-    revalidatePath("/katalog");
-    return { ok: true, data };
-  } catch (e) {
-    return fail(e);
-  }
-}
+const back = (msg: string, ok = true): never => redirect(`/katalog?widok=wlasne&${ok ? "ok" : "blad"}=${encodeURIComponent(msg)}`);
+const money = (v: FormDataEntryValue | null) => {
+  const t = String(v ?? "").replace(/\s/g, "").replace(",", ".");
+  if (!t) return null;
+  const n = Number(t);
+  return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : NaN;
+};
 
-/** Podpowiedzi dla niepowiązanych rozmiarów – paczka po paczce, aż „left” = 0. */
-export async function suggestLinks(storeId: string): Promise<Result<{ checked: number; suggested: number; left: number }>> {
-  await requireAdmin();
-  try {
-    const { data, error } = await createAdminClient().rpc("suggest_base_links", { p_store_id: storeId, p_limit: 500 });
-    if (error) throw error;
-    return { ok: true, data };
-  } catch (e) {
-    return fail(e);
-  }
-}
-
-/** Zatwierdzenie podpowiedzi albo ręczne przypisanie (ID lub SKU z Base). */
-export async function setLink(formData: FormData) {
+/** „Dodaj produkt” / zmiana: nazwa, cena, stawka PTU, opcjonalnie liczony stan i własny kod. */
+export async function saveOwnProduct(fd: FormData) {
   const { supabase } = await requireProfile();
-  const linkId = String(formData.get("link_id"));
-  const raw = String(formData.get("base") ?? "").trim();
-  let baseId: number | null = null;
-  if (raw) {
-    // Najpierw SKU z Base (u Ciebie zwykle numer nadawany po kolei), potem ID produktu w Base.
-    const { data: link } = await supabase.from("variant_store_links").select("store:stores(base_inventory_id)").eq("id", linkId).single();
-    const inv = (link?.store as unknown as { base_inventory_id: number } | null)?.base_inventory_id ?? -1;
-    const { data: bySku } = await supabase.from("base_products").select("id").eq("inventory_id", inv).ilike("sku", raw.replace(/[%_]/g, "")).eq("has_variants", false).limit(2);
-    if (bySku?.length === 1) baseId = Number(bySku[0].id);
-    else if (/^\d+$/.test(raw)) baseId = Number(raw);
-    else {
-      await supabase.from("sync_log").insert({ job: "manual-link", ok: false, message: `SKU ${raw}: ${bySku?.length ? "pasuje do kilku produktów w Base" : "nie ma go w katalogu Base"}` });
-      revalidatePath("/katalog");
-      return;
-    }
-  }
-  if (formData.get("accept")) {
-    const { data } = await supabase.from("variant_store_links").select("suggested_base_product_id").eq("id", linkId).single();
-    baseId = data?.suggested_base_product_id ?? null;
-  }
-  const { error } = await supabase.rpc("set_base_link", { p_link_id: linkId, p_base_product_id: baseId });
-  if (error) await supabase.from("sync_log").insert({ job: "manual-link", ok: false, message: error.message });
+  const id = String(fd.get("id") ?? "");
+  const name = String(fd.get("name") ?? "").replace(/\s+/g, " ").trim().slice(0, 120);
+  const price = money(fd.get("price"));
+  const ptu = String(fd.get("ptu") ?? "");
+  const track = fd.get("track_stock") === "1";
+  const stock = Math.max(0, Math.floor(Number(fd.get("stock") ?? 0)) || 0);
+  const code = String(fd.get("code") ?? "").trim().toUpperCase().slice(0, 40) || null;
+  if (!name) back("Podaj nazwę produktu.", false);
+  if (Number.isNaN(price)) back("Zła cena.", false);
+  if (!/^[A-F]$/.test(ptu)) back("Wybierz stawkę PTU.", false);
+  const row = { name, price, ptu, track_stock: track, stock: track ? stock : 0, code };
+  const { error } = id ? await supabase.from("pos_products").update(row).eq("id", id) : await supabase.from("pos_products").insert(row);
   revalidatePath("/katalog");
+  back(error ? (/pos_products/.test(error.message) ? "Uruchom migrację 0037 w Supabase." : errorMessage(error)) : id ? "Zapisano produkt." : `Dodano produkt „${name}” – znajdziesz go w Kasie po nazwie${code ? " albo kodzie" : ""}.`, !error);
 }
 
-/** Zatwierdzenie wszystkich podpowiedzi na raz. */
-export async function acceptAllSuggestions(formData: FormData) {
-  const { supabase } = await requireAdmin();
-  const storeId = String(formData.get("store_id"));
-  const { error } = await supabase.rpc("accept_base_suggestions", { p_store_id: storeId });
-  if (error) await supabase.from("sync_log").insert({ job: "manual-link", ok: false, message: error.message });
+export async function toggleOwnProduct(fd: FormData) {
+  const { supabase } = await requireProfile();
+  const active = fd.get("active") === "1";
+  await supabase.from("pos_products").update({ active }).eq("id", String(fd.get("id") ?? ""));
   revalidatePath("/katalog");
+  back(active ? "Produkt przywrócony do Kasy." : "Produkt ukryty w Kasie.");
 }

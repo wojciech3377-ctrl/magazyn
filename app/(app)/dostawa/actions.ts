@@ -15,7 +15,7 @@ export type VariantHit = {
   variants: { id: string; option: string; inStock: number; baseLinked: boolean; baseSku: string | null }[];
 };
 
-/** Wyszukiwarka produktów do przyjęcia dostawy (nazwa, SKU modelu, SKU z Base, EAN, skan). */
+/** Wyszukiwarka produktów do przyjęcia dostawy (nazwa, SKU, EAN, skan). */
 export async function searchVariants(q: string, storeId: string): Promise<VariantHit[]> {
   const { supabase } = await requireProfile();
   const text = q.trim().replace(/[,()*%\\]/g, " ").trim();
@@ -110,7 +110,7 @@ export async function createDelivery(_: unknown, formData: FormData): Promise<{ 
       deliveryId = data as string;
     }
 
-    // Stan w Shopify (i pomocniczo w Base): +N dla każdego rozmiaru.
+    // Stan w Shopify: +N dla każdego rozmiaru.
     if (status === "in_stock") {
       const results = await adjustStock(supabase, lines.map((l) => ({ variantId: l.variantId, locationId, delta: l.quantity })));
       await saveBaseResult(supabase, deliveryId!, results);

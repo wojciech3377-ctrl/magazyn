@@ -8,7 +8,7 @@ export type InvSummary = { expected: number; scanned: number; matched: number; m
 const PRESENT = ["in_stock", "reserved", "consignor_hold", "returned"];
 
 /**
- * Podsumowanie inwentaryzacji lokalizacji: zeskanowane kody (kod sztuki, IMEI, SKU z Base / Shopify, EAN)
+ * Podsumowanie inwentaryzacji lokalizacji: zeskanowane kody (kod sztuki, IMEI, SKU, EAN)
  * porównane ze sztukami, które według aplikacji leżą w tej lokalizacji.
  */
 export async function summarizeInventory(locationId: string, scans: string[]): Promise<InvSummary> {

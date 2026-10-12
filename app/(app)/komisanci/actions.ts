@@ -170,6 +170,7 @@ export async function toggleUnitPaid(formData: FormData) {
   if (u!.consignor_payout_id) {
     await supabase.from("consignor_payouts").delete().eq("id", u!.consignor_payout_id).eq("consignor_id", id);
     await db.from("units").update({ consignor_payout_id: null }).eq("id", unitId);
+    await db.from("unit_events").insert({ unit_id: unitId, type: "payout", data: { paid: false } });
     revalidatePath(`/komisanci/${id}`);
     back(id, `Cofnięto „zapłacono” dla ${u!.code}.`);
   }
@@ -183,6 +184,7 @@ export async function toggleUnitPaid(formData: FormData) {
   }).select("id").single();
   if (error || !payout) back(id, errorMessage(error), false);
   await db.from("units").update({ consignor_payout_id: payout!.id }).eq("id", unitId);
+  await db.from("unit_events").insert({ unit_id: unitId, type: "payout", data: { paid: true, amount, title, payout_id: payout!.id } });
   revalidatePath(`/komisanci/${id}`);
   back(id, `Zapłacono ${amount.toFixed(2)} zł${title ? ` (tytuł: ${title})` : ""}.`);
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, useState } from "react";
 
 /** Zaznacza / odznacza wszystkie rozmiary jednej karty modelu. */
 export function GroupCheck({ label }: { label: string }) {
@@ -47,5 +47,22 @@ export function WtbEditDialog({ formId, title, sku, sizes }: { formId: string; t
         </div>
       </dialog>
     </>
+  );
+}
+
+/** Lista do skopiowania: „Nazwa - SKU - rozmiar”, każdy rozmiar w osobnej linii. */
+export function WtbCopyList({ lines }: { lines: string[] }) {
+  const [copied, setCopied] = useState(false);
+  const text = lines.join("\n");
+  return (
+    <section className="card p-4">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="h2">Lista do skopiowania <span className="font-normal text-muted">({lines.length})</span></h2>
+        <button type="button" className="btn-secondary h-8 px-3 text-xs" onClick={async () => { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 2000); }}>
+          {copied ? "Skopiowano ✓" : "Kopiuj listę"}
+        </button>
+      </div>
+      <textarea readOnly value={text} rows={Math.min(12, Math.max(3, lines.length))} className="input font-mono text-xs leading-relaxed" aria-label="Lista WTB: nazwa - SKU - rozmiar" onFocus={(e) => e.currentTarget.select()} />
+    </section>
   );
 }

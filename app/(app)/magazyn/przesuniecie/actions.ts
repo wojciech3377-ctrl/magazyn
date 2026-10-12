@@ -11,7 +11,7 @@ export type TransferUnit = { id: string; code: string; title: string; option: st
 const UUID = /^[0-9a-f-]{36}$/i;
 
 /**
- * Skan przy wysyłce na inny magazyn: kod sztuki albo IMEI (dokładnie ta sztuka), albo SKU z Base / Shopify / EAN
+ * Skan przy wysyłce na inny magazyn: kod sztuki albo IMEI (dokładnie ta sztuka), albo SKU / EAN
  * (najstarsza jeszcze niezeskanowana sztuka tego rozmiaru). Tylko sztuki na stanie w magazynie źródłowym.
  */
 export async function lookupTransferUnit(fromId: string, scan: string, picked: string[]): Promise<TransferUnit | { error: string }> {

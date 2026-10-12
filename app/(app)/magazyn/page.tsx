@@ -50,6 +50,27 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
   const contractIds = [...new Set(rows.map((r) => r.contract_id).filter((x): x is string => !!x))];
   const { data: contractRows } = contractIds.length ? await supabase.from("contracts").select(CONTRACT_LITE_FIELDS).in("id", contractIds) : { data: [] };
   const contractById = new Map((contractRows ?? []).map((c) => [c.id as string, c as unknown as ContractLite]));
+  // Shopify: SKU rozmiaru, wersja robocza (draft) i tag „reused” produktu w sklepie sztuki.
+  const productIds = [...new Set(rows.map((r) => r.variant.product.id))];
+  const variantIds = [...new Set(rows.map((r) => r.variant.id))];
+  const [{ data: pLinks }, { data: vLinks }] = await Promise.all([
+    productIds.length ? supabase.from("product_store_links").select("product_id, store_id, status, tags").in("product_id", productIds) : Promise.resolve({ data: [] }),
+    variantIds.length ? supabase.from("variant_store_links").select("variant_id, store_id, sku").in("variant_id", variantIds) : Promise.resolve({ data: [] }),
+  ]);
+  type PL = { product_id: string; store_id: string; status: string | null; tags: string[] | null };
+  const shopOf = (productId: string, storeId: string) => {
+    const ls = ((pLinks ?? []) as PL[]).filter((l) => l.product_id === productId);
+    const mine = ls.filter((l) => l.store_id === storeId);
+    const use = mine.length ? mine : ls;
+    return {
+      draft: use.length > 0 && use.every((l) => (l.status ?? "").toUpperCase() === "DRAFT"),
+      reused: use.some((l) => (l.tags ?? []).some((t) => t.toLowerCase() === "reused")),
+    };
+  };
+  const skuOf = (variantId: string, storeId: string) => {
+    const ls = ((vLinks ?? []) as { variant_id: string; store_id: string; sku: string | null }[]).filter((l) => l.variant_id === variantId && l.sku);
+    return (ls.find((l) => l.store_id === storeId) ?? ls[0])?.sku ?? null;
+  };
 
   const filterParams = Object.fromEntries(Object.entries(filters).filter(([, v]) => v)) as Record<string, string>;
   const qs = new URLSearchParams(filterParams).toString();
@@ -91,6 +112,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
             {profile.role === "admin" && filters.q && <Link className="btn-secondary" href={`/ustawienia?zakladka=stany&sprawdz=${encodeURIComponent(filters.q)}#sprawdz`}>Porównaj „{filters.q.slice(0, 20)}” ze Shopify</Link>}
             <Link className="btn-secondary" href="/magazyn/przesuniecie">Wyślij na inny magazyn</Link>
             <Link className="btn-secondary" href="/magazyn/inwentaryzacja">Inwentaryzacja</Link>
+            <Link className="btn-secondary" href="/magazyn/historia">Historia</Link>
             <Link className="btn-secondary" href={`/api/eksport/sztuki${qs ? `?${qs}` : ""}`}>Eksport CSV</Link>
           </>
         }
@@ -185,7 +207,8 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
                 <tr><td colSpan={9} className="py-10 text-center text-muted">Brak sztuk dla tych filtrów.</td></tr>
               )}
               {rows.map((u) => {
-                const sku = u.variant.links.find((l) => l.store_id === u.location.store_id && l.base_sku)?.base_sku ?? u.variant.links.find((l) => l.base_sku)?.base_sku ?? null;
+                const sku = skuOf(u.variant.id, u.location.store_id);
+                const shop = shopOf(u.variant.product.id, u.location.store_id);
                 const c = u.contract_id ? contractById.get(u.contract_id) : undefined;
                 const stage = c ? contractStage(c) : null;
                 return (
@@ -195,7 +218,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
                     <Link href={`/magazyn/${u.id}`} className="flex items-center gap-2.5">
                       <Thumb src={u.variant.product.image_url} alt="" />
                       <span className="min-w-0">
-                        <span className="line-clamp-2 font-medium leading-tight hover:underline">{u.variant.product.title}</span>
+                        <span className="line-clamp-2 font-medium leading-tight hover:underline">{u.variant.product.title}{shop.reused && <span className="ml-1.5 inline-block rounded-full bg-amber-100 px-1.5 py-px align-middle text-[11px] font-semibold text-amber-800" title="Tag w Shopify: reused (używane)">reused</span>}</span>
                         <span className="block break-all text-xs text-muted">{u.variant.product.style_sku ?? "bez SKU"}</span>
                         {u.shop_missing && (
                           <span className="mt-0.5 flex flex-wrap gap-1">
@@ -208,17 +231,19 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
                   </td>
                   <td className="font-medium">
                     {u.variant.option}
-                    {sku && <span className="block break-all text-xs font-normal text-muted">Base {sku}</span>}
+                    {sku && <span className="block break-all text-xs font-normal text-muted">{sku}</span>}
                   </td>
                   <td className="font-mono text-xs">
                     {u.code}
                     {u.identifier && <span className="block break-all text-muted">{u.identifier}</span>}
-                    <span className="mt-1 block" title={`Kod kreskowy: ${sku ?? u.code}${sku ? " (SKU z Base)" : " (kod z magazynu – brak SKU z Base)"}`}><Barcode value={sku ?? u.code} className="h-[18px] w-[92px]" /></span>
+                    <span className="mt-1 block" title={`Kod kreskowy sztuki: ${u.code}`}><Barcode value={u.code} className="h-[18px] w-[92px]" /></span>
                   </td>
                   <td className="text-sm">
                     <span className="block leading-tight">{u.location.name}</span>
                     <span className="block text-xs text-muted">{u.location.store.name}{u.shelf ? ` · ${u.shelf}` : ""}</span>
-                    <span className="mt-1 block"><StatusBadge status={u.status} /></span>
+                    <span className="mt-1 block">{u.status === "in_stock" && shop.draft
+                      ? <span className="inline-flex items-center whitespace-nowrap rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 ring-1 ring-inset ring-slate-300" title="Produkt w Shopify jest wersją roboczą (niewidoczny w sklepie)">na stanie – wersja robocza</span>
+                      : <StatusBadge status={u.status} />}</span>
                   </td>
                   <td className="max-w-44">
                     {u.owner_type === "consignment" ? (
@@ -291,7 +316,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
           <button type="submit" className="btn-secondary" formAction="/etykiety" formMethod="get" formTarget="_blank">Drukuj etykietę</button>
           <button type="submit" className="btn-secondary" formAction="/metka" formMethod="get" formTarget="_blank">Wydrukuj metki</button>
           {profile.role === "admin" && (
-            <ConfirmSubmit name="action" value="delete" className="btn-danger ml-auto" message="Usunąć zaznaczone sztuki z aplikacji? Stan w Base się nie zmieni. Sztuk ze sprzedażą nie da się usunąć.">
+            <ConfirmSubmit name="action" value="delete" className="btn-danger ml-auto" message="Usunąć zaznaczone sztuki z aplikacji? Stan w Shopify się nie zmieni. Sztuk ze sprzedażą nie da się usunąć.">
               Usuń zaznaczone
             </ConfirmSubmit>
           )}

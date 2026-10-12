@@ -1,5 +1,5 @@
 import { createAdminClient } from "@/lib/supabase/admin";
-import { getFiscalSettings, JOB_STATUS } from "@/lib/fiscal/jobs";
+import { getFiscalSettings, JOB_STATUS, PTU_LETTERS, ptuLabel } from "@/lib/fiscal/jobs";
 import { dateTime, money } from "@/lib/labels";
 import { Notice, Pill } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
@@ -30,7 +30,7 @@ export async function FiscalSettings() {
           <h2 className="h2">Drukarka fiskalna</h2>
           <p className="mt-1 text-sm text-muted">
             Paragony z Kasy („Zakończ i wystaw paragon”) i z zamówień („Drukuj paragon”) trafiają do kolejki. Program „Drukarka Magazyn” na komputerze z Windows
-            przy drukarce pobiera je co 2 sekundy, drukuje i odsyła numer paragonu. Dopóki żadna drukarka nie jest dodana, „Drukuj paragon” przy zamówieniach działa jak dotąd przez Base.
+            przy drukarce pobiera je co 2 sekundy, drukuje i odsyła numer paragonu. 
           </p>
         </div>
         <ol className="grid gap-3 text-sm md:grid-cols-3">
@@ -72,12 +72,27 @@ export async function FiscalSettings() {
       </section>
 
       <section className="card p-5">
-        <h2 className="h2">Stawki PTU w drukarce</h2>
-        <p className="mb-3 mt-1 text-sm text-muted">Litery stawek zaprogramowane w drukarce przez serwis. Sprawdzisz je na raporcie „stawki PTU” z drukarki.</p>
-        <form action={saveFiscalSettings} className="flex flex-wrap items-end gap-3">
-          <div className="w-40"><label className="label" htmlFor="ptu23">Towar VAT 23%</label><input id="ptu23" className="input uppercase" name="ptu23" maxLength={1} defaultValue={settings.ptu23} /></div>
-          <div className="w-40"><label className="label" htmlFor="ptuMargin">Towar w procedurze marży</label><input id="ptuMargin" className="input uppercase" name="ptuMargin" maxLength={1} defaultValue={settings.ptuMargin} /></div>
-          <div className="w-40"><label className="label" htmlFor="ptuService">Usługi i wysyłka</label><input id="ptuService" className="input uppercase" name="ptuService" maxLength={1} defaultValue={settings.ptuService} /></div>
+        <h2 className="h2">Stawki PTU</h2>
+        <p className="mb-4 mt-1 text-sm text-muted">Stawki A–F muszą odpowiadać stawkom zaprogramowanym w drukarce (raport „stawki PTU” z drukarki). Wpisz procent albo „zw”. Do wyboru w Kasie przy pozycjach spoza magazynu i we własnych produktach.</p>
+        <form action={saveFiscalSettings} className="space-y-5">
+          <div className="grid grid-cols-3 gap-3 sm:grid-cols-6">
+            {PTU_LETTERS.map((l) => (
+              <div key={l}>
+                <label className="label" htmlFor={`rate_${l}`}>Stawka {l}</label>
+                <div className="relative"><input id={`rate_${l}`} className="input pr-7 tabular-nums" name={`rate_${l}`} defaultValue={settings.rates[l]} maxLength={4} /><span className="pointer-events-none absolute right-2.5 top-2 text-sm text-muted">{settings.rates[l] === "zw" ? "" : "%"}</span></div>
+              </div>
+            ))}
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            {([["ptu23", "Towar z magazynu – VAT 23%", settings.ptu23], ["ptuMargin", "Towar z magazynu – procedura marży", settings.ptuMargin], ["ptuService", "Usługi i wysyłka w zamówieniach", settings.ptuService]] as const).map(([name, label, value]) => (
+              <div key={name}>
+                <label className="label" htmlFor={name}>{label}</label>
+                <select id={name} className="input" name={name} defaultValue={value}>
+                  {PTU_LETTERS.map((l) => <option key={l} value={l}>{ptuLabel(settings, l)}</option>)}
+                </select>
+              </div>
+            ))}
+          </div>
           <SubmitButton className="btn-secondary" pendingText="Zapisuję…">Zapisz stawki</SubmitButton>
         </form>
       </section>

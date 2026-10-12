@@ -110,7 +110,7 @@ export async function saveShopifyOrders(db: SupabaseClient, storeId: string, ord
     }
   }
   await refreshOrderStatus(db, ids);
-  // Nowe zamówienia: linie sprzedaży i sztuki z magazynu od razu ze Shopify (Base potem je tylko przejmuje).
+  // Nowe zamówienia: linie sprzedaży i sztuki z magazynu od razu ze Shopify.
   const { error: salesErr } = await db.rpc("register_shopify_sales", { p_order_ids: ids });
   if (salesErr) throw salesErr;
   return ids;

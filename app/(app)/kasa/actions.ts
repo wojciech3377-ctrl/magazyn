@@ -42,6 +42,21 @@ function toPos(r: Row, storeId: string): PosUnit {
   };
 }
 
+export type OwnProduct = { id: string; name: string; price: number | null; ptu: string; track_stock: boolean; stock: number; code: string | null };
+const OWN_FIELDS = "id, name, price, ptu, track_stock, stock, code";
+
+/** Własne produkty (np. „Renowacja obuwia”) po nazwie albo kodzie. */
+export async function searchOwnProducts(q: string): Promise<OwnProduct[]> {
+  const { supabase } = await requireProfile();
+  const text = q.trim().replace(/[,()*%\\]/g, " ").trim();
+  if (text.length < 2) return [];
+  let query = supabase.from("pos_products").select(OWN_FIELDS).eq("active", true).limit(15);
+  for (const w of text.split(/\s+/).slice(0, 4)) query = query.ilike("name", `%${w}%`);
+  const [{ data: byName }, { data: byCode }] = await Promise.all([query, supabase.from("pos_products").select(OWN_FIELDS).eq("active", true).ilike("code", text).limit(5)]);
+  const all = [...(byCode ?? []), ...(byName ?? [])] as OwnProduct[];
+  return [...new Map(all.map((p) => [p.id, { ...p, price: p.price === null ? null : Number(p.price) }])).values()];
+}
+
 export type ScanChoice = { variantId: string; title: string; option: string; inStock: number };
 
 /** Najstarsza wolna sztuka rozmiaru: najpierw własne, potem komis; najpierw z lokalizacji sklepu. */
@@ -61,7 +76,7 @@ export async function pickUnitForVariant(variantId: string, storeId: string, exc
 
 /**
  * Skan albo wpisany kod: kod sztuki z etykiety (S000123), IMEI / numer seryjny,
- * SKU rozmiaru z Base, EAN albo SKU modelu ze Shopify (wtedy wybór rozmiaru).
+ * SKU rozmiaru, EAN albo SKU modelu ze Shopify (wtedy wybór rozmiaru).
  */
 export async function scanUnit(code: string, storeId: string, exclude: string[] = []): Promise<{ unit?: PosUnit; choices?: ScanChoice[]; error?: string }> {
   const { supabase } = await requireProfile();
@@ -76,13 +91,13 @@ export async function scanUnit(code: string, storeId: string, exclude: string[] 
   if (available) return { unit: toPos(available, storeId) };
   if (rows.length) return { error: `Sztuka ${rows[0].code} nie jest na stanie albo jest już w koszyku.` };
 
-  // 2. SKU z Base (rozmiar), SKU ze Shopify (zwykle cały model) albo EAN.
+  // 2. SKU rozmiaru, SKU ze Shopify (zwykle cały model) albo EAN.
   const [links, eans] = await Promise.all([
     supabase.from("variant_store_links").select("variant_id").or(`base_sku.ilike.${c},sku.ilike.${c}`).limit(200),
     supabase.from("variants").select("id").eq("ean", c).limit(20),
   ]);
   const variantIds = [...new Set([...(links.data ?? []).map((l) => l.variant_id as string), ...(eans.data ?? []).map((v) => v.id as string)])];
-  if (!variantIds.length) return { error: `Nie znaleziono „${raw}”. Zeskanuj etykietę, IMEI, SKU z Base, SKU ze Shopify albo EAN.` };
+  if (!variantIds.length) return { error: `Nie znaleziono kodu „${raw}”.` };
   if (variantIds.length === 1) return pickUnitForVariant(variantIds[0], storeId, exclude);
 
   // Kilka rozmiarów (SKU modelu ze Shopify) – pokazujemy rozmiary z sztukami na stanie.
@@ -113,14 +128,31 @@ export async function searchUnits(q: string, storeId: string): Promise<PosUnit[]
 export async function finishPosOrder(_: unknown, formData: FormData): Promise<{ error?: string }> {
   const { supabase, profile } = await requireProfile();
   const storeId = String(formData.get("store_id") ?? "");
-  const items = JSON.parse(String(formData.get("items") ?? "[]")) as { unit_id: string; price: string }[];
+  type In = { unit_id?: string; price: string; name?: string; ptu?: string; quantity?: string; product_id?: string; save?: boolean };
+  const items = JSON.parse(String(formData.get("items") ?? "[]")) as In[];
   if (!storeId) return { error: "Wybierz sklep." };
   if (!items.length) return { error: "Koszyk jest pusty." };
   const parsed = [];
+  const num = (v: unknown) => Number(String(v ?? "").replace(/\s/g, "").replace(",", "."));
   for (const i of items) {
-    const n = Number(String(i.price).replace(/\s/g, "").replace(",", "."));
-    if (!Number.isFinite(n) || n < 0) return { error: "Podaj poprawną cenę przy każdej sztuce." };
-    parsed.push({ unit_id: i.unit_id, price: Math.round(n * 100) / 100 });
+    const n = num(i.price);
+    if (!Number.isFinite(n) || n < 0) return { error: "Podaj poprawną cenę przy każdej pozycji." };
+    const price = Math.round(n * 100) / 100;
+    if (i.unit_id) parsed.push({ unit_id: i.unit_id, price });
+    else {
+      const name = String(i.name ?? "").trim().slice(0, 120);
+      const qty = num(i.quantity ?? 1);
+      if (!name) return { error: "Podaj nazwę pozycji wpisanej ręcznie." };
+      if (!/^[A-F]$/.test(String(i.ptu))) return { error: `Wybierz stawkę PTU dla: ${name}.` };
+      if (!Number.isFinite(qty) || qty <= 0) return { error: `Zła ilość dla: ${name}.` };
+      parsed.push({ name, ptu: i.ptu, price, quantity: qty, product_id: i.product_id || null });
+    }
+  }
+  // „Zapisz jako własny produkt” – do wyszukiwania w Kasie następnym razem (bez liczenia stanu).
+  for (const i of items.filter((x) => !x.unit_id && x.save && !x.product_id)) {
+    const name = String(i.name ?? "").trim().slice(0, 120);
+    const { data: exists } = await supabase.from("pos_products").select("id").ilike("name", name).eq("active", true).limit(1).maybeSingle();
+    if (!exists) await supabase.from("pos_products").insert({ name, price: Math.round(num(i.price) * 100) / 100, ptu: i.ptu, track_stock: false });
   }
 
   const { data: orderId, error } = await supabase.rpc("create_pos_order", {
@@ -132,8 +164,9 @@ export async function finishPosOrder(_: unknown, formData: FormData): Promise<{ 
   });
   if (error) return { error: error.message };
 
-  // Sprzedaż w kasie: stan w Shopify (i pomocniczo w Base) −1 za każdą sztukę.
-  const { data: units } = await supabase.from("units").select("variant_id, location_id").in("id", parsed.map((p) => p.unit_id));
+  // Sprzedaż w kasie: stan w Shopify −1 za każdą sztukę.
+  const unitIds = parsed.map((p) => p.unit_id).filter((x): x is string => !!x);
+  const { data: units } = unitIds.length ? await supabase.from("units").select("variant_id, location_id").in("id", unitIds) : { data: [] };
   const results = await adjustStock(supabase, (units ?? []).map((u) => ({ variantId: u.variant_id, locationId: u.location_id, delta: -1 })));
   const failed = results.filter((r) => !r.ok);
   await supabase.from("pos_orders").update({

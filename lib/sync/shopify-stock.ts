@@ -4,7 +4,7 @@ import { shopifyGraphql } from "@/lib/integrations/shopify";
 
 /**
  * Stany magazynowe między aplikacją a Shopify. Główne źródło wybiera się w Ustawieniach:
- *  - "shopify": stan w Shopify → brakujące sztuki w Magazynie (jak wcześniej z Base),
+ *  - "shopify": stan w Shopify → brakujące sztuki w Magazynie ,
  *  - "app": liczba sztuk na stanie w aplikacji → „dostępne” w Shopify (aplikacja rozdziela stan na sklepy).
  * Lokalizacja aplikacji wskazuje lokalizację Shopify (locations.shopify_location_id).
  */
@@ -94,6 +94,19 @@ function groupByShopLocation(mapped: Loc[]) {
   return groups;
 }
 
+/** Ujemny stan w Shopify (sprzedane ponad stan: −1, −2…) ustawiany na 0. Zwraca liczbę poprawionych pozycji. */
+export async function zeroNegativeLevels(domain: string, storeCode: string, items: { inventoryItemId: string; locationId: string; qty: number }[]) {
+  let fixed = 0;
+  for (let i = 0; i < items.length; i += 100) {
+    const batch = items.slice(i, i + 100).map((x) => ({ inventoryItemId: x.inventoryItemId, locationId: x.locationId, quantity: 0, changeFromQuantity: x.qty }));
+    const data = await shopifyGraphql<{ inventorySetQuantities: { userErrors: { message: string }[] } }>(domain, storeCode,
+      `mutation Set($input: InventorySetQuantitiesInput!, $key: String!) { inventorySetQuantities(input: $input) @idempotent(key: $key) { inventoryAdjustmentGroup { id } userErrors { field message } } }`,
+      { key: crypto.randomUUID(), input: { name: "available", reason: "correction", referenceDocumentUri: "magazyn://ujemny-stan-na-zero", quantities: batch } });
+    if (!data.inventorySetQuantities.userErrors.length) fixed += batch.length;
+  }
+  return fixed;
+}
+
 /**
  * Shopify jest główny: stan „dostępne” = stan w aplikacji. Brakujące sztuki dochodzą (nowy produkt od razu,
  * inne po potwierdzeniu przy kolejnym odczycie), nadmiarowe sztuki bez historii znikają po 30 min – patrz reconcile_stock.
@@ -110,9 +123,11 @@ export async function reconcileFromShopify(db: SupabaseClient, opts: { force?: b
     const best = new Map<string, { variant_id: string; location_id: string; qty: number; count_locations: string[] }>();
     const perItem = new Map<string, number>();
     let truncated = false;
+    const negatives: { inventoryItemId: string; locationId: string; qty: number }[] = [];
     for (const [shopLoc, group] of groupByShopLocation(mapped)) {
       const levels = await readLevels(s.shopify_domain, s.code, shopLoc);
       if (levels.truncated) truncated = true;
+      for (const [item, qty] of levels) if (qty < 0) negatives.push({ inventoryItemId: item, locationId: shopLoc, qty });
       for (const [item, qty] of levels) perItem.set(item, (perItem.get(item) ?? 0) + Math.max(0, qty));
       for (const [item, qty] of levels) {
         const variantId = variantOf.get(item);
@@ -131,7 +146,8 @@ export async function reconcileFromShopify(db: SupabaseClient, opts: { force?: b
       p_remove: true, p_surplus_minutes: opts.force ? 0 : 30, p_history_limit: opts.force ? 100000 : 50,
     });
     if (error) throw error;
-    results[s.name] = { ...(data as object), levels: perItem.size, ...(truncated ? { uwaga: "Shopify ma ponad 50 000 pozycji w lokalizacji – część nie została odczytana" } : {}) };
+    const zeroed = negatives.length ? await zeroNegativeLevels(s.shopify_domain, s.code, negatives).catch(() => 0) : 0;
+    results[s.name] = { ...(data as object), levels: perItem.size, ...(zeroed ? { ujemne_na_zero: zeroed } : {}), ...(truncated ? { uwaga: "Shopify ma ponad 50 000 pozycji w lokalizacji – część nie została odczytana" } : {}) };
     // Stan ze Shopify przy rozmiarze (Katalog) – tylko zmienione.
     const rows = [...perItem.entries()].map(([item, qty]) => ({ item, qty }));
     for (let i = 0; i < rows.length; i += 2000) await db.rpc("set_shopify_qty", { p_store_id: s.id, p_rows: rows.slice(i, i + 2000) }).then(() => null, () => null);
@@ -144,7 +160,14 @@ export async function reconcileFromShopify(db: SupabaseClient, opts: { force?: b
  * sztuki od razu; przy pozostałych nadwyżka czeka na potwierdzenie przy odczycie co 15 min.
  */
 export async function reconcileShopifyLevel(db: SupabaseClient, storeId: string, inventoryItemId: string, locationId: string, available: number) {
-  if ((await getStockMaster(db)) !== "shopify" || available <= 0) return null;
+  if ((await getStockMaster(db)) !== "shopify" || available <= 0) {
+    // Sprzedane ponad stan (−1, −2…) – w Shopify od razu 0.
+    if (available < 0) {
+      const { data: st } = await db.from("stores").select("code, shopify_domain").eq("id", storeId).maybeSingle();
+      if (st?.shopify_domain) await zeroNegativeLevels(st.shopify_domain as string, st.code as string, [{ inventoryItemId, locationId, qty: available }]).catch(() => 0);
+    }
+    return null;
+  }
   const [{ data: links }, { data: group }] = await Promise.all([
     db.from("variant_store_links").select("variant_id").eq("store_id", storeId).eq("shopify_inventory_item_id", inventoryItemId).eq("inventory_tracked", true).limit(1),
     db.from("locations").select("id").eq("store_id", storeId).eq("active", true).eq("shopify_location_id", locationId).order("created_at"),
@@ -283,4 +306,81 @@ export async function compareStock(db: SupabaseClient, limit = 300) {
     rows: top.map((d): StockDiff => ({ store: d.store, ...(names.get(d.variantId) ?? { title: "?", option: "" }), shopify: d.shopify, app: d.app, waitingSince: since.get(`${d.variantId}|${d.locationId}`) ?? null }))
       .sort((a, b) => a.title.localeCompare(b.title, "pl")),
   };
+}
+
+/**
+ * Szybki odczyt stanów: tylko pozycje zmienione w Shopify od ostatniego sprawdzenia (zapytanie z filtrem updated_at),
+ * zamiast całego magazynu (10 000+ pozycji). Działa co minutę i „na żywo”, gdy aplikacja jest otwarta.
+ */
+export async function reconcileRecentFromShopify(db: SupabaseClient) {
+  if ((await getStockMaster(db)) !== "shopify") return { skipped: "główny jest magazyn aplikacji" };
+  const { stores, locs } = await storesAndLocations(db);
+  const out: Record<string, unknown> = {};
+  for (const s of stores) {
+    const mapped = locs.filter((l) => l.store_id === s.id && l.active && l.shopify_location_id);
+    if (!mapped.length) continue;
+    const key = `stock_live:${s.id}`;
+    const { data: st } = await db.from("sync_state").select("value").eq("key", key).maybeSingle();
+    const since = (st?.value as { since?: string } | null)?.since ?? new Date(Date.now() - 15 * 60_000).toISOString();
+    const startedAt = new Date(Date.now() - 5_000).toISOString();
+    const changed = new Map<string, { qty: number; shopLoc: string }>();
+    const negatives: { inventoryItemId: string; locationId: string; qty: number }[] = [];
+    for (const [shopLoc] of groupByShopLocation(mapped)) {
+      let after: string | null = null;
+      for (let page = 0; page < 20; page++) {
+        const data: { location: { inventoryLevels: { nodes: { item: { id: string } | null; quantities: { quantity: number }[] }[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } } } | null } =
+          await shopifyGraphql(s.shopify_domain, s.code,
+            `query Levels($id: ID!, $after: String, $q: String) { location(id: $id) { inventoryLevels(first: 250, after: $after, query: $q) { nodes { item { id } quantities(names: ["available"]) { quantity } } pageInfo { hasNextPage endCursor } } } }`,
+            { id: shopLoc, after, q: `updated_at:>='${since}'` });
+        const lv = data.location?.inventoryLevels;
+        if (!lv) break;
+        for (const n of lv.nodes) {
+          if (!n.item) continue;
+          const qty = n.quantities[0]?.quantity ?? 0;
+          changed.set(`${n.item.id}|${shopLoc}`, { qty, shopLoc });
+          if (qty < 0) negatives.push({ inventoryItemId: n.item.id, locationId: shopLoc, qty });
+        }
+        if (!lv.pageInfo.hasNextPage) break;
+        after = lv.pageInfo.endCursor;
+      }
+    }
+    if (negatives.length) await zeroNegativeLevels(s.shopify_domain, s.code, negatives).catch(() => 0);
+    let result: unknown = { changed: 0 };
+    if (changed.size) {
+      const items = [...new Set([...changed.keys()].map((k) => k.split("|")[0]))];
+      const links: { variant_id: string; shopify_inventory_item_id: string }[] = [];
+      for (let i = 0; i < items.length; i += 200) {
+        const { data } = await db.from("variant_store_links").select("variant_id, shopify_inventory_item_id").eq("store_id", s.id).eq("inventory_tracked", true).in("shopify_inventory_item_id", items.slice(i, i + 200));
+        links.push(...((data ?? []) as typeof links));
+      }
+      // Rozmiar w kilku produktach Shopify naraz (duplikat) – liczy pełny odczyt, tu pomijamy.
+      const perVariant = new Map<string, number>();
+      for (const l of links) perVariant.set(l.variant_id, (perVariant.get(l.variant_id) ?? 0) + 1);
+      const { data: multi } = perVariant.size ? await db.from("variant_store_links").select("variant_id").eq("store_id", s.id).in("variant_id", [...perVariant.keys()].slice(0, 500)) : { data: [] };
+      const count = new Map<string, number>();
+      for (const m of multi ?? []) count.set(m.variant_id as string, (count.get(m.variant_id as string) ?? 0) + 1);
+      const groups = groupByShopLocation(mapped);
+      const rows = links.filter((l) => (count.get(l.variant_id) ?? 1) === 1).flatMap((l) => {
+        const out2: { variant_id: string; location_id: string; qty: number; count_locations: string[] }[] = [];
+        for (const [shopLoc, group] of groups) {
+          const c = changed.get(`${l.shopify_inventory_item_id}|${shopLoc}`);
+          if (c) out2.push({ variant_id: l.variant_id, location_id: group[0].id, qty: Math.max(0, c.qty), count_locations: group.map((g) => g.id) });
+        }
+        return out2;
+      });
+      if (rows.length) {
+        const { data, error } = await db.rpc("reconcile_stock", {
+          p_rows: rows, p_limit: 500, p_source: `Shopify ${s.name}`, p_scope: null,
+          p_confirm_minutes: 10, p_remove: true, p_surplus_minutes: 30, p_history_limit: 50,
+        });
+        if (error) throw error;
+        result = { changed: rows.length, ...(data as object) };
+      }
+      const perItem = items.map((item) => ({ item, qty: [...changed.entries()].filter(([k]) => k.startsWith(`${item}|`)).reduce((n, [, v]) => n + Math.max(0, v.qty), 0) }));
+      for (let i = 0; i < perItem.length; i += 2000) await db.rpc("set_shopify_qty", { p_store_id: s.id, p_rows: perItem.slice(i, i + 2000) }).then(() => null, () => null);
+    }
+    await db.from("sync_state").upsert({ key, value: { since: startedAt }, updated_at: new Date().toISOString() });
+    out[s.name] = result;
+  }
+  return out;
 }

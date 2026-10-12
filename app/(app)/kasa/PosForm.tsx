@@ -1,79 +1,120 @@
 "use client";
 
 import { useActionState, useEffect, useRef, useState, useTransition } from "react";
-import { finishPosOrder, pickUnitForVariant, scanUnit, searchUnits, type PosUnit, type ScanChoice } from "./actions";
+import { finishPosOrder, pickUnitForVariant, scanUnit, searchOwnProducts, searchUnits, type OwnProduct, type PosUnit, type ScanChoice } from "./actions";
 
-type Line = PosUnit & { priceInput: string };
+type UnitLine = PosUnit & { kind: "unit"; key: string; priceInput: string };
+type CustomLine = { kind: "custom"; key: string; name: string; ptu: string; qtyInput: string; priceInput: string; product_id: string | null; save: boolean; note: string };
+type Line = UnitLine | CustomLine;
+type Ptu = { letter: string; label: string };
+
 const PAYMENTS = [["card", "Karta"], ["cash", "Gotówka"], ["blik", "BLIK"], ["transfer", "Przelew"]] as const;
 const fmt = (n: number) => new Intl.NumberFormat("pl-PL", { style: "currency", currency: "PLN" }).format(n);
+const num = (s: string) => Number(s.replace(/\s/g, "").replace(",", ".")) || 0;
 
-export function PosForm({ stores, printer }: { stores: { id: string; name: string }[]; printer: boolean }) {
+/**
+ * Kasa: skan / wpisanie kodu albo nazwy (sztuki z magazynu i własne produkty), pozycje wpisane ręcznie
+ * spoza magazynu (nazwa, cena, stawka PTU) – np. towar na zamówienie albo usługa.
+ */
+export function PosForm({ stores, printer, ptu, defaultPtu }: { stores: { id: string; name: string }[]; printer: boolean; ptu: Ptu[]; defaultPtu: string }) {
   const [state, action, submitting] = useActionState(finishPosOrder, null);
   const [storeId, setStoreId] = useState(stores[0]?.id ?? "");
   const [lines, setLines] = useState<Line[]>([]);
   const [scan, setScan] = useState("");
   const [message, setMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
-  const [query, setQuery] = useState("");
-  const [hits, setHits] = useState<PosUnit[]>([]);
+  const [hits, setHits] = useState<{ units: PosUnit[]; own: OwnProduct[]; q: string } | null>(null);
   const [payment, setPayment] = useState("card");
   const [choices, setChoices] = useState<ScanChoice[] | null>(null);
   const [busy, start] = useTransition();
+  const [manual, setManual] = useState({ open: false, name: "", price: "", qty: "1", ptu: defaultPtu, save: false });
   const scanRef = useRef<HTMLInputElement>(null);
 
+  // Wpisywanie nazwy: podpowiedzi na żywo (od 3 znaków, gdy to nie wygląda na kod ze skanera).
   useEffect(() => {
-    if (query.trim().length < 2) return setHits([]);
-    const t = setTimeout(() => start(async () => setHits(await searchUnits(query, storeId))), 300);
+    const q = scan.trim();
+    if (q.length < 3 || !/[a-ząćęłńóśźż]\s|[a-ząćęłńóśźż]{3}/i.test(q)) { setHits(null); return; }
+    const t = setTimeout(() => start(async () => {
+      const [units, own] = await Promise.all([searchUnits(q, storeId), searchOwnProducts(q)]);
+      setHits({ units, own, q });
+    }), 350);
     return () => clearTimeout(t);
-  }, [query, storeId]);
+  }, [scan, storeId]);
 
-  function add(u: PosUnit) {
-    if (lines.some((l) => l.id === u.id)) {
-      setMessage({ tone: "error", text: `${u.code} jest już w koszyku.` });
-      return;
-    }
-    setLines((prev) => [...prev, { ...u, priceInput: u.price !== null ? String(u.price) : "" }]);
+  const unitIds = lines.filter((l): l is UnitLine => l.kind === "unit").map((l) => l.id);
+
+  function addUnit(u: PosUnit) {
+    if (unitIds.includes(u.id)) return setMessage({ tone: "error", text: `${u.code} jest już w koszyku.` });
+    setLines((prev) => [...prev, { ...u, kind: "unit", key: u.id, priceInput: u.price !== null ? String(u.price) : "" }]);
     setMessage({ tone: "ok", text: `Dodano ${u.code} · ${u.title} ${u.option}` });
+    setScan("");
+    setHits(null);
+  }
+
+  function addOwn(p: OwnProduct) {
+    if (p.track_stock && p.stock <= 0) return setMessage({ tone: "error", text: `„${p.name}” – brak na stanie.` });
+    setLines((prev) => [...prev, { kind: "custom", key: crypto.randomUUID(), name: p.name, ptu: p.ptu, qtyInput: "1", priceInput: p.price !== null ? String(p.price) : "", product_id: p.id, save: false, note: p.track_stock ? `własny produkt · stan ${p.stock}` : "własny produkt" }]);
+    setMessage({ tone: "ok", text: `Dodano ${p.name}` });
+    setScan("");
+    setHits(null);
+  }
+
+  function addManual() {
+    if (!manual.name.trim()) return setMessage({ tone: "error", text: "Wpisz nazwę pozycji." });
+    if (!(num(manual.price) > 0)) return setMessage({ tone: "error", text: "Wpisz cenę pozycji." });
+    setLines((prev) => [...prev, { kind: "custom", key: crypto.randomUUID(), name: manual.name.trim(), ptu: manual.ptu, qtyInput: manual.qty || "1", priceInput: manual.price, product_id: null, save: manual.save, note: manual.save ? "spoza magazynu · zapisze się jako własny produkt" : "spoza magazynu" }]);
+    setManual({ open: true, name: "", price: "", qty: "1", ptu: manual.ptu, save: false });
+    setMessage({ tone: "ok", text: "Dodano pozycję spoza magazynu." });
   }
 
   function onScan(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key !== "Enter") return;
     e.preventDefault();
     const code = scan;
-    setScan("");
     if (!code.trim()) return;
     start(async () => {
-      const r = await scanUnit(code, storeId, lines.map((l) => l.id));
+      const r = await scanUnit(code, storeId, unitIds);
       setChoices(null);
-      if (r.unit) add(r.unit);
+      if (r.unit) addUnit(r.unit);
       else if (r.choices) {
         setChoices(r.choices);
+        setScan("");
         setMessage({ tone: "ok", text: "To SKU modelu – wybierz rozmiar." });
-      } else setMessage({ tone: "error", text: r.error ?? "Nie znaleziono." });
+      } else {
+        // Nie kod – szukamy po nazwie (sztuki na stanie i własne produkty).
+        const [units, own] = await Promise.all([searchUnits(code, storeId), searchOwnProducts(code)]);
+        if (units.length === 1 && !own.length) addUnit(units[0]);
+        else if (own.length === 1 && !units.length) addOwn(own[0]);
+        else if (units.length || own.length) { setHits({ units, own, q: code }); setMessage(null); }
+        else setMessage({ tone: "error", text: `Nie znaleziono „${code.trim()}” – ani kodu, ani nazwy. Możesz dodać pozycję ręcznie poniżej.` });
+      }
       scanRef.current?.focus();
     });
   }
 
   function pick(ch: ScanChoice) {
     start(async () => {
-      const r = await pickUnitForVariant(ch.variantId, storeId, lines.map((l) => l.id));
-      if (r.unit) {
-        add(r.unit);
-        setChoices(null);
-      } else setMessage({ tone: "error", text: r.error ?? "Brak sztuki." });
+      const r = await pickUnitForVariant(ch.variantId, storeId, unitIds);
+      if (r.unit) { addUnit(r.unit); setChoices(null); } else setMessage({ tone: "error", text: r.error ?? "Brak sztuki." });
       scanRef.current?.focus();
     });
   }
 
-  const total = lines.reduce((s, l) => s + (Number(l.priceInput.replace(",", ".")) || 0), 0);
+  const setLine = (key: string, patch: Partial<UnitLine> & Partial<CustomLine>) => setLines((p) => p.map((x) => (x.key === key ? ({ ...x, ...patch } as Line) : x)));
+  const total = lines.reduce((s, l) => s + num(l.priceInput) * (l.kind === "custom" ? num(l.qtyInput) || 1 : 1), 0);
+  const count = lines.reduce((s, l) => s + (l.kind === "custom" ? num(l.qtyInput) || 1 : 1), 0);
+  const items = lines.map((l) => (l.kind === "unit"
+    ? { unit_id: l.id, price: l.priceInput }
+    : { name: l.name, ptu: l.ptu, price: l.priceInput, quantity: l.qtyInput, product_id: l.product_id, save: l.save }));
+  const ptuText = (letter: string) => ptu.find((p) => p.letter === letter)?.label ?? letter;
 
   return (
     <form action={action} className="grid gap-5 lg:grid-cols-3">
-      <input type="hidden" name="items" value={JSON.stringify(lines.map((l) => ({ unit_id: l.id, price: l.priceInput })))} />
+      <input type="hidden" name="items" value={JSON.stringify(items)} />
       <input type="hidden" name="payment" value={payment} />
 
       <div className="min-w-0 space-y-5 lg:col-span-2">
         <section className="card space-y-3 p-4">
-          <label className="label" htmlFor="scan">Skanuj albo wpisz kod</label>
+          <label className="label" htmlFor="scan">Skanuj kod albo wpisz nazwę</label>
           <input
             ref={scanRef}
             id="scan"
@@ -81,58 +122,102 @@ export function PosForm({ stores, printer }: { stores: { id: string; name: strin
             value={scan}
             onChange={(e) => setScan(e.target.value)}
             onKeyDown={onScan}
-            placeholder="Etykieta S000123, IMEI, SKU z Base, SKU ze Shopify lub EAN – potem Enter"
+            placeholder="Etykieta S000123, IMEI, SKU, EAN albo nazwa – potem Enter"
             autoFocus
             autoComplete="off"
           />
+          {busy && <p className="text-xs text-muted">Szukam…</p>}
           {message && <p className={`text-sm ${message.tone === "ok" ? "text-ok" : "text-bad"}`}>{message.text}</p>}
           {choices && (
-            <div className="rounded-md border border-line p-3">
+            <div className="rounded-xl border border-line p-3">
               <div className="mb-2 text-sm font-medium">{choices[0]?.title}</div>
               <div className="flex flex-wrap gap-1.5">
                 {choices.map((ch) => (
                   <button type="button" key={ch.variantId} disabled={ch.inStock === 0} onClick={() => pick(ch)}
-                    className="rounded-md border border-line px-2.5 py-1.5 text-sm hover:border-accent disabled:opacity-40">
+                    className="rounded-lg border border-line px-2.5 py-1.5 text-sm hover:border-accent disabled:opacity-40">
                     <b>{ch.option}</b> <span className="text-xs text-muted">{ch.inStock} szt.</span>
                   </button>
                 ))}
               </div>
             </div>
           )}
-          <details className="text-sm" open={query.length > 0}>
-            <summary className="cursor-pointer text-muted">Dodaj ręcznie – wyszukaj produkt</summary>
-            <input className="input mt-2" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Nazwa, SKU modelu, SKU z Base, EAN" aria-label="Szukaj produktu" />
-            {busy && query && <p className="mt-2 text-muted">Szukam…</p>}
-            <ul className="mt-2 divide-y divide-line">
-              {hits.map((u) => (
-                <li key={u.id} className="flex items-center gap-3 py-2">
+          {hits && (hits.units.length > 0 || hits.own.length > 0) && (
+            <ul className="max-h-80 divide-y divide-line overflow-y-auto rounded-xl border border-line">
+              {hits.own.map((p) => (
+                <li key={p.id} className="flex items-center gap-3 px-3 py-2">
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-medium">{p.name}</span>
+                    <span className="text-xs text-muted">własny produkt · PTU {ptuText(p.ptu)}{p.track_stock ? ` · stan ${p.stock}` : " · bez stanu"}</span>
+                  </span>
+                  <span className="tabular-nums">{p.price !== null ? fmt(p.price) : "–"}</span>
+                  <button type="button" className="btn-secondary px-2.5 py-1 text-xs" onClick={() => addOwn(p)}>Dodaj</button>
+                </li>
+              ))}
+              {hits.units.map((u) => (
+                <li key={u.id} className="flex items-center gap-3 px-3 py-2">
                   <span className="min-w-0 flex-1">
                     <span className="block truncate font-medium">{u.title} · {u.option}</span>
                     <span className="text-xs text-muted">{u.code}{u.identifier ? ` · ${u.identifier}` : ""} · {u.location}{u.owner ? ` · komis ${u.owner}` : ""}</span>
                   </span>
                   <span className="tabular-nums">{u.price !== null ? fmt(u.price) : "–"}</span>
-                  <button type="button" className="btn-secondary px-2.5 py-1 text-xs" onClick={() => add(u)} disabled={lines.some((l) => l.id === u.id)}>Dodaj</button>
+                  <button type="button" className="btn-secondary px-2.5 py-1 text-xs" onClick={() => addUnit(u)} disabled={unitIds.includes(u.id)}>Dodaj</button>
                 </li>
               ))}
-              {query.trim().length >= 2 && !busy && hits.length === 0 && <li className="py-2 text-muted">Brak sztuk na stanie dla tego wyszukiwania.</li>}
             </ul>
-          </details>
+          )}
+          {hits && !hits.units.length && !hits.own.length && !busy && <p className="text-sm text-muted">Brak sztuk na stanie ani własnych produktów dla „{hits.q}”.</p>}
+
+          <div className="rounded-xl border border-dashed border-line">
+            <button type="button" className="flex w-full items-center justify-between px-3 py-2.5 text-left text-sm font-medium text-ink" onClick={() => setManual((m) => ({ ...m, open: !m.open }))} aria-expanded={manual.open}>
+              Dodaj ręcznie pozycję spoza magazynu
+              <span className="text-xs font-normal text-muted">{manual.open ? "schowaj" : "np. towar na zamówienie, usługa"}</span>
+            </button>
+            {manual.open && (
+              <div className="space-y-3 border-t border-line p-3">
+                <div className="grid gap-2 sm:grid-cols-[1fr_7rem_5rem_9rem]">
+                  <input className="input" value={manual.name} onChange={(e) => setManual({ ...manual, name: e.target.value })} placeholder="Nazwa na paragonie" aria-label="Nazwa" maxLength={120}
+                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addManual(); } }} />
+                  <input className="input tabular-nums" inputMode="decimal" value={manual.price} onChange={(e) => setManual({ ...manual, price: e.target.value })} placeholder="Cena zł" aria-label="Cena"
+                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addManual(); } }} />
+                  <input className="input tabular-nums" inputMode="decimal" value={manual.qty} onChange={(e) => setManual({ ...manual, qty: e.target.value })} aria-label="Ilość" title="Ilość" />
+                  <select className="input" value={manual.ptu} onChange={(e) => setManual({ ...manual, ptu: e.target.value })} aria-label="Stawka PTU">
+                    {ptu.map((p) => <option key={p.letter} value={p.letter}>PTU {p.label}</option>)}
+                  </select>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <label className="flex items-center gap-2 text-sm text-muted"><input type="checkbox" checked={manual.save} onChange={(e) => setManual({ ...manual, save: e.target.checked })} /> zapisz jako własny produkt (będzie w wyszukiwaniu)</label>
+                  <button type="button" className="btn-secondary" onClick={addManual}>Dodaj do koszyka</button>
+                </div>
+                <p className="text-xs text-muted">Pozycja nie trafia do magazynu ani do Shopify – po wydruku paragonu jest w JPK.</p>
+              </div>
+            )}
+          </div>
         </section>
 
         <section className="card overflow-x-auto">
           <table className="table">
-            <thead><tr><th>Sztuka</th><th>Produkt</th><th className="w-36">Cena (zł)</th><th /></tr></thead>
+            <thead><tr><th>Kod</th><th>Pozycja</th><th className="w-20">Ilość</th><th className="w-36">Cena (zł)</th><th /></tr></thead>
             <tbody>
-              {lines.length === 0 && <tr><td colSpan={4} className="py-8 text-center text-muted">Zeskanuj pierwszą sztukę.</td></tr>}
+              {lines.length === 0 && <tr><td colSpan={5} className="py-8 text-center text-muted">Zeskanuj pierwszą sztukę albo wpisz nazwę.</td></tr>}
               {lines.map((l) => (
-                <tr key={l.id}>
-                  <td className="whitespace-nowrap font-mono text-xs">{l.code}{l.identifier && <span className="block text-muted">{l.identifier}</span>}</td>
-                  <td>{l.title} · <b>{l.option}</b>{l.owner && <span className="block text-xs text-muted">komis · {l.owner}</span>}</td>
+                <tr key={l.key}>
+                  {l.kind === "unit" ? (
+                    <>
+                      <td className="whitespace-nowrap font-mono text-xs">{l.code}{l.identifier && <span className="block text-muted">{l.identifier}</span>}</td>
+                      <td>{l.title} · <b>{l.option}</b>{l.owner && <span className="block text-xs text-muted">komis · {l.owner}</span>}</td>
+                      <td className="text-muted">1</td>
+                    </>
+                  ) : (
+                    <>
+                      <td className="text-xs text-muted">PTU {l.ptu}</td>
+                      <td>{l.name}<span className="block text-xs text-muted">{l.note} · {ptuText(l.ptu)}</span></td>
+                      <td><input className="input tabular-nums" inputMode="decimal" value={l.qtyInput} aria-label={`Ilość ${l.name}`} onChange={(e) => setLine(l.key, { qtyInput: e.target.value })} /></td>
+                    </>
+                  )}
                   <td>
-                    <input className="input tabular-nums" inputMode="decimal" value={l.priceInput} aria-label={`Cena ${l.code}`}
-                      onChange={(e) => setLines((p) => p.map((x) => (x.id === l.id ? { ...x, priceInput: e.target.value } : x)))} />
+                    <input className="input tabular-nums" inputMode="decimal" value={l.priceInput} aria-label="Cena" onChange={(e) => setLine(l.key, { priceInput: e.target.value })} />
                   </td>
-                  <td><button type="button" className="text-sm text-bad hover:underline" onClick={() => setLines((p) => p.filter((x) => x.id !== l.id))}>Usuń</button></td>
+                  <td><button type="button" className="text-sm text-bad hover:underline" onClick={() => setLines((p) => p.filter((x) => x.key !== l.key))}>Usuń</button></td>
                 </tr>
               ))}
             </tbody>
@@ -153,7 +238,7 @@ export function PosForm({ stores, printer }: { stores: { id: string; name: strin
             <div className="grid grid-cols-2 gap-1.5">
               {PAYMENTS.map(([k, label]) => (
                 <button type="button" key={k} onClick={() => setPayment(k)}
-                  className={`rounded-md border px-2 py-2 text-sm ${payment === k ? "border-accent bg-accent/5 font-medium" : "border-line"}`}>
+                  className={`rounded-lg border px-2 py-2 text-sm transition-colors ${payment === k ? "border-accent bg-accent-soft font-medium text-accent" : "border-line hover:bg-slate-50"}`}>
                   {label}
                 </button>
               ))}
@@ -170,14 +255,14 @@ export function PosForm({ stores, printer }: { stores: { id: string; name: strin
         </section>
         <section className="card space-y-3 p-4">
           <div className="flex items-baseline justify-between">
-            <span className="text-sm text-muted">{lines.length} szt.</span>
+            <span className="text-sm text-muted">{count} {count === 1 ? "pozycja" : "pozycji"}</span>
             <span className="text-2xl font-semibold tabular-nums">{fmt(total)}</span>
           </div>
           {state?.error && <p className="text-sm text-bad">{state.error}</p>}
           <button className="btn w-full py-3 text-base" name="receipt" value="1" disabled={submitting || !lines.length}>{submitting ? "Zapisuję…" : "Zakończ i wystaw paragon"}</button>
           <button className="btn-ghost w-full text-xs" name="receipt" value="0" disabled={submitting || !lines.length}>Zakończ bez paragonu (np. na fakturę)</button>
           <p className="text-xs text-muted">
-            Sztuki zmienią status na „sprzedana”, a stan w Shopify spadnie o 1 za każdą.{" "}
+            Sztuki z magazynu zmienią status na „sprzedana”, a stan w Shopify spadnie o 1 za każdą.{" "}
             {printer ? "Paragon wydrukuje się od razu na drukarce fiskalnej." : "Drukarka fiskalna nie jest jeszcze podłączona (Ustawienia → Drukarka fiskalna) – paragon trafi do kolejki i wydrukuje się po podłączeniu."}
           </p>
         </section>

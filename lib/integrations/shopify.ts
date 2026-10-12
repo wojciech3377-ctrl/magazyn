@@ -243,6 +243,13 @@ export async function ordersUpdatedSince(domain: string, storeCode: string, sinc
   return data.orders;
 }
 
+/** Ostatnio zmienione zamówienia (do odczytu „na żywo”, gdy aplikacja jest otwarta). */
+export async function recentOrders(domain: string, storeCode: string, first = 5) {
+  const data = await shopifyGraphql<{ orders: { nodes: ShopifyOrder[] } }>(domain, storeCode,
+    `query($first: Int!) { orders(first: $first, sortKey: UPDATED_AT, reverse: true) { nodes { ${ORDER_FIELDS} } } }`, { first });
+  return data.orders.nodes;
+}
+
 export async function getOrder(domain: string, storeCode: string, id: string) {
   const data = await shopifyGraphql<{ order: ShopifyOrder | null }>(domain, storeCode, `query($id: ID!) { order(id: $id) { ${ORDER_FIELDS} } }`, { id });
   return data.order;
@@ -287,8 +294,8 @@ export async function fulfillWithTracking(
 export type CancelReason = "CUSTOMER" | "DECLINED" | "FRAUD" | "INVENTORY" | "OTHER" | "STAFF";
 
 /**
- * Anulowanie zamówienia w Shopify (nieodwracalne). Stan magazynowy prowadzi Base, więc restock = false –
- * sztuki wracają na stan w aplikacji, a Base aktualizuje sklep. Wymaga uprawnienia write_orders.
+ * Anulowanie zamówienia w Shopify (nieodwracalne). restock = false – sztuki wracają na stan w aplikacji,
+ * a aplikacja zmienia stan w Shopify. Wymaga uprawnienia write_orders.
  */
 export async function cancelShopifyOrder(
   domain: string,

@@ -7,7 +7,7 @@ import { attachContractForPiece, deletePosOrder, pullOrdersNow } from "./actions
 import { ConfirmSubmit } from "@/components/ConfirmSubmit";
 import { matchPieces, type Piece } from "@/lib/orders/pieces";
 import { SwapForm } from "./SwapForm";
-import { WtbButton } from "@/components/WtbButton";
+import { WtbButton, WtbOrderButton } from "@/components/WtbButton";
 import { ReceiptButton } from "@/components/ReceiptButton";
 import { fiscalPrinterReady } from "@/lib/fiscal/jobs";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -71,7 +71,6 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
   ]);
   const lastOf = (job: string) => (logs ?? []).find((l) => l.job === job);
   const lastShop = lastOf("shopify-orders");
-  const lastBase = lastOf("base-orders");
   const lastShip = lastOf("furgonetka");
 
   const ids = (orders ?? []).map((o) => o.id);
@@ -80,6 +79,8 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
     fiscalPrinterReady(createAdminClient()),
   ]);
   const jobOf = new Map((receiptJobs ?? []).map((j) => [j.order_id as string, j as unknown as JobView]));
+  const { data: wtbRows } = ids.length ? await supabase.from("wtb_items").select("order_id").in("order_id", ids).eq("status", "active") : { data: [] };
+  const wtbOrders = new Set((wtbRows ?? []).map((w) => w.order_id as string));
   const [{ data: sales }, { data: shipments }] = ids.length
     ? await Promise.all([
         supabase.from("sales").select(`id, order_id, status, variant_id, shopify_line_id, shopify_line_index, unit:units(id, code, contract_id, owner_type, contract:contracts(${CONTRACT_LITE_FIELDS}))`).in("order_id", ids),
@@ -115,7 +116,6 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
       <Tabs active="orders" />
       <Flash sp={sp} />
       {lastShop && !lastShop.ok && <div className="mb-4"><Notice tone="error">Odczyt zamówień z Shopify nie udał się: {lastShop.message}</Notice></div>}
-      {lastBase && !lastBase.ok && <div className="mb-4"><Notice tone="error">Przypisanie sztuk (Base) nie udało się: {lastBase.message}</Notice></div>}
       {lastShip && !lastShip.ok && <div className="mb-4"><Notice tone="error">Odczyt przesyłek z Furgonetki nie udał się: {lastShip.message}</Notice></div>}
       {!!problems && <div className="mb-4"><Notice tone="error">{problems} {problems === 1 ? "linia zamówienia nie ma" : "linii zamówień nie ma"} sztuki na stanie. <Link className="font-medium underline" href="/sprzedaz?widok=linie&status=no_unit">Pokaż {problems === 1 ? "ją" : "je"}</Link> i przypisz sztukę skanem albo wygeneruj umowę.</Notice></div>}
 
@@ -198,6 +198,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
                       <ContractAction pieces={matchPieces(o.id, (o.line_items ?? []) as LineItem[], oSales, (g) => variantOf.get(g))} saleContract={saleContract} cancelled={status === "cancelled"} back={`/sprzedaz${tab ? `?status=${tab}` : ""}`} />
                       {status === "new" && <Link className="btn-secondary relative z-10 whitespace-nowrap px-2.5 py-1 text-xs" href={`/sprzedaz/${o.id}#etykieta`}>Utwórz etykietę</Link>}
                       {status !== "cancelled" && status !== "returned" && <ReceiptButton orderId={o.id} receiptId={o.receipt_id as number | null} job={jobOf.get(o.id) ?? null} printer={printer} compact />}
+                      <WtbOrderButton orderId={o.id} inWtb={wtbOrders.has(o.id)} />
                     </div>
                   </td>
                 </tr>
@@ -260,7 +261,7 @@ function Flash({ sp }: { sp: Record<string, string | undefined> }) {
   return <div className="mb-4">{sp.blad ? <Notice tone="error">{sp.blad}</Notice> : <Notice tone="ok">{sp.ok}</Notice>}</div>;
 }
 
-/** Linie sprzedaży z Base: przypisanie sztuk, umowy, zamiana sztuki przy pakowaniu. */
+/** Linie sprzedaży: przypisanie sztuk, umowy, zamiana sztuki przy pakowaniu. */
 async function SaleLines({ sp, page }: { sp: Record<string, string | undefined>; page: number }) {
   const { supabase } = await requireProfile();
   const status = sp.status ?? "";
@@ -287,7 +288,7 @@ async function SaleLines({ sp, page }: { sp: Record<string, string | undefined>;
 
   return (
     <>
-      <PageHeader title="Sprzedaż" sub={<>Linie zamówień z Base: aplikacja bierze najpierw Twoje sztuki, potem komis, zawsze od najstarszej. Ostatni odczyt: {lastSync ? `${dateTime(lastSync.created_at)}${lastSync.ok ? "" : " (błąd)"}` : "jeszcze nie było"}.</>} />
+      <PageHeader title="Sprzedaż" sub={<>Linie zamówień: aplikacja bierze najpierw Twoje sztuki, potem komis, zawsze od najstarszej. Ostatni odczyt: {lastSync ? `${dateTime(lastSync.created_at)}${lastSync.ok ? "" : " (błąd)"}` : "jeszcze nie było"}.</>} />
       <Tabs active="lines" />
       <form className="mb-4 flex flex-wrap gap-2" method="get">
         <input type="hidden" name="widok" value="linie" />
@@ -356,7 +357,7 @@ async function PosList({ page, q }: { page: number; q: string }) {
   const { supabase, profile } = await requireProfile();
   let query = supabase
     .from("pos_orders")
-    .select("id, code, total, payment_method, customer, created_at, base_sync_status, store:stores(name), items:pos_order_items(price, status, unit:units(id, code, identifier, owner_type, contract_id, variant:variants(option, product:products(title))))", { count: "exact" })
+    .select("id, code, total, payment_method, customer, created_at, base_sync_status, store:stores(name), items:pos_order_items(price, status, name, quantity, unit:units(id, code, identifier, owner_type, contract_id, variant:variants(option, product:products(title))))", { count: "exact" })
     .order("created_at", { ascending: false })
     .range((page - 1) * PER_PAGE, page * PER_PAGE - 1);
   const text = q.replace(/[%,()*\\]/g, " ").trim();
@@ -365,12 +366,15 @@ async function PosList({ page, q }: { page: number; q: string }) {
     const { data: units } = await supabase.from("units_list").select("id")
       .or(`title.ilike.%${text}%,style_sku.ilike.%${text}%,code.ilike.%${text}%,identifier.ilike.%${text}%,base_sku.ilike.%${text}%`).limit(300);
     const unitIds = (units ?? []).map((u) => u.id as string);
-    const { data: items } = unitIds.length ? await supabase.from("pos_order_items").select("order_id").in("unit_id", unitIds).limit(500) : { data: [] };
-    const orderIds = [...new Set((items ?? []).map((i) => i.order_id as string))];
+    const [{ data: items }, { data: named }] = await Promise.all([
+      unitIds.length ? supabase.from("pos_order_items").select("order_id").in("unit_id", unitIds).limit(500) : Promise.resolve({ data: [] as { order_id: string }[] }),
+      supabase.from("pos_order_items").select("order_id").ilike("name", `%${text}%`).limit(200),
+    ]);
+    const orderIds = [...new Set([...(items ?? []), ...(named ?? [])].map((i) => i.order_id as string))];
     query = query.or([`code.ilike.%${text}%`, `customer.ilike.%${text}%`, ...(orderIds.length ? [`id.in.(${orderIds.slice(0, 150).join(",")})`] : [])].join(","));
   }
   const { data, count } = await query;
-  type PosItem = { price: number; status: string; unit: { id: string; code: string; identifier: string | null; owner_type: string; contract_id: string | null; variant: { option: string; product: { title: string } } | null } | null };
+  type PosItem = { price: number; status: string; name: string | null; quantity: number | null; unit: { id: string; code: string; identifier: string | null; owner_type: string; contract_id: string | null; variant: { option: string; product: { title: string } } | null } | null };
   return (
     <>
       <PageHeader title="Sprzedaż" sub="Sprzedaż stacjonarna z kasy." actions={<Link className="btn" href="/kasa">Nowa sprzedaż</Link>} />
@@ -395,7 +399,7 @@ async function PosList({ page, q }: { page: number; q: string }) {
                   <ul className="space-y-0.5 text-sm">
                     {((o.items ?? []) as unknown as PosItem[]).map((i, k) => (
                       <li key={k}>
-                        <span className="line-clamp-1">{i.unit?.variant ? <>{i.unit.variant.product.title} · <b>{i.unit.variant.option}</b></> : "–"} <span className="font-mono text-xs text-muted">{i.unit?.code}</span></span>
+                        <span className="line-clamp-1">{i.unit?.variant ? <>{i.unit.variant.product.title} · <b>{i.unit.variant.option}</b></> : i.name ? <>{i.name}{Number(i.quantity ?? 1) !== 1 ? ` × ${Number(i.quantity)}` : ""} <span className="text-xs text-muted">(spoza magazynu)</span></> : "–"} <span className="font-mono text-xs text-muted">{i.unit?.code}</span></span>
                         {i.unit?.owner_type === "consignment" && !i.unit.contract_id && i.status !== "returned" && <span className="block"><ConsignorWaiting /></span>}
                       </li>
                     ))}

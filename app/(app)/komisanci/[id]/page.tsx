@@ -35,7 +35,7 @@ export default async function ConsignorPage({ params, searchParams }: { params: 
 
   return (
     <>
-      <PageHeader title={consignor.name} sub="Komisant" actions={<><Link className="btn-secondary" href={`/magazyn?wlasciciel=consignment&komisant=${id}&status=wszystkie`}>W Magazynie</Link><Link className="btn-secondary" href="/komisanci">Wróć</Link></>} />
+      <PageHeader title={consignor.name} sub="Komisant" actions={<><Link className="btn-secondary" href={`/magazyn?wlasciciel=consignment&komisant=${id}&status=wszystkie`}>W Magazynie</Link><Link className="btn-secondary" href={`/magazyn/historia?wlasciciel=komis&q=${encodeURIComponent(consignor.name)}`}>Historia</Link><Link className="btn-secondary" href="/komisanci">Wróć</Link></>} />
       {sp.ok && <div className="mb-4"><Notice tone="ok">{sp.ok}</Notice></div>}
       {sp.blad && <div className="mb-4"><Notice tone="error">{sp.blad}</Notice></div>}
       {isAdmin && (

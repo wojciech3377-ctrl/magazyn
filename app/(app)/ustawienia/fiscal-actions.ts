@@ -47,15 +47,21 @@ export async function deletePrinter(fd: FormData) {
   back(error ? errorMessage(error) : "Drukarka usunięta.", !error);
 }
 
-/** Litery stawek PTU w drukarce (muszą odpowiadać stawkom zaprogramowanym w drukarce przez serwis). */
+/** Stawki PTU A–F (procent albo „zw”) i które litery dostają towar 23%, towar w marży i usługi. */
 export async function saveFiscalSettings(fd: FormData) {
   await requireAdmin();
+  const rates: Record<string, string> = {};
+  for (const l of ["A", "B", "C", "D", "E", "F"]) {
+    const v = String(fd.get(`rate_${l}`) ?? "").trim().toLowerCase().replace("%", "").replace(".", ",");
+    if (!/^(zw|\d{1,2}(,\d)?)$/.test(v)) back(`Stawka ${l}: wpisz procent (np. 23, 8, 0) albo „zw”.`, false);
+    rates[l] = v;
+  }
   const letter = (k: string) => {
     const v = String(fd.get(k) ?? "").trim().toUpperCase();
-    return /^[A-G]$/.test(v) ? v : null;
+    return /^[A-F]$/.test(v) ? v : null;
   };
-  const value = { ptu23: letter("ptu23"), ptuMargin: letter("ptuMargin"), ptuService: letter("ptuService") };
-  if (!value.ptu23 || !value.ptuMargin || !value.ptuService) back("Stawki PTU to litery A–G.", false);
+  const value = { rates, ptu23: letter("ptu23"), ptuMargin: letter("ptuMargin"), ptuService: letter("ptuService") };
+  if (!value.ptu23 || !value.ptuMargin || !value.ptuService) back("Wybierz stawki z listy A–F.", false);
   const { error } = await createAdminClient().from("app_settings").upsert({ key: "fiscal", value, updated_at: new Date().toISOString() });
   revalidatePath("/ustawienia");
   back(error ? errorMessage(error) : "Stawki PTU zapisane.", !error);

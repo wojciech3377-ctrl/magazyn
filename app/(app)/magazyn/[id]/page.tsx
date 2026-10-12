@@ -5,6 +5,7 @@ import { ProductGallery } from "@/components/ProductGallery";
 import { notFound } from "next/navigation";
 import { requireProfile } from "@/lib/auth";
 import { UNIT_SELECT, type UnitRow } from "@/lib/queries/units";
+import { describeEvent, type HistoryEvent } from "@/lib/history";
 import { CONTRACT_TYPE, dateOnly, dateTime, EVENT_TYPE, money, PURCHASE_FORM, SALE_STATUS, UNIT_STATUS } from "@/lib/labels";
 import { Field, Notice, PageHeader, Pill, StatusBadge } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
@@ -151,10 +152,7 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
               {events?.map((e) => (
                 <li key={e.id} className="flex gap-3">
                   <span className="w-32 shrink-0 text-muted">{dateTime(e.created_at)}</span>
-                  <span>
-                    <b>{EVENT_TYPE[e.type] ?? e.type}</b>
-                    <EventDetails data={e.data as Record<string, unknown>} />
-                  </span>
+                  {(() => { const d = describeEvent(e as HistoryEvent); return <span><b className="font-medium">{d.title}</b>{d.detail && <span className="text-muted"> · {d.detail}</span>}</span>; })()}
                 </li>
               ))}
             </ol>

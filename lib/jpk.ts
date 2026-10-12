@@ -21,7 +21,7 @@ export type JpkLine = {
   saleDate: string;
   name: string;
   price: number | null;
-  vat: "A" | "F" | "";
+  vat: string;                 // litera stawki PTU (A 23%, F marża…) albo pusto
   unitId: string | null;
   unitCode: string | null;
   contractId: string | null;
@@ -153,7 +153,7 @@ async function shopLines(db: SupabaseClient, orders: Order[], docOf: (o: Order) 
 }
 
 type PosItem = {
-  id: string; order_id: string; price: number; status: string;
+  id: string; order_id: string; price: number; status: string; name: string | null; ptu: string | null; quantity: number | null;
   order: { id: string; code: string; created_at: string } | null;
   unit: (NonNullable<Unit> & { variant: { option: string; product: { title: string } } | null }) | null;
 };
@@ -161,14 +161,16 @@ type PosItem = {
 async function posLines(db: SupabaseClient, posOrderIds: string[], docOf: (posOrderId: string) => Doc | undefined) {
   if (!posOrderIds.length) return [];
   const items = await inChunks<PosItem>(posOrderIds, (part) =>
-    db.from("pos_order_items").select(`id, order_id, price, status, order:pos_orders(id, code, created_at), unit:units(${UNIT_FIELDS}, variant:variants(option, product:products(title)))`)
+    db.from("pos_order_items").select(`id, order_id, price, status, name, ptu, quantity, order:pos_orders(id, code, created_at), unit:units(${UNIT_FIELDS}, variant:variants(option, product:products(title)))`)
       .in("order_id", part as string[]));
   return items.map((i): JpkLine => {
     const r = docOf(i.order_id);
+    const qty = Number(i.quantity ?? 1);
     return {
       key: `p:${i.id}`, source: "pos", kind: r?.kind ?? null, docNumber: r?.number ?? null, docDate: r?.date ?? null, saleDate: i.order?.created_at ?? "",
-      name: i.unit?.variant ? `${i.unit.variant.product.title} ${i.unit.variant.option}` : "",
-      price: Number(i.price), vat: vatOf(i.unit), ...unitPart(i.unit),
+      // Pozycja spoza magazynu (wpisana w Kasie / własny produkt): nazwa i litera PTU z Kasy.
+      name: i.unit?.variant ? `${i.unit.variant.product.title} ${i.unit.variant.option}` : `${i.name ?? ""}${qty !== 1 ? ` × ${qty}` : ""}`,
+      price: Math.round(Number(i.price) * qty * 100) / 100, vat: i.unit ? vatOf(i.unit) : ((i.ptu ?? "") as JpkLine["vat"]), ...unitPart(i.unit),
       orderLabel: i.order?.code ?? "", orderHref: i.order ? `/kasa/${i.order.id}` : null,
       saleNote: i.status === "returned" ? "ZWROT" : null,
       saleId: null, variantLinked: true, baseOrderId: null, pieceRef: null, pendingContractId: null,

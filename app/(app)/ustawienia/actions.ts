@@ -28,15 +28,7 @@ export async function saveStore(formData: FormData) {
   const { supabase } = await requireAdmin();
   const domain = String(formData.get("shopify_domain") ?? "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
   if (domain && !/^[a-z0-9-]+\.myshopify\.com$/.test(domain)) return done("Domena Shopify musi mieć postać nazwa.myshopify.com", "blad");
-  const inventoryId = num(formData.get("base_inventory_id"));
-  const sourceId = num(formData.get("base_order_source_id"));
-  if (inventoryId === false || sourceId === false) return done("ID katalogu i źródła zamówień to same cyfry.", "blad");
-  const { error } = await supabase.from("stores").update({
-    shopify_domain: domain || null,
-    base_inventory_id: inventoryId,
-    base_order_source_id: sourceId,
-    base_storage_id: String(formData.get("base_storage_id") ?? "").trim() || null,
-  }).eq("id", String(formData.get("id")));
+  const { error } = await supabase.from("stores").update({ shopify_domain: domain || null }).eq("id", String(formData.get("id")));
   if (error) return done(error.message, "blad");
   await done("Sklep zapisany.");
 }
@@ -47,7 +39,6 @@ export async function saveLocation(formData: FormData) {
   const row = {
     store_id: String(formData.get("store_id")),
     name: String(formData.get("name") ?? "").trim(),
-    base_warehouse_id: String(formData.get("base_warehouse_id") ?? "").trim() || null,
     active: formData.get("active") !== null || !id,
     ...(formData.has("ship_address") ? { ship_address: String(formData.get("ship_address") ?? "").trim().slice(0, 400) || null } : {}),
   };
@@ -80,13 +71,6 @@ export async function registerWebhooks(formData: FormData) {
     unstable_rethrow(e);
     await done(errorMessage(e), "blad");
   }
-}
-
-export async function importInitialStock() {
-  const { supabase } = await requireAdmin();
-  const { data, error } = await supabase.rpc("import_initial_stock");
-  if (error) return done(error.message, "blad");
-  await done(`Wgrano ${data.units} sztuk (${data.variants} pozycji) jako „bez umowy”.`);
 }
 
 export async function saveUser(formData: FormData) {
@@ -139,7 +123,7 @@ export async function purgeExcluded() {
   const { supabase } = await requireAdmin();
   const { data, error } = await supabase.rpc("purge_excluded");
   if (error) return done(error.message, "blad");
-  await done(`Usunięto z magazynu ${data.variants ?? 0} rozmiarów/wariantów (${data.products} całych produktów) i ${data.units} sztuk. Stany w Base bez zmian.`);
+  await done(`Usunięto z magazynu ${data.variants ?? 0} rozmiarów/wariantów (${data.products} całych produktów) i ${data.units} sztuk. Stany w Shopify bez zmian.`);
 }
 
 export async function saveCompany(formData: FormData) {

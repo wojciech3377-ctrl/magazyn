@@ -4,45 +4,46 @@ import { findVariantIds } from "@/lib/queries/units";
 import { dateTime } from "@/lib/labels";
 import { Notice, PageHeader, Pagination, Pill, Thumb } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
-import { acceptAllSuggestions, setLink } from "./actions";
+import { saveOwnProduct, toggleOwnProduct } from "./actions";
 import { SyncPanel } from "./SyncPanel";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { getFiscalSettings, PTU_LETTERS, ptuLabel, type FiscalSettings } from "@/lib/fiscal/jobs";
+import { money } from "@/lib/labels";
 
 const PER_PAGE = 50;
 
 export default async function KatalogPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const sp = await searchParams;
   const { supabase, profile } = await requireProfile();
-  const tab = sp.widok === "powiazania" ? "powiazania" : "produkty";
+  const tab = sp.widok === "wlasne" ? "wlasne" : "produkty";
   const page = Math.max(1, Number(sp.strona ?? 1));
-  const { data: stores } = await supabase.from("stores").select("id, name, shopify_domain, base_inventory_id, base_storage_id").order("name");
+  const { data: stores } = await supabase.from("stores").select("id, name, shopify_domain").order("name");
   const storeName = new Map((stores ?? []).map((s) => [s.id, s.name]));
 
-  const [{ count: products }, { count: unlinked }, { count: suggested }, { data: linkErrors }] = await Promise.all([
+  const [{ count: products }, own] = await Promise.all([
     supabase.from("products").select("id", { count: "exact", head: true }),
-    supabase.from("variant_store_links").select("id", { count: "exact", head: true }).is("base_product_id", null),
-    supabase.from("variant_store_links").select("id", { count: "exact", head: true }).is("base_product_id", null).not("suggested_base_product_id", "is", null),
-    supabase.from("sync_log").select("message, created_at").eq("job", "manual-link").eq("ok", false).gte("created_at", new Date(Date.now() - 2 * 60_000).toISOString()).order("created_at", { ascending: false }).limit(1),
+    supabase.from("pos_products").select("id", { count: "exact", head: true }).eq("active", true),
   ]);
 
   return (
     <>
-      <PageHeader title="Katalog" sub={`${products ?? 0} produktów z obu sklepów · ${unlinked ?? 0} rozmiarów bez powiązania z Base (${suggested ?? 0} z podpowiedzią)`} />
-      {profile.role === "admin" && <SyncPanel stores={stores ?? []} />}
-      {linkErrors?.[0] && <div className="mb-4"><Notice tone="error">{linkErrors[0].message}</Notice></div>}
+      <PageHeader title="Katalog" sub={`${products ?? 0} produktów ze Shopify · ${own.count ?? 0} własnych produktów (spoza Shopify)`} />
+      {sp.ok && <div className="mb-4"><Notice tone="ok">{sp.ok}</Notice></div>}
+      {sp.blad && <div className="mb-4"><Notice tone="error">{sp.blad}</Notice></div>}
 
       <nav className="segmented mb-5" aria-label="Katalog">
-        <Link href="/katalog" aria-current={tab === "produkty" ? "page" : undefined}>Produkty</Link>
-        <Link href="/katalog?widok=powiazania" aria-current={tab === "powiazania" ? "page" : undefined}>Bez powiązania z Base ({unlinked ?? 0})</Link>
+        <Link href="/katalog" aria-current={tab === "produkty" ? "page" : undefined}>Produkty ze Shopify</Link>
+        <Link href="/katalog?widok=wlasne" aria-current={tab === "wlasne" ? "page" : undefined}>Własne produkty ({own.count ?? 0})</Link>
       </nav>
 
-      {tab === "produkty" ? <Products sp={sp} page={page} /> : <Links sp={sp} page={page} storeName={storeName} stores={stores ?? []} isAdmin={profile.role === "admin"} />}
+      {tab === "produkty" ? <>{profile.role === "admin" && <SyncPanel stores={stores ?? []} />}<Products sp={sp} page={page} /></> : <OwnProducts fiscal={await getFiscalSettings(createAdminClient())} edit={sp.edytuj} />}
     </>
   );
 
   async function Products({ sp, page }: { sp: Record<string, string | undefined>; page: number }) {
     let query = supabase
       .from("products")
-      .select("id, title, style_sku, image_url, updated_at, stores:product_store_links(store_id), variants(id, option, position, links:variant_store_links(store_id, base_product_id, base_sku, shopify_qty))", { count: "exact" })
+      .select("id, title, style_sku, image_url, updated_at, stores:product_store_links(store_id, status, tags), variants(id, option, position, links:variant_store_links(store_id, sku, shopify_qty))", { count: "exact" })
       .order("title")
       .range((page - 1) * PER_PAGE, page * PER_PAGE - 1);
     if (sp.q) {
@@ -58,7 +59,7 @@ export default async function KatalogPage({ searchParams }: { searchParams: Prom
     return (
       <>
         <form className="mb-4 flex gap-2" method="get">
-          <input className="input w-80" name="q" defaultValue={sp.q} placeholder="Szukaj: nazwa, SKU modelu, SKU z Base, EAN" />
+          <input className="input w-80" name="q" defaultValue={sp.q} placeholder="Szukaj: nazwa, SKU, EAN" />
           <button className="btn">Szukaj</button>
         </form>
         <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={{ q: sp.q }} top />
@@ -68,29 +69,31 @@ export default async function KatalogPage({ searchParams }: { searchParams: Prom
             <tbody>
               {!data?.length && <tr><td colSpan={3} className="py-10 text-center text-muted">Brak produktów. Uruchom import z Shopify.</td></tr>}
               {data?.map((p) => {
-                const variants = (p.variants as { id: string; option: string; position: number; links: { store_id: string; base_product_id: number | null; base_sku: string | null; shopify_qty: number | null }[] }[])
+                const variants = (p.variants as { id: string; option: string; position: number; links: { store_id: string; sku: string | null; shopify_qty: number | null }[] }[])
                   .sort((a, b) => collator.compare(a.option, b.option));
+                const links = p.stores as { store_id: string; status: string | null; tags: string[] | null }[];
+                const draft = links.length > 0 && links.every((l) => (l.status ?? "").toUpperCase() === "DRAFT");
+                const reused = links.some((l) => (l.tags ?? []).some((t) => t.toLowerCase() === "reused"));
                 return (
                   <tr key={p.id}>
                     <td>
                       <div className="flex items-center gap-3">
                         <Thumb src={p.image_url} alt="" />
-                        <span><span className="block font-medium leading-tight">{p.title}</span><span className="text-xs text-muted">{p.style_sku ?? "bez SKU"}</span></span>
+                        <span>
+                          <span className="block font-medium leading-tight">{p.title}{reused && <span className="ml-1.5 align-middle"><Pill tone="amber">reused</Pill></span>}{draft && <span className="ml-1.5 align-middle"><Pill>wersja robocza</Pill></span>}</span>
+                          <span className="text-xs text-muted">{p.style_sku ?? "bez SKU"}</span>
+                        </span>
                       </div>
                     </td>
-                    <td className="whitespace-nowrap text-xs">{[...new Set((p.stores as { store_id: string }[]).map((s) => storeName.get(s.store_id)))].join(", ")}</td>
+                    <td className="whitespace-nowrap text-xs">{[...new Set(links.map((s) => storeName.get(s.store_id)))].join(", ")}</td>
                     <td>
                       <div className="flex flex-wrap gap-1">
-                        {variants.map((v) => {
-                          const missing = v.links.some((l) => !l.base_product_id);
-                          return (
-                            <Link key={v.id} href={`/magazyn?q=${encodeURIComponent(p.title)}`} title={missing ? "brak powiązania z Base" : `SKU w Base: ${[...new Set(v.links.map((l) => l.base_sku).filter(Boolean))].join(", ")}`}
-                              className={`rounded border px-1.5 py-0.5 text-xs ${missing ? "border-amber-300 bg-amber-50" : "border-line"}`}>
-                              {v.option} <b>{shopQty(v.links)}</b>
-                              {!missing && v.links[0]?.base_sku && <span className="ml-1 text-muted">· {v.links.find((l) => l.base_sku)?.base_sku}</span>}
-                            </Link>
-                          );
-                        })}
+                        {variants.map((v) => (
+                          <Link key={v.id} href={`/magazyn?q=${encodeURIComponent(p.title)}`} title={v.links.map((l) => l.sku).filter(Boolean).join(", ") || undefined}
+                            className="rounded-md border border-line px-1.5 py-0.5 text-xs hover:border-accent">
+                            {v.option} <b>{shopQty(v.links)}</b>
+                          </Link>
+                        ))}
                       </div>
                     </td>
                   </tr>
@@ -105,82 +108,61 @@ export default async function KatalogPage({ searchParams }: { searchParams: Prom
   }
 }
 
-async function Links({ sp, page, storeName, stores, isAdmin }: {
-  sp: Record<string, string | undefined>; page: number; storeName: Map<string, string>; stores: { id: string; name: string }[]; isAdmin: boolean;
-}) {
+/** Własne produkty: „Dodaj produkt” (np. Renowacja obuwia) – w Kasie po nazwie albo kodzie, stan liczony albo nie. */
+async function OwnProducts({ fiscal, edit }: { fiscal: FiscalSettings; edit?: string }) {
   const { supabase } = await requireProfile();
-  let query = supabase
-    .from("variant_store_links")
-    .select("id, store_id, sku, shopify_variant_id, suggested_base_product_id, suggested_reason, updated_at, variant:variants!inner(option, product:products!inner(title, style_sku, image_url))", { count: "exact" })
-    .is("base_product_id", null)
-    .order("suggested_base_product_id", { ascending: true, nullsFirst: false })
-    .range((page - 1) * PER_PAGE, page * PER_PAGE - 1);
-  if (sp.sklep) query = query.eq("store_id", sp.sklep);
-  const { data, count } = await query;
-
-  const suggestionIds = (data ?? []).map((l) => l.suggested_base_product_id).filter(Boolean) as number[];
-  const { data: suggestions } = suggestionIds.length
-    ? await supabase.from("base_products").select("id, name, variant_name, sku").in("id", suggestionIds)
-    : { data: [] };
-  const sug = new Map((suggestions ?? []).map((s) => [Number(s.id), s]));
-
-  return (
-    <>
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <form method="get" className="flex gap-2">
-          <input type="hidden" name="widok" value="powiazania" />
-          <select className="input w-56" name="sklep" defaultValue={sp.sklep ?? ""}>
-            <option value="">Oba sklepy</option>
-            {stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-          <button className="btn-secondary">Pokaż</button>
-        </form>
-        {isAdmin && stores.map((s) => (
-          <form key={s.id} action={acceptAllSuggestions}>
-            <input type="hidden" name="store_id" value={s.id} />
-            <SubmitButton className="btn-secondary" pendingText="Zatwierdzam…">Zatwierdź wszystkie podpowiedzi: {s.name}</SubmitButton>
-          </form>
-        ))}
+  const { data, error } = await supabase.from("pos_products").select("id, name, price, ptu, track_stock, stock, code, active, created_at").order("active", { ascending: false }).order("name");
+  if (error) return <Notice tone="error">Uruchom migrację 0037 w Supabase (SQL Editor) – wtedy dodasz własne produkty.</Notice>;
+  const editing = (data ?? []).find((p) => p.id === edit);
+  const Form = ({ p }: { p?: typeof editing }) => (
+    <form action={saveOwnProduct} className="card space-y-4 p-5">
+      <h2 className="h2">{p ? `Zmień: ${p.name}` : "Dodaj produkt"}</h2>
+      {p && <input type="hidden" name="id" value={p.id} />}
+      <div className="grid gap-3 md:grid-cols-[1fr_9rem_11rem_10rem]">
+        <div><label className="label" htmlFor="own-name">Nazwa (na paragonie)</label><input id="own-name" className="input" name="name" defaultValue={p?.name ?? ""} placeholder="np. Renowacja obuwia" required maxLength={120} /></div>
+        <div><label className="label" htmlFor="own-price">Cena (zł)</label><input id="own-price" className="input tabular-nums" name="price" inputMode="decimal" defaultValue={p?.price ?? ""} placeholder="np. 120" /></div>
+        <div><label className="label" htmlFor="own-ptu">Stawka PTU</label>
+          <select id="own-ptu" className="input" name="ptu" defaultValue={p?.ptu ?? fiscal.ptu23}>{PTU_LETTERS.map((l) => <option key={l} value={l}>{ptuLabel(fiscal, l)}</option>)}</select>
+        </div>
+        <div><label className="label" htmlFor="own-code">Kod (opcjonalnie)</label><input id="own-code" className="input font-mono uppercase" name="code" defaultValue={p?.code ?? ""} placeholder="EAN / własny" /></div>
       </div>
-      <p className="mb-3 text-sm text-muted">Te rozmiary nie mają odpowiednika w Base, więc przyjęcie dostawy nie podniesie ich stanu. Zatwierdź podpowiedź albo wpisz SKU lub ID produktu z Base.</p>
-      <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={{ widok: "powiazania", sklep: sp.sklep }} top />
+      <div className="flex flex-wrap items-center gap-4">
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" name="track_stock" value="1" defaultChecked={p?.track_stock ?? false} /> Licz stan magazynowy</label>
+        <label className="flex items-center gap-2 text-sm">Stan: <input className="input w-24 tabular-nums" name="stock" type="number" min={0} defaultValue={p?.stock ?? 0} aria-label="Stan" /></label>
+        <span className="text-xs text-muted">Bez liczenia stanu (np. usługa) produkt można sprzedawać bez ograniczeń.</span>
+      </div>
+      <div className="flex gap-2">
+        <SubmitButton pendingText="Zapisuję…">{p ? "Zapisz" : "Dodaj produkt"}</SubmitButton>
+        {p && <Link className="btn-secondary" href="/katalog?widok=wlasne">Anuluj</Link>}
+      </div>
+    </form>
+  );
+  return (
+    <div className="space-y-5">
+      <Form p={editing} />
       <div className="card overflow-x-auto">
         <table className="table">
-          <thead><tr><th>Produkt</th><th>Rozmiar</th><th>Sklep</th><th>Podpowiedź z Base</th><th>Przypisz ręcznie</th></tr></thead>
+          <thead><tr><th>Produkt</th><th>Kod</th><th className="text-right">Cena</th><th>PTU</th><th>Stan</th><th /></tr></thead>
           <tbody>
-            {!data?.length && <tr><td colSpan={5} className="py-10 text-center text-muted">Wszystkie rozmiary są powiązane z Base.</td></tr>}
-            {data?.map((l) => {
-              const v = l.variant as unknown as { option: string; product: { title: string; style_sku: string | null; image_url: string | null } };
-              const s = l.suggested_base_product_id ? sug.get(Number(l.suggested_base_product_id)) : null;
-              return (
-                <tr key={l.id}>
-                  <td><div className="flex items-center gap-3"><Thumb src={v.product.image_url} alt="" /><span><span className="block leading-tight">{v.product.title}</span><span className="text-xs text-muted">{v.product.style_sku}</span></span></div></td>
-                  <td className="font-medium">{v.option}</td>
-                  <td className="whitespace-nowrap">{storeName.get(l.store_id)}</td>
-                  <td>
-                    {s ? (
-                      <form action={setLink} className="flex items-center gap-2">
-                        <input type="hidden" name="link_id" value={l.id} />
-                        <span className="text-xs">{s.name} · <b>{s.variant_name}</b><span className="block text-muted">SKU {s.sku ?? "–"} · {l.suggested_reason}</span></span>
-                        <SubmitButton className="btn-secondary px-2 py-1 text-xs" name="accept" value="1" pendingText="…">Zatwierdź</SubmitButton>
-                      </form>
-                    ) : <Pill tone="amber">brak</Pill>}
-                  </td>
-                  <td>
-                    <form action={setLink} className="flex items-center gap-1.5">
-                      <input type="hidden" name="link_id" value={l.id} />
-                      <input className="input w-36 py-1 text-xs" name="base" placeholder="SKU lub ID z Base" aria-label="SKU lub ID z Base" />
-                      <SubmitButton className="btn-secondary px-2 py-1 text-xs" pendingText="…">Zapisz</SubmitButton>
-                    </form>
-                  </td>
-                </tr>
-              );
-            })}
+            {!data?.length && <tr><td colSpan={6} className="py-8 text-center text-muted">Brak własnych produktów. Dodaj pierwszy powyżej albo zaznacz „zapisz jako własny produkt” w Kasie.</td></tr>}
+            {data?.map((p) => (
+              <tr key={p.id} className={p.active ? "" : "opacity-50"}>
+                <td className="font-medium">{p.name}{!p.active && <span className="ml-2"><Pill>ukryty</Pill></span>}</td>
+                <td className="font-mono text-xs">{p.code ?? "–"}</td>
+                <td className="text-right tabular-nums">{p.price !== null ? money(p.price) : "–"}</td>
+                <td className="text-sm">{ptuLabel(fiscal, p.ptu)}</td>
+                <td className="text-sm">{p.track_stock ? <b className={p.stock > 0 ? "" : "text-bad"}>{p.stock} szt.</b> : <span className="text-muted">nie liczony</span>}</td>
+                <td>
+                  <div className="flex justify-end gap-1">
+                    <Link className="btn-ghost h-8 px-2 text-xs" href={`/katalog?widok=wlasne&edytuj=${p.id}`}>Zmień</Link>
+                    <form action={toggleOwnProduct}><input type="hidden" name="id" value={p.id} /><input type="hidden" name="active" value={p.active ? "0" : "1"} /><button className="btn-ghost h-8 px-2 text-xs">{p.active ? "Ukryj" : "Przywróć"}</button></form>
+                  </div>
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
-      <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={{ widok: "powiazania", sklep: sp.sklep }} />
-      <p className="mt-2 text-xs text-muted">Ostatnia aktualizacja listy: {dateTime(new Date().toISOString())}</p>
-    </>
+    </div>
   );
 }

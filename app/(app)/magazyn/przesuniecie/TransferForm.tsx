@@ -53,7 +53,7 @@ export function TransferForm({ locations, defaultFrom }: { locations: Loc[]; def
       </div>
 
       <div className="card space-y-3 p-4">
-        <label className="label" htmlFor="tr-scan">Zeskanuj albo wpisz kod (kod sztuki, IMEI, SKU z Base, EAN) i Enter</label>
+        <label className="label" htmlFor="tr-scan">Zeskanuj albo wpisz kod (kod sztuki, IMEI, SKU, EAN) i Enter</label>
         <div className="flex gap-2">
           <input id="tr-scan" ref={input} className="input max-w-md font-mono" value={scan} disabled={!from} autoFocus autoComplete="off"
             onChange={(e) => setScan(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void add(); } }}

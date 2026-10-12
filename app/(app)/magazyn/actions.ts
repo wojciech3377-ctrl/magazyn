@@ -9,7 +9,7 @@ import { adjustStock, type StockChange } from "@/lib/stock";
 import { parseAmount } from "@/lib/contracts/upload";
 import { errorMessage } from "@/lib/errors";
 
-/** Statusy, które Base liczy w stanie magazynu. */
+/** Statusy liczone w stanie magazynu (Shopify). */
 const COUNTED = ["in_stock", "reserved"];
 
 function back(path: string, msg: string, tone: "ok" | "error" = "ok"): never {
@@ -41,7 +41,7 @@ export async function bulkAction(formData: FormData) {
     const wh = new Map((locs ?? []).map((l) => [l.id as string, l.base_warehouse_id as string | null]));
     const changes: StockChange[] = [];
     for (const u of units!) {
-      // Stan w Base zmienia się tylko, gdy sztuka na stanie zmienia magazyn Base.
+      // Stan w Shopify zmienia się tylko, gdy sztuka na stanie zmienia lokalizację.
       if (u.location_id === locationId || !COUNTED.includes(u.status)) continue;
       if (wh.get(u.location_id) === wh.get(locationId)) continue;
       changes.push({ variantId: u.variant_id, locationId: u.location_id, delta: -1 });
@@ -66,7 +66,7 @@ export async function bulkAction(formData: FormData) {
   }
 
   if (action === "receive") {
-    // Towar „w drodze”: sztuki pod zamówienie od razu sprzedane, reszta na stan (+1 w Base).
+    // Towar „w drodze”: sztuki pod zamówienie od razu sprzedane, reszta na stan (+1 w Shopify).
     const { data: received, error: e } = await supabase.rpc("receive_in_transit", { p_unit_ids: ids });
     if (e) back(returnTo, e.message, "error");
     const rows = (received ?? []) as { unit_id: string; variant_id: string; location_id: string; to_status: string }[];
@@ -106,7 +106,7 @@ export async function bulkAction(formData: FormData) {
   }
 
   if (action === "delete") {
-    // Usuwanie z aplikacji (np. pomyłki, usługi z importu) – tylko administrator, stan w Base bez zmian.
+    // Usuwanie z aplikacji (np. pomyłki, usługi z importu) – tylko administrator, stan w Shopify bez zmian.
     if (profile.role !== "admin") back(returnTo, "Usuwać sztuki może tylko administrator.", "error");
     const { data: sold } = await supabase.from("sales").select("unit_id").in("unit_id", ids);
     const blocked = new Set((sold ?? []).map((s) => s.unit_id as string));
@@ -116,7 +116,7 @@ export async function bulkAction(formData: FormData) {
       if (e) back(returnTo, e.message, "error");
     }
     revalidatePath("/magazyn");
-    back(returnTo, `Usunięto ${toDelete.length} szt. Stan w Base bez zmian.${blocked.size ? ` ${blocked.size} szt. ze sprzedażą pominięto.` : ""}`);
+    back(returnTo, `Usunięto ${toDelete.length} szt. Stan w Shopify bez zmian.${blocked.size ? ` ${blocked.size} szt. ze sprzedażą pominięto.` : ""}`);
   }
 
   back(returnTo, "Nieznana akcja.", "error");
@@ -158,7 +158,7 @@ export async function updateUnit(formData: FormData) {
   back(path, "Zapisano.");
 }
 
-/** Zmiana statusu z karty sztuki, z korektą stanu w Base tam, gdzie to potrzebne. */
+/** Zmiana statusu z karty sztuki, z korektą stanu w Shopify tam, gdzie to potrzebne. */
 export async function changeStatus(formData: FormData) {
   const { supabase } = await requireProfile();
   const id = String(formData.get("id"));
@@ -224,7 +224,7 @@ export async function changeStatus(formData: FormData) {
   if (to === "shipped" && u!.status !== "sold") patch.sold_at = new Date().toISOString();
   const { data: updated, error } = await supabase.from("units").update(patch).eq("id", id).eq("status", u!.status).select("id");
   if (error) back(path, error.message, "error");
-  if (!updated?.length) back(path, "Status sztuki zmienił się w międzyczasie (np. sprzedaż z Base). Odśwież i spróbuj ponownie.", "error");
+  if (!updated?.length) back(path, "Status sztuki zmienił się w międzyczasie (np. sprzedaż w sklepie). Odśwież i spróbuj ponownie.", "error");
   await supabase.from("unit_events").insert({ unit_id: id, type: "status", data: { from: u!.status, to } });
   const results = delta ? await adjustStock(supabase, [{ variantId: u!.variant_id, locationId: u!.location_id, delta }]) : [];
   revalidatePath(path);
@@ -246,7 +246,7 @@ export async function deleteUnit(formData: FormData) {
   back("/magazyn", `Sztuka usunięta.${baseSummary(results)}`, results.some((r) => !r.ok) ? "error" : "ok");
 }
 
-/** Ręczne uruchomienie automatu: nowe produkty ze Shopify / Base i stany (Shopify ↔ aplikacja). */
+/** Ręczne uruchomienie automatu: nowe produkty ze Shopify i stany (Shopify ↔ aplikacja). */
 export async function runAutoCatalogNow() {
   await requireAdmin();
   const db = createAdminClient();
@@ -266,7 +266,7 @@ export async function runAutoCatalogNow() {
       : products
         ? `Katalog Shopify aktualny – od ostatniego sprawdzenia zmieniło się ${products} ${products === 1 ? "produkt" : "produktów"}`
         : "Katalog Shopify aktualny – od ostatniego sprawdzenia nic się nie zmieniło";
-    msg = `${catalogMsg}. Base: ${r?.base.added ?? 0} nowych. Stany wszystkich rozmiarów porównane z Shopify – ${stockMsg.replace(/^ze stanów Shopify: /, "")}.`;
+    msg = `${catalogMsg}. Stany wszystkich rozmiarów porównane z Shopify – ${stockMsg.replace(/^ze stanów Shopify: /, "")}.`;
     await db.from("sync_log").insert({ job: "auto-catalog", ok: true, message: JSON.stringify(r) });
   } catch (e) {
     ok = false;

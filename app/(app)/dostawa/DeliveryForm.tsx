@@ -51,7 +51,6 @@ export function DeliveryForm({
   }
 
   const total = lines.reduce((s, l) => s + (Number(l.quantity) || 0), 0);
-  const unlinked = lines.filter((l) => !l.baseLinked);
   const location = locations.find((l) => l.id === locationId);
 
   return (
@@ -80,7 +79,7 @@ export function DeliveryForm({
                 });
               }
             }}
-            placeholder="Szukaj albo zeskanuj: nazwa, SKU modelu, SKU z Base, EAN"
+            placeholder="Szukaj albo zeskanuj: nazwa, SKU, EAN"
             autoFocus
           />
           {searching && <p className="mt-2 text-sm text-muted">Szukam…</p>}
@@ -106,8 +105,7 @@ export function DeliveryForm({
                       type="button"
                       key={v.id}
                       onClick={() => addLine(h, v)}
-                      title={v.baseLinked ? `Base: ${v.baseSku ?? ""}` : "Brak powiązania z Base w tym sklepie"}
-                      className={`rounded-md border px-2.5 py-1.5 text-sm hover:border-accent hover:bg-accent/5 ${v.baseLinked ? "border-line" : "border-amber-300 bg-amber-50"}`}
+                      className="rounded-md border border-line px-2.5 py-1.5 text-sm hover:border-accent hover:bg-accent/5"
                     >
                       <b>{v.option}</b>
                       <span className="ml-1.5 text-xs text-muted">{v.inStock} szt.</span>
@@ -136,7 +134,7 @@ export function DeliveryForm({
               {lines.length === 0 && <tr><td colSpan={7} className="py-8 text-center text-muted">Wyszukaj produkt i kliknij rozmiar.</td></tr>}
               {lines.map((l) => (
                 <tr key={l.key}>
-                  <td className="min-w-48">{l.title}{!l.baseLinked && <span className="block text-xs text-warn">brak powiązania z Base</span>}</td>
+                  <td className="min-w-48">{l.title}</td>
                   <td className="font-medium">{l.option}</td>
                   <td><input className="input" type="number" min={1} max={500} value={l.quantity} onChange={(e) => update(l.key, { quantity: Math.max(1, Number(e.target.value)) })} aria-label="Ilość" /></td>
                   {canSeePrices && <td><input className="input" inputMode="decimal" value={l.price} onChange={(e) => update(l.key, { price: e.target.value })} placeholder="zł" aria-label="Cena zakupu" /></td>}
@@ -165,7 +163,6 @@ export function DeliveryForm({
               {storeLocations.length === 0 && <option value="">Brak lokalizacji – dodaj w Ustawieniach</option>}
               {storeLocations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
             </select>
-            {location && !location.base_warehouse_id && <p className="mt-1 text-xs text-warn">Ta lokalizacja nie ma magazynu Base – stan w Base się nie zmieni.</p>}
           </div>
           <div>
             <label className="label" htmlFor="shelf">Regał / półka (opcjonalnie)</label>
@@ -173,7 +170,7 @@ export function DeliveryForm({
           </div>
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" name="in_transit" checked={inTransit} onChange={(e) => setInTransit(e.target.checked)} className="h-4 w-4" />
-            Towar jeszcze w drodze (nie podnoś stanu w Base)
+            Towar jeszcze w drodze (nie podnoś stanu w Shopify)
           </label>
         </section>
 
@@ -243,14 +240,11 @@ export function DeliveryForm({
         </section>
 
         <section className="card space-y-3 p-4">
-          {unlinked.length > 0 && !inTransit && (
-            <p className="text-sm text-warn">{unlinked.length} {unlinked.length === 1 ? "rozmiar nie ma" : "rozmiary nie mają"} powiązania z Base w tym sklepie – sztuki się zapiszą, ale stan w Base trzeba będzie podnieść po powiązaniu.</p>
-          )}
           {state?.error && <p className="text-sm text-bad">{state.error}</p>}
           <button className="btn w-full" disabled={submitting || !lines.length || !locationId}>
             {submitting ? "Zapisuję…" : `Przyjmij ${total} szt.`}
           </button>
-          <p className="text-xs text-muted">{inTransit ? "Sztuki dostaną status „w drodze”." : "Aplikacja podniesie stan w Base, a Base zaktualizuje sklep."} Po zapisie wydrukujesz etykiety.</p>
+          <p className="text-xs text-muted">{inTransit ? "Sztuki dostaną status „w drodze”." : "Aplikacja podniesie stan w Shopify."} Po zapisie wydrukujesz etykiety.</p>
         </section>
       </div>
     </form>

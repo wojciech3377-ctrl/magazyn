@@ -15,7 +15,7 @@ export default async function InventoryPage() {
   const storeName = new Map((stores ?? []).map((s) => [s.id, s.name]));
   return (
     <>
-      <PageHeader title="Inwentaryzacja" sub="Wybierz lokalizację i skanuj kod kreskowy każdej rzeczy (kod sztuki, SKU z Base, EAN). Na końcu zobaczysz, czego brakuje i co jest ponad stan." actions={<Link className="btn-secondary" href="/magazyn">Wróć do Magazynu</Link>} />
+      <PageHeader title="Inwentaryzacja" sub="Wybierz lokalizację i skanuj kod kreskowy każdej rzeczy (kod sztuki, SKU, EAN). Na końcu zobaczysz, czego brakuje i co jest ponad stan." actions={<Link className="btn-secondary" href="/magazyn">Wróć do Magazynu</Link>} />
       <InventoryScanner locations={(locations ?? []).map((l) => ({ id: l.id as string, label: `${storeName.get(l.store_id) ?? ""} · ${l.name}` }))} />
     </>
   );

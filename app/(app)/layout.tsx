@@ -32,9 +32,18 @@ async function deliveryAlerts() {
   }
 }
 
+/** Liczniki w menu liczą się przy każdym przejściu – pamiętamy je 20 s (szybsze przełączanie stron). */
+let badgeCache: { at: number; value: [number, { accept: number; transit: number }] } | null = null;
+async function badges() {
+  if (badgeCache && Date.now() - badgeCache.at < 20_000) return badgeCache.value;
+  const value = await Promise.all([consignorAlerts(), deliveryAlerts()]);
+  badgeCache = { at: Date.now(), value };
+  return value;
+}
+
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const { profile } = await requireProfile();
-  const [alerts, delivery] = await Promise.all([consignorAlerts(), deliveryAlerts()]);
+  const [alerts, delivery] = await badges();
   return (
     <div className="min-h-screen">
       <Nav

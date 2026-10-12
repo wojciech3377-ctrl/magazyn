@@ -4,13 +4,12 @@ import { requireProfile } from "@/lib/auth";
 import { dateTime } from "@/lib/labels";
 import { Notice, PageHeader, Pill } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
-import { getInventories, getInventoryWarehouses, getOrderSources } from "@/lib/integrations/base";
 import { listWebhooks, shopifyCredentials, WEBHOOK_TOPICS } from "@/lib/integrations/shopify";
 import { getBuyerSignature, getCompany } from "@/lib/contracts/settings";
 import { getSmtpSettings, mailConfig } from "@/lib/mail";
 import { ContractSettings } from "./ContractSettings";
 import { FiscalSettings } from "./FiscalSettings";
-import { addExclusion, createUser, deleteExclusion, disconnectFurgonetka, importInitialStock, purgeExcluded, purgeNonShopify, registerWebhooks, runStockNow, saveSmtp, saveInvoiceSettings, saveLocation, saveSender, saveShopifyLocation, saveStockMaster, saveStore, saveUser, checkOmnibus, fixProductStockNow } from "./actions";
+import { addExclusion, createUser, deleteExclusion, disconnectFurgonetka, purgeExcluded, purgeNonShopify, registerWebhooks, runStockNow, saveSmtp, saveInvoiceSettings, saveLocation, saveSender, saveShopifyLocation, saveStockMaster, saveStore, saveUser, checkOmnibus, fixProductStockNow } from "./actions";
 import { compareStock, getStockMaster, planPushToShopify, shopifyLocations, type ShopifyLocation } from "@/lib/sync/shopify-stock";
 import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/furgonetka";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -38,7 +37,6 @@ const SETTINGS_TABS = [
   { key: "stany", label: "Stany magazynowe" },
   { key: "wykluczenia", label: "Wykluczenia" },
   { key: "uzytkownicy", label: "Użytkownicy" },
-  { key: "start", label: "Start: stany z Base" },
   { key: "dziennik", label: "Dziennik" },
 ] as const;
 
@@ -62,12 +60,6 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
   const [sender, furgonetka, baseUrl] = isAdmin
     ? await Promise.all([getSender(supabase), furgonetkaConfigured() ? furgonetkaConnection(createAdminClient()) : Promise.resolve(null), appUrl()])
     : [null, null, ""];
-  const hasBase = !!process.env.BASE_API_TOKEN;
-  const [inventories, warehouses, sources] = isAdmin && hasBase
-    ? await Promise.all([safe(getInventories), safe(getInventoryWarehouses), safe(getOrderSources)])
-    : [{ data: null, error: null }, { data: null, error: null }, { data: null, error: null }];
-  const shopSources = Object.entries(sources.data?.shop ?? {});
-  const preview = isAdmin && !imported ? (await supabase.rpc("preview_initial_stock")).data as { units: number; variants: number } | null : null;
   const storeName = new Map((stores ?? []).map((s) => [s.id, s.name]));
   // Stany: główne źródło, lokalizacje Shopify i (na żądanie) podgląd różnic.
   const stock = isAdmin && tab === "stany"
@@ -99,7 +91,6 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
   const smtpHasPassword = isAdmin && tab === "faktury" ? !!(await createAdminClient().rpc("smtp_password_exists")).data : false;
   const envStatus = [
     ["Supabase (klucz serwera)", !!process.env.SUPABASE_SERVICE_ROLE_KEY],
-    ["Base API", hasBase],
     ...(stores ?? []).map((s) => {
       const c = shopifyCredentials(s.code);
       return [`Shopify ${s.name}`, !!(c.clientId && c.clientSecret)] as [string, boolean];
@@ -137,7 +128,6 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
               {envStatus.map(([label, ok]) => <Pill key={label} tone={ok ? "green" : "red"}>{label}: {ok ? "ustawione" : "brak"}</Pill>)}
             </div>
             <p className="mt-2 text-xs text-muted">Klucze wpisuje się w Vercel → Settings → Environment Variables (nigdy w czacie ani w kodzie).</p>
-            {[inventories.error, warehouses.error, sources.error].filter(Boolean).slice(0, 1).map((e) => <div key={e} className="mt-3"><Notice tone="error">{e}</Notice></div>)}
           </section>
           )}
 
@@ -150,25 +140,6 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
                   <input type="hidden" name="id" value={s.id} />
                   <div className="font-medium">{s.name} <span className="text-xs text-muted">({s.code})</span></div>
                   <div><label className="label">Domena Shopify</label><input className="input" name="shopify_domain" defaultValue={s.shopify_domain ?? ""} placeholder="nazwa.myshopify.com" /></div>
-                  <div>
-                    <label className="label">Katalog w Base</label>
-                    {inventories.data ? (
-                      <select className="input" name="base_inventory_id" defaultValue={s.base_inventory_id ?? ""}>
-                        <option value="">–</option>
-                        {inventories.data.map((i) => <option key={i.inventory_id} value={i.inventory_id}>{i.name} ({i.inventory_id})</option>)}
-                      </select>
-                    ) : <input className="input" name="base_inventory_id" defaultValue={s.base_inventory_id ?? ""} placeholder="ID katalogu" />}
-                  </div>
-                  <div>
-                    <label className="label">Źródło zamówień w Base</label>
-                    {shopSources.length ? (
-                      <select className="input" name="base_order_source_id" defaultValue={s.base_order_source_id ?? ""}>
-                        <option value="">–</option>
-                        {shopSources.map(([id, name]) => <option key={id} value={id}>{name} ({id})</option>)}
-                      </select>
-                    ) : <input className="input" name="base_order_source_id" defaultValue={s.base_order_source_id ?? ""} placeholder="ID źródła" />}
-                  </div>
-                  <div><label className="label">Sklep w katalogu Base (wykrywany automatycznie)</label><input className="input" name="base_storage_id" defaultValue={s.base_storage_id ?? ""} placeholder="shop_1234" /></div>
                   <div className="flex flex-wrap gap-2">
                     <SubmitButton>Zapisz</SubmitButton>
                   </div>
@@ -221,27 +192,25 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
           {tab === "sklepy" && (
           <section className="card p-4">
             <h2 className="h2 mb-1">Lokalizacje</h2>
-            <p className="mb-3 text-sm text-muted">Każda lokalizacja należy do sklepu i wskazuje magazyn w Base, którego stan aplikacja zmienia.</p>
+            <p className="mb-3 text-sm text-muted">Każda lokalizacja należy do sklepu; lokalizację Shopify przypisujesz w zakładce Stany magazynowe.</p>
             <div className="space-y-2">
               {locations?.map((l) => (
-                <form key={l.id} action={saveLocation} className="grid items-end gap-2 md:grid-cols-[1fr_1fr_1fr_auto_auto]">
+                <form key={l.id} action={saveLocation} className="grid items-end gap-2 md:grid-cols-[1fr_1fr_auto_auto]">
                   <input type="hidden" name="id" value={l.id} />
                   <select className="input" name="store_id" defaultValue={l.store_id} aria-label="Sklep">
                     {stores?.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                   </select>
                   <input className="input" name="name" defaultValue={l.name} aria-label="Nazwa" />
-                  <WarehouseSelect warehouses={warehouses.data} value={l.base_warehouse_id} />
                   <label className="flex items-center gap-1.5 text-sm"><input type="checkbox" name="active" defaultChecked={l.active} /> aktywna</label>
                   <SubmitButton className="btn-secondary">Zapisz</SubmitButton>
-                  <textarea className="input md:col-span-5" name="ship_address" rows={2} defaultValue={l.ship_address ?? ""} placeholder="Adres do wysyłki dla komisantów (odbiorca, ulica, kod, miasto, telefon) – widoczny w panelu komisanta" aria-label="Adres do wysyłki" />
+                  <textarea className="input md:col-span-4" name="ship_address" rows={2} defaultValue={l.ship_address ?? ""} placeholder="Adres do wysyłki dla komisantów (odbiorca, ulica, kod, miasto, telefon) – widoczny w panelu komisanta" aria-label="Adres do wysyłki" />
                 </form>
               ))}
-              <form action={saveLocation} className="grid items-end gap-2 border-t border-line pt-3 md:grid-cols-[1fr_1fr_1fr_auto]">
+              <form action={saveLocation} className="grid items-end gap-2 border-t border-line pt-3 md:grid-cols-[1fr_1fr_auto]">
                 <select className="input" name="store_id" aria-label="Sklep">
                   {stores?.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                 </select>
                 <input className="input" name="name" placeholder="Nowa lokalizacja, np. Poznań – Długa 13" aria-label="Nazwa" />
-                <WarehouseSelect warehouses={warehouses.data} value={null} />
                 <SubmitButton>Dodaj</SubmitButton>
               </form>
             </div>
@@ -447,7 +416,7 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
               <form action={purgeNonShopify} className="space-y-2 border-t border-line pt-4">
                 <h3 className="font-medium">Produkty spoza Shopify</h3>
                 <p className="text-sm text-muted">
-                  Rozmiary bez wariantu w żadnym sklepie Shopify (np. tylko z Base): <b>{stock.purge.units}</b> sztuk do usunięcia, <b>{stock.purge.variants}</b> rozmiarów.
+                  Rozmiary bez wariantu w żadnym sklepie Shopify : <b>{stock.purge.units}</b> sztuk do usunięcia, <b>{stock.purge.variants}</b> rozmiarów.
                   {stock.purge.kept > 0 && <> Zostanie <b>{stock.purge.kept}</b> sztuk z historią (umowa, komis, dostawa, sprzedaż) – tych automat nie rusza.</>}
                 </p>
                 {stock.purge.units + stock.purge.variants > 0 && (
@@ -536,23 +505,6 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
           </section>
           )}
 
-          {tab === "start" && (
-          <section className="card p-4">
-            <h2 className="h2 mb-1">Start: stany z Base</h2>
-            {imported ? (
-              <p className="text-sm text-muted">Wgrane {dateTime((imported.value as { at: string }).at)} · {(imported.value as { units: number }).units} sztuk.</p>
-            ) : (
-              <form action={importInitialStock} className="space-y-2">
-                <p className="text-sm text-muted">
-                  Jednorazowo: każdy rozmiar ze stanem N w Base staje się N sztukami „bez umowy”. Najpierw zrób import z Shopify i katalog Base w zakładce Katalog
-                  oraz przypisz magazyny Base do lokalizacji. Teraz wejdzie: <b>{preview?.units ?? 0} sztuk</b> ({preview?.variants ?? 0} pozycji).
-                </p>
-                <SubmitButton pendingText="Wgrywam…" disabled={!preview?.units}>Wgraj stany z Base</SubmitButton>
-              </form>
-            )}
-          </section>
-          )}
-
           {tab === "uzytkownicy" && (
           <section className="card overflow-x-auto p-4">
             <h2 className="h2 mb-3">Użytkownicy</h2>
@@ -610,15 +562,5 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
       )}
       <p className="mt-6 text-xs text-muted">Sklepy: {[...storeName.values()].join(", ")}</p>
     </>
-  );
-}
-
-function WarehouseSelect({ warehouses, value }: { warehouses: { id: string; name: string }[] | null; value: string | null }) {
-  if (!warehouses) return <input className="input" name="base_warehouse_id" defaultValue={value ?? ""} placeholder="magazyn Base, np. bl_123" aria-label="Magazyn Base" />;
-  return (
-    <select className="input" name="base_warehouse_id" defaultValue={value ?? ""} aria-label="Magazyn Base">
-      <option value="">bez magazynu Base</option>
-      {warehouses.filter((w) => w.id.startsWith("bl_")).map((w) => <option key={w.id} value={w.id}>{w.name} ({w.id})</option>)}
-    </select>
   );
 }

@@ -60,10 +60,14 @@ export async function renderWtbSheet(items: (WtbItem & { img: string | null })[]
   const cellW = Math.floor((W - PAD * 2 - gap * (cols - 1)) / cols);
   const cellH = Math.floor((H - HEADER - PAD * 2 - gap * (rows - 1)) / rows);
   const single = items.length === 1;
-  const sizeFont = single ? 64 : cols === 2 ? 42 : cols === 3 ? 34 : 28;
-  const skuFont = single ? 40 : cols === 2 ? 24 : cols === 3 ? 20 : 17;
-  const titleFont = single ? 36 : cols === 2 ? 22 : 0;
-  const footer = single ? 250 : titleFont ? sizeFont + skuFont + titleFont * 2.5 + 36 : sizeFont + skuFont + 26;
+  // Ta sama wielkość liter na wszystkich kafelkach: rozmiary w najwyżej 2 liniach – czcionka dobrana do najdłuższej listy.
+  const inner = cellW - (cols >= 3 ? 20 : 32);
+  const maxSize = cols === 2 ? 36 : cols === 3 ? 28 : 22;
+  const sizeLines = 3;
+  const sizeFont = single ? 64 : uniformFont(items.map((it) => it.size ?? "–"), maxSize, inner, sizeLines);
+  const skuFont = single ? 40 : cols === 2 ? 20 : cols === 3 ? 16 : 14;
+  const titleFont = single ? 36 : cols === 2 ? 22 : cols === 3 ? 17 : 15;
+  const footer = single ? 250 : titleFont * 2.5 + sizeFont * 1.15 * sizeLines + skuFont * 1.4 + 22;
   const filename = opts.pages > 1 ? `WTB-${opts.page}-z-${opts.pages}` : "WTB";
 
   return new ImageResponse(
@@ -91,9 +95,7 @@ export async function renderWtbSheet(items: (WtbItem & { img: string | null })[]
                   <div style={{ display: "flex", fontSize: Math.max(16, skuFont), color: "#b0b0b0" }}>brak zdjęcia</div>
                 )}
               </div>
-              {titleFont > 0 && (
-                <div style={{ display: "flex", fontSize: titleFont, fontWeight: 700, color: "#111111", lineHeight: 1.2, maxHeight: titleFont * 2.45, overflow: "hidden", marginTop: 8 }}>{it.title}</div>
-              )}
+              <div style={{ display: "flex", fontSize: titleFont, fontWeight: 700, color: "#111111", lineHeight: 1.2, height: single ? "auto" : titleFont * 2.45, maxHeight: titleFont * 2.45, overflow: "hidden", marginTop: 8 }}>{it.title}</div>
               {single ? (
                 <div style={{ display: "flex", gap: 24, marginTop: 24 }}>
                   <Box label={it.size?.includes(", ") ? "ROZMIARY" : "ROZMIAR"} value={it.size ?? "–"} />
@@ -101,8 +103,8 @@ export async function renderWtbSheet(items: (WtbItem & { img: string | null })[]
                 </div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", marginTop: 6 }}>
-                  <div style={{ display: "flex", fontSize: fitFont(it.size, sizeFont, cellW - (cols >= 3 ? 20 : 32)), fontWeight: 700, color: "#0b0b0b", lineHeight: 1.1, maxHeight: sizeFont * 1.15, overflow: "hidden" }}>{it.size ? `${it.size}` : "–"}</div>
-                  <div style={{ display: "flex", fontSize: skuFont, fontWeight: 700, color: "#6b6b6b", letterSpacing: 1, marginTop: 4, whiteSpace: "nowrap", overflow: "hidden" }}>{it.sku ?? ""}</div>
+                  <div style={{ display: "flex", fontSize: sizeFont, fontWeight: 700, color: "#0b0b0b", lineHeight: 1.15, height: sizeFont * 1.15 * sizeLines, overflow: "hidden", alignItems: "flex-start" }}>{it.size ? `${it.size}` : "–"}</div>
+                  <div style={{ display: "flex", fontSize: skuFont, fontWeight: 700, color: "#6b6b6b", letterSpacing: 0.5, marginTop: 4, height: skuFont * 1.4, whiteSpace: "nowrap", overflow: "hidden" }}>{it.sku || " "}</div>
                 </div>
               )}
             </div>
@@ -125,10 +127,22 @@ export async function renderWtbSheet(items: (WtbItem & { img: string | null })[]
   );
 }
 
-/** Rozmiar czcionki, przy którym lista rozmiarów („40, 41, 42”) mieści się w jednej linii kafelka (min. 14 px). */
-function fitFont(text: string | null, max: number, width: number) {
-  const len = Math.max(1, (text ?? "–").length);
-  return Math.max(14, Math.min(max, Math.floor(width / (len * 0.62))));
+/** Jedna wielkość czcionki dla wszystkich kafelków: najdłuższa lista rozmiarów mieści się w `lines` liniach (min. 13 px). */
+function uniformFont(texts: string[], max: number, width: number, lines: number) {
+  for (let size = max; size > 15; size--) {
+    const perLine = Math.floor(width / (size * 0.62));
+    const fits = texts.every((t) => {
+      // zawijanie po przecinkach: liczymy linie jak przy łamaniu słów
+      let used = 1, cur = 0;
+      for (const w of t.split(" ")) {
+        const len = w.length + (cur ? 1 : 0);
+        if (cur + len > perLine) { used++; cur = w.length; } else cur += len;
+      }
+      return used <= lines;
+    });
+    if (fits) return size;
+  }
+  return 15;
 }
 
 function Box({ label, value, grow }: { label: string; value: string; grow?: boolean }) {

@@ -15,7 +15,7 @@ import type { ContractLite } from "@/lib/contracts/stage";
 import { SwapForm } from "../SwapForm";
 import { LabelForm } from "./LabelForm";
 import { OrderOps } from "./OrderOps";
-import { WtbButton } from "@/components/WtbButton";
+import { WtbButton, WtbOrderButton } from "@/components/WtbButton";
 import { ReceiptButton } from "@/components/ReceiptButton";
 import { fiscalPrinterReady } from "@/lib/fiscal/jobs";
 import type { JobView } from "../receipt-actions";
@@ -77,6 +77,7 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
         actions={
           <>
             {status !== "cancelled" && status !== "returned" && <ReceiptButton orderId={order.id} receiptId={order.receipt_id} job={receiptJob as JobView | null} printer={printer} />}
+            <WtbOrderButton orderId={order.id} />
             {invoice
               ? <Link className="btn-secondary" href={`/sprzedaz/faktury/${invoice.id}`}>Faktura {invoice.number}</Link>
               : status !== "cancelled" && <Link className="btn-secondary" href={`/sprzedaz/faktury/nowa?zamowienie=${order.id}`}>Wystaw fakturę</Link>}
@@ -189,7 +190,7 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
           </div>
         )}
         {!sales?.length ? (
-          <p className="p-4 text-sm text-muted">Linie z magazynu pojawią się po odczycie zamówienia (nowe zamówienia ze Shopify od razu, starsze z Base).</p>
+          <p className="p-4 text-sm text-muted">Linie z magazynu pojawią się po odczycie zamówienia (ze Shopify).</p>
         ) : (
           <table className="table">
             <thead><tr><th>Produkt</th><th>Sztuka</th><th>Status</th><th>Umowa</th><th>Zmień sztukę przy pakowaniu</th></tr></thead>

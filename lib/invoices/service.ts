@@ -94,7 +94,9 @@ const POS_PAYMENT: Record<string, PaymentMethod> = { cash: "cash", card: "card",
 export async function draftFromPos(db: SupabaseClient, posOrderId: string): Promise<InvoiceDraft | null> {
   const { data: o } = await db.from("pos_orders").select("id, created_at, payment_method, customer").eq("id", posOrderId).maybeSingle();
   if (!o) return null;
-  const { data: items } = await db.from("pos_order_items").select("id, price, status, unit:units(id, purchase_form, variant:variants(option, product:products(title)))").eq("order_id", posOrderId);
+  const { data: items } = await db.from("pos_order_items").select("id, price, status, name, ptu, quantity, unit:units(id, purchase_form, variant:variants(option, product:products(title)))").eq("order_id", posOrderId);
+  const { getFiscalSettings, rateOf } = await import("@/lib/fiscal/jobs");
+  const fiscal = await getFiscalSettings(db);
   return {
     buyer: { name: o.customer ?? "", nip: null, address1: null, address2: null, country: "PL", email: null, company: false },
     issueDate: todayPl(),
@@ -105,10 +107,16 @@ export async function draftFromPos(db: SupabaseClient, posOrderId: string): Prom
     dueDate: null,
     items: (items ?? []).filter((i) => i.status !== "returned").map((i) => {
       const u = i.unit as unknown as { id: string; purchase_form: string; variant: { option: string; product: { title: string } } | null } | null;
+      if (!u) {
+        // Pozycja spoza magazynu: 23% gdy jej stawka PTU to 23%, inaczej marża do sprawdzenia w formularzu.
+        const qty = Number(i.quantity ?? 1);
+        const is23 = rateOf(fiscal, (i.ptu as string | null) ?? "A") === 23;
+        return { name: (i.name as string | null) ?? "Pozycja", quantity: qty, unit: "szt.", unit_price_gross: Number(i.price), total_gross: Math.round(Number(i.price) * qty * 100) / 100, vat: is23 ? "23" : "margin", pos_item_id: i.id, checkVat: !is23 } satisfies DraftItem;
+      }
       return {
-        name: u?.variant ? `${u.variant.product.title} ${u.variant.option}` : "Towar", quantity: 1, unit: "szt.",
-        unit_price_gross: Number(i.price), total_gross: Number(i.price), vat: u?.purchase_form === "vat_23" ? "23" : "margin",
-        unit_id: u?.id ?? null, pos_item_id: i.id,
+        name: u.variant ? `${u.variant.product.title} ${u.variant.option}` : "Towar", quantity: 1, unit: "szt.",
+        unit_price_gross: Number(i.price), total_gross: Number(i.price), vat: u.purchase_form === "vat_23" ? "23" : "margin",
+        unit_id: u.id, pos_item_id: i.id,
       } satisfies DraftItem;
     }),
     orderId: null,

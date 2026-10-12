@@ -196,9 +196,8 @@ export async function priceTags(db: SupabaseClient, unitIds: string[]) {
       if (!r.complete) complete = false;
       return r.value ?? Number(l.price);
     });
-    const own = linkRows.find((l) => l.variant_id === u.variant_id && l.store_id === storeId && l.base_sku)?.base_sku ?? linkRows.find((l) => l.variant_id === u.variant_id && l.base_sku)?.base_sku ?? null;
     return {
-      unitId: u.id, code: u.code, title: u.variant.product.title, option: u.variant.option, sku: own ?? u.code, skuIsBase: !!own,
+      unitId: u.id, code: u.code, title: u.variant.product.title, option: u.variant.option, sku: u.code, skuIsBase: false,
       price, compareAt, promo: promoRows.length > 0, lowest30: range(lows), lowestSource, storeName: u.location.store.name,
       omnibusFields: o?.found ?? [], historyComplete: complete,
       used: isReused((plinks ?? []).filter((p) => p.product_id === u.variant.product_id) as { store_id: string; tags?: string[] | null }[], storeId),

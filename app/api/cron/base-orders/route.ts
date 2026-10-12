@@ -1,84 +1,19 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { syncBaseOrders } from "@/lib/sync/orders";
-import { syncFurgonetkaShipments, syncShopifyOrders } from "@/lib/sync/shop-orders";
-import { syncBaseReceipts } from "@/lib/sync/receipts";
-import { backfillContractNumbers } from "@/lib/contracts/docnumber";
-import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/furgonetka";
-import { errorMessage } from "@/lib/errors";
-import { pollKsef } from "@/lib/invoices/service";
-import { runAutoCatalog } from "@/lib/sync/auto-catalog";
-import { ksefConfigured } from "@/lib/ksef/client";
-import { notifyConsignorSales } from "@/lib/consignment-notify";
+import { cronAuthorized, runFastJobs, runSlowJobs } from "@/lib/sync/jobs";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-type Db = ReturnType<typeof createAdminClient>;
-
-async function run(db: Db, job: string, fn: () => Promise<unknown>) {
-  try {
-    const result = await fn();
-    await db.from("sync_log").insert({ job, ok: true, message: JSON.stringify(result) });
-    return { ok: true, result };
-  } catch (e) {
-    const message = errorMessage(e);
-    await db.from("sync_log").insert({ job, ok: false, message });
-    return { ok: false, error: message };
-  }
-}
-
 /**
- * Wywoływane co kilka minut (pg_cron w Supabase) z nagłówkiem Authorization: Bearer CRON_SECRET.
- * Kolejno: linie sprzedaży z Base (przypisanie sztuk), zamówienia ze sklepów Shopify, przesyłki z Furgonetki.
+ * Stary adres zadania cyklicznego (zostaje, żeby dotychczasowy pg_cron działał): zamówienia i stany od razu,
+ * katalog co 15 min. Nowe ustawienie: supabase/cron.sql – /api/cron/sync co minutę i /api/cron/katalog co 10 min.
  */
-export async function GET(req: NextRequest) {
-  const secret = process.env.CRON_SECRET;
-  if (!secret || req.headers.get("authorization") !== `Bearer ${secret}`) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
+export async function GET(req: Request) {
+  if (!cronAuthorized(req)) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const db = createAdminClient();
-  const base = await run(db, "base-orders", () => syncBaseOrders(db));
-  const shop = await run(db, "shopify-orders", () => syncShopifyOrders(db));
-  const receipts = await run(db, "base-receipts", () => syncBaseReceipts(db));
-  // Rezerwacje zamówień: paragon albo faktura → sztuka sprzedana (dziennik tylko, gdy coś się zmieniło).
-  {
-    const { data: settled, error } = await db.rpc("settle_order_units");
-    if (error && !/settle_order_units/.test(error.message)) await db.from("sync_log").insert({ job: "settle", ok: false, message: error.message });
-    else if (settled) await db.from("sync_log").insert({ job: "settle", ok: true, message: JSON.stringify({ sold: settled }) });
-  }
-  // Numery umów ze skanów: w dzienniku tylko, gdy coś sprawdzono albo był błąd.
-  try {
-    const r = await backfillContractNumbers(db);
-    if (r.checked) await db.from("sync_log").insert({ job: "contract-numbers", ok: true, message: JSON.stringify(r) });
-  } catch (e) {
-    await db.from("sync_log").insert({ job: "contract-numbers", ok: false, message: errorMessage(e) });
-  }
-  // Nowe produkty ze Shopify / Base i nowe stany → sztuki (co 15 min; dziennik tylko, gdy coś się działo).
-  try {
-    const r = await runAutoCatalog(db);
-    if (r) await db.from("sync_log").insert({ job: "auto-catalog", ok: true, message: JSON.stringify(r) });
-  } catch (e) {
-    await db.from("sync_log").insert({ job: "auto-catalog", ok: false, message: errorMessage(e) });
-  }
-
-  // Komis: e-mail do komisanta o sprzedanych rzeczach (umowa / faktura w panelu).
-  try {
-    const r = await notifyConsignorSales(db);
-    if (r.sent || "errors" in r) await db.from("sync_log").insert({ job: "consignor-mail", ok: !("errors" in r), message: JSON.stringify(r) });
-  } catch (e) {
-    await db.from("sync_log").insert({ job: "consignor-mail", ok: false, message: errorMessage(e) });
-  }
-
-  // Statusy faktur w KSeF (tylko gdy jakieś czekają).
-  if (ksefConfigured()) {
-    const { count } = await db.from("invoices").select("id", { count: "exact", head: true }).eq("status", "sending");
-    if (count) await run(db, "ksef", () => pollKsef(db));
-  }
-  const ship = furgonetkaConfigured() && (await furgonetkaConnection(db))
-    ? await run(db, "furgonetka", () => syncFurgonetkaShipments(db))
-    : { ok: true, result: "niepołączona" };
-  return NextResponse.json({ base, shop, receipts, ship }, { status: base.ok && shop.ok && receipts.ok && ship.ok ? 200 : 500 });
+  const fast = await runFastJobs(db);
+  const slow = await runSlowJobs(db);
+  return NextResponse.json({ fast, slow }, { status: fast.ok && slow.ok ? 200 : 500 });
 }
-
 export const POST = GET;
