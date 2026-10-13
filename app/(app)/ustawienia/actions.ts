@@ -271,9 +271,9 @@ export async function saveInvoiceSettings(formData: FormData) {
 
 /** Usunięcie z magazynu produktów spoza Shopify (sztuki bez historii; komis, umowy i sprzedaż zostają). */
 export async function purgeNonShopify(formData: FormData) {
-  const { supabase } = await requireAdmin();
+  await requireAdmin();
   if (formData.get("confirm") !== "1") return done("Zaznacz potwierdzenie usunięcia.", "blad");
-  const { data, error } = await supabase.rpc("purge_non_shopify", { p_dry_run: false });
+  const { data, error } = await (await import("@/lib/supabase/admin")).createAdminClient().rpc("purge_non_shopify", { p_dry_run: false });
   if (error) return done(error.message, "blad");
   const r = data as { units: number; kept: number; variants: number; products: number };
   await done(`Usunięto ${r.units} sztuk, ${r.variants} rozmiarów i ${r.products} produktów spoza Shopify.${r.kept ? ` Zostało ${r.kept} sztuk z historią (umowa, komis, sprzedaż) – przejrzyj je ręcznie.` : ""}`);

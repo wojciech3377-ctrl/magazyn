@@ -234,7 +234,7 @@ export async function acceptContract(formData: FormData) {
   if (!accepted?.length) redirect(withMsg(target, "blad", "Zatwierdzić można tylko umowę podpisaną przez sprzedającego."));
 
   // Każda rzecz dostaje osobną umowę z własnym numerem (bez migracji 0040 – jedna umowa jak dotąd).
-  const split = await supabase.rpc("split_contract", { p_contract_id: id });
+  const split = await (await import("@/lib/supabase/admin")).createAdminClient().rpc("split_contract", { p_contract_id: id });
   const ids = (split.error ? [id] : (split.data as string[] | null) ?? [id]);
   const msgs: string[] = [ids.length > 1 ? `Umowa zatwierdzona i podzielona na ${ids.length} umowy – osobna dla każdej rzeczy.` : "Umowa zatwierdzona."];
 
