@@ -26,6 +26,9 @@ export default async function PracownicyPage({ searchParams }: { searchParams: P
   const migrated = list.every((e) => Array.isArray(e.permissions));
   const sorted = [...list].sort((a, b) => Number(b.active) - Number(a.active) || Number(b.role === "admin") - Number(a.role === "admin") || (a.full_name ?? a.email ?? "").localeCompare(b.full_name ?? b.email ?? "", "pl"));
   const active = list.filter((e) => e.active).length;
+  // Dziennik bezpieczeństwa (migracja 0042): ostatnie 7 dni.
+  const { data: events, error: evErr } = await supabase.from("security_events").select("id, at, kind, subject, ip, detail")
+    .gte("at", new Date(Date.now() - 7 * 86400_000).toISOString()).order("at", { ascending: false }).limit(40);
 
   return (
     <>
@@ -75,6 +78,36 @@ export default async function PracownicyPage({ searchParams }: { searchParams: P
           );
         })}
       </div>
+      <section className="card mt-6 p-4 sm:p-5">
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="font-semibold">Bezpieczeństwo · ostatnie 7 dni</h2>
+          <span className="text-xs text-muted">nieudane logowania, blokady po zbyt wielu próbach, złe klucze drukarki</span>
+        </div>
+        {evErr ? (
+          <p className="text-sm text-muted">Uruchom migrację <b>0042_security.sql</b> w Supabase (SQL Editor), żeby włączyć limity prób i ten dziennik.</p>
+        ) : !events?.length ? (
+          <p className="text-sm text-muted">Brak zdarzeń. 👍</p>
+        ) : (
+          <ul className="divide-y divide-line text-sm">
+            {events.map((ev) => (
+              <li key={ev.id as number} className="flex flex-wrap items-center gap-x-3 gap-y-0.5 py-2">
+                <span className="w-32 shrink-0 text-xs text-muted">{dateTime(ev.at as string)}</span>
+                <Pill tone={/blocked/.test(ev.kind as string) ? "red" : "amber"}>{EVENT[ev.kind as string] ?? (ev.kind as string)}</Pill>
+                <span className="min-w-0 truncate">{(ev.subject as string | null) ?? "–"}</span>
+                <span className="ml-auto font-mono text-xs text-muted">{ev.ip as string}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </>
   );
 }
+
+const EVENT: Record<string, string> = {
+  login_failed: "nieudane logowanie",
+  login_blocked: "logowanie zablokowane",
+  password_change_wrong_current: "złe obecne hasło",
+  public_form_blocked: "formularz publiczny zablokowany",
+  printer_bad_key: "zły klucz drukarki",
+};

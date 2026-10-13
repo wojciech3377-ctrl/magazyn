@@ -7,7 +7,9 @@ import { OWNER_TYPE, PURCHASE_FORM, UNIT_STATUS } from "@/lib/labels";
 export const dynamic = "force-dynamic";
 
 function csv(v: unknown) {
-  const s = v === null || v === undefined ? "" : String(v);
+  let s = v === null || v === undefined ? "" : String(v);
+  // Ochrona przed wstrzyknięciem formuły w Excelu (nazwy produktów, komisantów itp. z zewnątrz).
+  if (/^[=+@\t\r]/.test(s) || /^-[^\d]/.test(s)) s = `'${s}`;
   return /[";\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 

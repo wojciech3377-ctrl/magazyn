@@ -8,6 +8,16 @@ import { notifyAwaitingApproval } from "@/lib/contracts/store";
 import { contractTotal } from "@/lib/contracts/purchase";
 import { escapeHtml, validateSignaturePng } from "@/lib/contracts/png";
 import { COUNTRIES, CURRENCIES } from "@/lib/contracts/options";
+import { clientIp, rateLimit, safeEqual, securityEvent } from "@/lib/security";
+
+const TOKEN = /^[a-f0-9]{32,64}$/;
+/** Limit prób na publicznych formularzach (z jednego adresu IP). */
+async function limited(kind: string, max = 20) {
+  const ok = await rateLimit(`public-form:${kind}:${await clientIp()}`, max, 10 * 60);
+  if (!ok) await securityEvent("public_form_blocked", kind);
+  return !ok;
+}
+const TOO_MANY: Result = { error: "Za dużo prób w krótkim czasie. Spróbuj ponownie za kilka minut. / Too many attempts, try again later." };
 
 type Result = { error?: string };
 
@@ -79,6 +89,8 @@ async function requestMeta() {
 /** Umowa wygenerowana w aplikacji (link dla konkretnego sprzedającego). */
 export async function signLinkedContract(token: string, _: Result | null, formData: FormData): Promise<Result> {
   if (formData.get("website")) return { error: "Błąd formularza." };
+  if (!TOKEN.test(token)) return { error: "Ten link jest nieaktywny." };
+  if (await limited("sign")) return TOO_MANY;
   const parsed = parseSeller(formData);
   if ("error" in parsed) return { error: parsed.error };
   const db = createAdminClient();
@@ -101,10 +113,11 @@ export async function signLinkedContract(token: string, _: Result | null, formDa
 /** Ogólny link: klient sam wpisuje, co sprzedaje. Pozycje przypisujecie do katalogu w aplikacji. */
 export async function submitGeneralContract(key: string, _: Result | null, formData: FormData): Promise<Result> {
   if (formData.get("website")) return { error: "Błąd formularza." };
+  if (await limited("general", 10)) return TOO_MANY;
   const db = createAdminClient();
   const { data: setting } = await db.from("app_settings").select("value").eq("key", "general_contract_link").maybeSingle();
   const cfg = setting?.value as { key?: string; enabled?: boolean } | undefined;
-  if (!cfg?.enabled || cfg.key !== key) return { error: "Ten link jest nieaktywny." };
+  if (!cfg?.enabled || !safeEqual(cfg.key, key)) return { error: "Ten link jest nieaktywny." };
 
   const parsed = parseSeller(formData);
   if ("error" in parsed) return { error: parsed.error };
@@ -171,6 +184,8 @@ export async function submitGeneralContract(key: string, _: Result | null, formD
 /** Odpowiedź sprzedającego na naszą ofertę cenową: akceptacja (nowy podpis, umowa zawarta) albo odmowa. */
 export async function respondContractOffer(token: string, _: Result | null, formData: FormData): Promise<Result> {
   if (formData.get("website")) return { error: "Błąd formularza." };
+  if (!TOKEN.test(token)) return { error: "Ta oferta nie czeka już na odpowiedź." };
+  if (await limited("offer")) return TOO_MANY;
   const db = createAdminClient();
   const { data: c } = await db.from("contracts").select("id, status, items, offer, sign_expires_at, location_id, number").eq("sign_token", token).maybeSingle();
   if (!c || c.status !== "offer") return { error: "Ta oferta nie czeka już na odpowiedź." };

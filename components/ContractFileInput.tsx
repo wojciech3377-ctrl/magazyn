@@ -4,6 +4,7 @@ import { FileButton } from "./FileButton";
 
 import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { prepareContractUpload } from "@/app/(app)/umowy/upload-actions";
 
 const ALLOWED = ["application/pdf", "image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"];
 const MAX_BYTES = 25 * 1024 * 1024; // limit bucketu ustawiony w migracji
@@ -20,10 +21,10 @@ export function ContractFileInput({ label = "Plik umowy (PDF lub zdjęcie)" }: {
     if (!ALLOWED.includes(file.type)) return setState({ status: "error", message: "Wybierz PDF albo zdjęcie (JPG, PNG, HEIC)." });
     if (file.size > MAX_BYTES) return setState({ status: "error", message: "Plik może mieć najwyżej 25 MB." });
     setState({ status: "uploading" });
-    const ext = (file.name.split(".").pop() ?? "bin").toLowerCase().replace(/[^a-z0-9]/g, "") || "bin";
-    const now = new Date();
-    const path = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, "0")}/${crypto.randomUUID()}.${ext}`;
-    const { error } = await createClient().storage.from("contracts").upload(path, file, { contentType: file.type, upsert: false });
+    const prep = await prepareContractUpload(file.type, file.size).catch((e: Error) => ({ error: e.message }));
+    if ("error" in prep) return setState({ status: "error", message: prep.error });
+    const { path } = prep;
+    const { error } = await createClient().storage.from("contracts").uploadToSignedUrl(path, prep.token, file, { contentType: file.type });
     if (error) return setState({ status: "error", message: `Nie udało się wgrać: ${error.message}` });
     setState({ status: "done", path, name: file.name });
   }

@@ -116,7 +116,14 @@ export const hashToken = (t: string) => createHash("sha256").update(t).digest("h
 export async function printerFromRequest(db: SupabaseClient, req: Request) {
   const auth = req.headers.get("authorization") ?? "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
-  if (!/^drk_[A-Za-z0-9_-]{20,}$/.test(token)) return null;
-  const { data } = await db.from("fiscal_printers").select("id, name, active").eq("token_hash", hashToken(token)).maybeSingle();
-  return data?.active ? (data as { id: string; name: string; active: boolean }) : null;
+  const { data } = /^drk_[A-Za-z0-9_-]{20,200}$/.test(token)
+    ? await db.from("fiscal_printers").select("id, name, active").eq("token_hash", hashToken(token)).maybeSingle()
+    : { data: null };
+  if (data?.active) return data as { id: string; name: string; active: boolean };
+  // Zły klucz: zapis w dzienniku bezpieczeństwa (najwyżej kilka wpisów na godzinę z jednego adresu).
+  const { ipFrom, rateLimit, securityEvent } = await import("@/lib/security");
+  if (await rateLimit(`printer-bad-log:${ipFrom(req.headers)}`, 5, 3600)) {
+    await securityEvent("printer_bad_key", data ? `nieaktywna: ${data.name}` : null, { path: new URL(req.url).pathname }, req.headers);
+  }
+  return null;
 }

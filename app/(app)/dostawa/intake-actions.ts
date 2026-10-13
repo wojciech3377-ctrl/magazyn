@@ -112,7 +112,7 @@ export async function receiveIntake(fd: FormData) {
     base_pending: failed.map(({ variantId, locationId, delta }) => ({ variantId, locationId, delta })),
   }).eq("id", deliveryId!);
   await mailConsignor(db, intake!.consignor_id as string, "Twoja paczka dotarła",
-    `<p style="margin:0 0 12px">przyjęliśmy Twoje rzeczy do komisu:</p>${itemsTable(got.map((i) => ({ title: i.title, option: i.option, price: Number(i.final_price) })))}${missing.length ? `<p>Nie znaleźliśmy w paczce: ${missing.map((i) => `${i.title} ${i.option ?? ""}`).join(", ")} – skontaktuj się z nami.</p>` : ""}`,
+    `<p style="margin:0 0 12px">przyjęliśmy Twoje rzeczy do komisu:</p>${itemsTable(got.map((i) => ({ title: i.title, option: i.option, price: Number(i.final_price) })))}${missing.length ? `<p>Nie znaleźliśmy w paczce: ${missing.map((i) => escapeHtml(`${i.title} ${i.option ?? ""}`)).join(", ")} – skontaktuj się z nami.</p>` : ""}`,
     { href: `${await appUrl()}/komis`, label: "Otwórz panel" });
   revalidatePath("/dostawa");
   revalidatePath("/magazyn");

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { safeEqual } from "@/lib/security";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getBuyerSignature, getCompany } from "@/lib/contracts/settings";
 import { SellerContractForm } from "@/components/contracts/SellerContractForm";
@@ -15,7 +16,7 @@ export default async function GeneralContractPage({ params }: { params: Promise<
   const [company, buyerSignature] = await Promise.all([getCompany(db), getBuyerSignature(db)]);
   const { data } = await db.from("app_settings").select("value").eq("key", "general_contract_link").maybeSingle();
   const cfg = data?.value as { key?: string; enabled?: boolean } | undefined;
-  if (!cfg?.enabled || cfg.key !== key) {
+  if (!cfg?.enabled || !safeEqual(cfg.key, key)) {
     return <PublicShell company={company.name}><div className="card mx-auto max-w-lg p-6">Ten link jest nieaktywny. Skontaktuj się z nami: {company.email}</div></PublicShell>;
   }
   const { data: stores } = await db.from("stores").select("id, name").order("name");

@@ -2,19 +2,34 @@
 
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { clientIp, rateLimit, rateLimitReset, securityEvent } from "@/lib/security";
+
+const TOO_MANY = { error: "Za dużo prób logowania. Odczekaj 15 minut i spróbuj ponownie." };
 
 export async function signIn(_: unknown, formData: FormData) {
   const email = String(formData.get("email") ?? "").trim();
   const password = String(formData.get("password") ?? "");
   const next = String(formData.get("next") ?? "/magazyn");
+  if (!email || !password || email.length > 200 || password.length > 200) return { error: "Nieprawidłowy e-mail lub hasło." };
+  // Limity prób: z jednego adresu IP i na jedno konto (ochrona przed zgadywaniem haseł).
+  const ip = await clientIp();
+  const emailKey = `login:email:${email.toLowerCase()}`;
+  const [ipOk, emailOk] = await Promise.all([rateLimit(`login:ip:${ip}`, 30, 15 * 60), rateLimit(emailKey, 8, 15 * 60)]);
+  if (!ipOk || !emailOk) {
+    await securityEvent("login_blocked", email, { by: !ipOk ? "ip" : "konto" });
+    return TOO_MANY;
+  }
   const supabase = await createClient();
   const { data: signed, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) {
+    await securityEvent("login_failed", email, { code: error.code ?? null });
+    if (error.status === 429 || error.code === "over_request_rate_limit") return TOO_MANY;
     // Konkretny powód ułatwia ustawienie konta i kluczy (np. błędny klucz Supabase w Vercel).
     if (error.code === "invalid_credentials") return { error: "Nieprawidłowy e-mail lub hasło." };
     if (error.code === "email_not_confirmed") return { error: "Konto nie jest potwierdzone. W Supabase → Authentication → Users potwierdź je albo dodaj ponownie z „Auto Confirm User”." };
-    return { error: `Logowanie nie działa: ${error.message}${error.code ? ` (${error.code})` : ""}. Sprawdź adres i klucz Supabase w Vercel.` };
+    return { error: `Logowanie nie działa (${error.code ?? error.status ?? "błąd"}). Spróbuj ponownie za chwilę.` };
   }
+  await rateLimitReset(emailKey);
   // Komisant trafia do swojego panelu.
   if (signed?.user) {
     const { createAdminClient } = await import("@/lib/supabase/admin");

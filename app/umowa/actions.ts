@@ -1,6 +1,7 @@
 "use server";
 
 import { createAdminClient } from "@/lib/supabase/admin";
+import { clientIp, rateLimit, safeEqual } from "@/lib/security";
 
 export type CatalogHit = { productId: string; title: string; image: string | null; variants: { id: string; option: string }[] };
 
@@ -8,11 +9,12 @@ async function linkActive(key: string) {
   const db = createAdminClient();
   const { data } = await db.from("app_settings").select("value").eq("key", "general_contract_link").maybeSingle();
   const cfg = data?.value as { key?: string; enabled?: boolean } | undefined;
-  return cfg?.enabled && cfg.key === key ? db : null;
+  return cfg?.enabled && safeEqual(cfg.key, key) ? db : null;
 }
 
 /** Wyszukiwarka modeli z katalogu dla klienta z ogólnego linku (tylko nazwa, zdjęcie i rozmiary). */
 export async function searchCatalogPublic(key: string, q: string, storeId?: string): Promise<CatalogHit[]> {
+  if (!(await rateLimit(`public-search:${await clientIp()}`, 120, 5 * 60))) return [];
   const db = await linkActive(key);
   const text = q.trim().replace(/[,()*%\\]/g, " ").trim().slice(0, 60);
   if (!db || text.length < 2) return [];

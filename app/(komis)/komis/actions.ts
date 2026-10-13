@@ -86,7 +86,7 @@ export async function requestShipment(_: ShipState, fd: FormData): Promise<ShipS
       const company = await getCompany(db);
       if (company.email) {
         await sendMail(company.email, `Komis: ${consignor.name} zleca wysyłkę ${reserved.length} szt.`,
-          `<p>Komisant <b>${consignor.name.replace(/</g, "&lt;")}</b> zlecił wysyłkę: ${reserved.map((u) => u.code).join(", ")}.</p><p>Sposób: ${method === "default" ? "adres z konta" : method === "custom" ? `inny adres (opłata ${fee} zł – wystaw fakturę)` : "własna etykieta (w załączniku zlecenia)"}.</p><p>Obsłuż w aplikacji: Komisanci → ${consignor.name.replace(/</g, "&lt;")}.</p>`);
+          `<p>Komisant <b>${consignor.name.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</b> zlecił wysyłkę: ${reserved.map((u) => u.code).join(", ")}.</p><p>Sposób: ${method === "default" ? "adres z konta" : method === "custom" ? `inny adres (opłata ${fee} zł – wystaw fakturę)` : "własna etykieta (w załączniku zlecenia)"}.</p><p>Obsłuż w aplikacji: Komisanci → ${consignor.name.replace(/</g, "&lt;")}.</p>`);
       }
     }
   } catch {

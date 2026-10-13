@@ -15,7 +15,8 @@ export async function createClient() {
         },
         setAll(cookiesToSet) {
           try {
-            cookiesToSet.forEach(({ name, value, options }) => cookieStore.set(name, value, options));
+            // Ciasteczka sesji niedostępne dla JavaScriptu (ochrona przed kradzieżą sesji przez XSS).
+            cookiesToSet.forEach(({ name, value, options }) => cookieStore.set(name, value, { ...options, httpOnly: true, sameSite: "lax" }));
           } catch {
             // Wywołane z komponentu serwerowego – sesję odświeża proxy.ts.
           }

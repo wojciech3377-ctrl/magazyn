@@ -28,7 +28,7 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "server-only": "^0.0.1",
-    "unpdf": "^0.12.1",
+    "unpdf": "^1.8.1",
     "zod": "3.25.76"
   },
   "devDependencies": {

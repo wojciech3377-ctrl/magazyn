@@ -1,4 +1,5 @@
 import "server-only";
+import { safeEqual } from "@/lib/security";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { syncFurgonetkaShipments, syncShopifyOrders } from "@/lib/sync/shop-orders";
 import { backfillContractNumbers } from "@/lib/contracts/docnumber";
@@ -70,5 +71,6 @@ export async function runSlowJobs(db: SupabaseClient) {
 
 export function cronAuthorized(req: Request) {
   const secret = process.env.CRON_SECRET;
-  return !!secret && req.headers.get("authorization") === `Bearer ${secret}`;
+  // Porównanie w stałym czasie (bez ataku czasowego).
+  return !!secret && safeEqual(req.headers.get("authorization"), `Bearer ${secret}`);
 }
