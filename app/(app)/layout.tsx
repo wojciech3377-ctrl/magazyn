@@ -36,10 +36,19 @@ async function deliveryAlerts() {
 }
 
 /** Liczniki w menu liczą się przy każdym przejściu – pamiętamy je 20 s (szybsze przełączanie stron). */
-let badgeCache: { at: number; value: [number, { accept: number; transit: number }] } | null = null;
+let badgeCache: { at: number; value: [number, { accept: number; transit: number }, number] } | null = null;
+/** Nowe zamówienia (do spakowania / wysłania) – licznik przy „Sprzedaż” i zakładce „Zamówienia”. */
+async function newOrdersCount() {
+  try {
+    const { count } = await createAdminClient().from("orders").select("id", { count: "exact", head: true }).eq("status", "new");
+    return count ?? 0;
+  } catch {
+    return 0;
+  }
+}
 async function badges() {
   if (badgeCache && Date.now() - badgeCache.at < 20_000) return badgeCache.value;
-  const value = await Promise.all([consignorAlerts(), deliveryAlerts()]);
+  const value = await Promise.all([consignorAlerts(), deliveryAlerts(), newOrdersCount()]);
   badgeCache = { at: Date.now(), value };
   return value;
 }
@@ -56,7 +65,7 @@ async function myOpenTasks(db: Awaited<ReturnType<typeof requireProfile>>["supab
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const { supabase, profile } = await requireProfile();
-  const [[alerts, delivery], todo] = await Promise.all([badges(), myOpenTasks(supabase, profile.id)]);
+  const [[alerts, delivery, newOrders], todo] = await Promise.all([badges(), myOpenTasks(supabase, profile.id)]);
   // Menu: działy z uprawnień (Faktury są zakładką w Sprzedaży), Ustawienia i Pracownicy – administrator.
   const allowed = [
     "/do-zrobienia",
@@ -71,6 +80,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         allowed={allowed}
         badges={{
           "/do-zrobienia": [{ n: todo, tone: "orange", title: "Twoje otwarte zadania" }],
+          ...(can(profile, "sprzedaz") ? { "/sprzedaz": [{ n: newOrders, tone: "orange" as const, title: "Nowe zamówienia" }] } : {}),
           "/komisanci": [{ n: alerts, tone: "red", title: "Zgłoszenia komisantów do obsłużenia" }],
           "/dostawa": [{ n: delivery.accept, tone: "green", title: "Do akceptacji" }, { n: delivery.transit, tone: "orange", title: "W drodze" }],
         }}

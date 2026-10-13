@@ -415,10 +415,11 @@ async function Tabs({ active }: { active: "orders" | "lines" | "pos" | "faktury"
   const cur = (on: boolean) => (on ? ("page" as const) : undefined);
   const sales = can(profile, "sprzedaz");
   const invoices = can(profile, "faktury");
+  const { count: fresh } = sales ? await createAdminClient().from("orders").select("id", { count: "exact", head: true }).eq("status", "new") : { count: 0 };
   return (
     <div className="-mx-4 mb-5 overflow-x-auto px-4 sm:mx-0 sm:px-0">
       <nav className="segmented flex-nowrap whitespace-nowrap" aria-label="Sprzedaż">
-        {sales && <Link href="/sprzedaz" aria-current={cur(active === "orders")}>Zamówienia</Link>}
+        {sales && <Link href="/sprzedaz" aria-current={cur(active === "orders")}>Zamówienia{fresh ? <span className="ml-1.5 rounded-full bg-orange-500 px-1.5 py-px text-[11px] font-semibold tabular-nums text-white" title="Nowe zamówienia">{fresh}</span> : null}</Link>}
         {sales && <Link href="/sprzedaz?widok=stacjonarna" aria-current={cur(active === "pos")}>Stacjonarna</Link>}
         {invoices && <Link href="/sprzedaz?widok=faktury" aria-current={cur(active === "faktury")}>Faktury</Link>}
         {invoices && <Link href="/sprzedaz?widok=jpk" aria-current={cur(active === "jpk" || active === "lines")}>JPK</Link>}
