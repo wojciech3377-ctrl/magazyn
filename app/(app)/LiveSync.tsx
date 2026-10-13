@@ -25,6 +25,7 @@ export function LivePoller() {
       if (document.visibilityState !== "visible") return;
       try {
         const res = await fetch("/api/live", { cache: "no-store" });
+        if (res.status === 429) return; // limit zapytań (np. wiele kart) – następny odczyt za chwilę
         const r = await res.json();
         if (stop) return;
         const errors: string[] = r.errors ?? (r.error ? [r.error] : []);
