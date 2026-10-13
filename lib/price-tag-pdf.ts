@@ -126,8 +126,38 @@ export async function renderPriceTags(tags: PriceTag[]) {
       page.drawText(line, { x: PAD_X, y, size: 7, font: bold });
     }
 
-    // Cena + ramka z rozmiarem / wariantem po prawej. Metka produktu (Stan produktu + metka): bez rozmiaru.
-    const withBox = !t.productTag;
+    // Metka sztuki (Magazyn): bez cen – duża ramka z rozmiarem / wariantem, IMEI obok, kod kreskowy.
+    if (!t.productTag) {
+      const val = t.option || "–";
+      const vs = fitSize(bold, val, 13, 26 * MM, 7);
+      const bw = Math.max(13 * MM, bold.widthOfTextAtSize(val, vs) + 4 * MM);
+      const bh = 8.4 * MM;
+      y -= 1.4;
+      const by = y - bh;
+      roundRect(page, PAD_X, by, bw, bh, 1.6 * MM / 1.2, { border: 0.8 });
+      const lab = /^\d{1,2}([.,]\d|\s?\d\/\d)?$/.test(val.trim()) ? "ROZMIAR" : "WARIANT";
+      const lw = spaced(null, lab, 0, 0, 3.9, regular, 0.35);
+      spaced(page, lab, PAD_X + (bw - lw) / 2, by + bh - 5.6, 3.9, regular, 0.35);
+      page.drawText(val, { x: PAD_X + (bw - bold.widthOfTextAtSize(val, vs)) / 2, y: by + 2.6, size: vs, font: bold });
+      const imei = (t.identifier ?? "").trim();
+      if (imei) {
+        const label = /^\d{15}$/.test(imei) ? "IMEI" : "S/N";
+        const ix = PAD_X + bw + 2 * MM;
+        const iw = W - PAD_X - ix;
+        const isz = fitSize(bold, imei, 7, iw, 4.4);
+        page.drawText(label, { x: ix, y: by + bh / 2 + 1.2, size: 4.6, font: regular });
+        page.drawText(imei, { x: ix, y: by + bh / 2 - isz - 0.2, size: isz, font: bold });
+      }
+      const codeSize = 5.6;
+      const codeW = spaced(null, t.sku, 0, 0, codeSize, regular, 0.9);
+      spaced(page, t.sku, (W - codeW) / 2, PAD_Y - 0.4, codeSize, regular, 0.9);
+      const barBottom = PAD_Y + codeSize + 0.6;
+      barcode(page, t.sku, QUIET, barBottom, W - 2 * QUIET, Math.max(9, Math.min(22, by - 2.2 - barBottom)));
+      continue;
+    }
+
+    // Metka sklepowa (produkt): cena od najtańszego do najdroższego rozmiaru, cena przed obniżką, Omnibus – bez rozmiaru.
+    const withBox = false;
     const sizeVal = t.option || "–";
     const sv = fitSize(bold, sizeVal, 9.5, 18 * MM, 6);
     const boxW = withBox ? Math.max(9.5 * MM, bold.widthOfTextAtSize(sizeVal, sv) + 3.2 * MM) : 0;
@@ -170,14 +200,6 @@ export async function renderPriceTags(tags: PriceTag[]) {
     const lsz = fitSize(regular, low, 5.2, inner, 4.2);
     y -= lsz + 1.3;
     page.drawText(low, { x: PAD_X, y, size: lsz, font: regular });
-
-    // Metka produktu: podpowiedź nad kodem – po zeskanowaniu aplikacja pokazuje dostępne rozmiary.
-    if (t.productTag) {
-      const hint = "Zeskanuj kod – dostępne rozmiary";
-      const hs = fitSize(bold, hint, 5.6, inner, 4.4);
-      y -= hs + 1.6;
-      page.drawText(hint, { x: PAD_X, y, size: hs, font: bold });
-    }
 
     // IMEI telefonu (Telefoniki) – numer sztuki zapisany przy przyjęciu.
     const imei = (t.identifier ?? "").trim();

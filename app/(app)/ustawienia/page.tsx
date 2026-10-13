@@ -76,7 +76,7 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
         const plan = sp.podglad === "1" ? await safe(() => planPushToShopify(db)) : null;
         const compare = sp.porownaj === "1" ? await safe(() => compareStock(db)) : null;
         const { data: last } = await db.from("sync_log").select("job, ok, message, created_at").in("job", ["stock", "auto-catalog"]).order("created_at", { ascending: false }).limit(1).maybeSingle();
-        const { data: purge } = await supabase.rpc("purge_non_shopify", { p_dry_run: true });
+        const { data: purge } = await db.rpc("purge_non_shopify", { p_dry_run: true });
         const diag = sp.sprawdz && sp.sprawdz.trim().length >= 2 ? await safe(() => diagnoseStock(db, sp.sprawdz!.trim())) : null;
         return { master, shopLocs, plan, compare, last, diag, purge: purge as { units: number; kept: number; variants: number } | null };
       })()

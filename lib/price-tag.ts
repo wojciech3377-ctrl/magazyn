@@ -119,7 +119,15 @@ export async function priceTags(db: SupabaseClient, unitIds: string[]) {
   const { data: units } = await db.from("units")
     .select("id, code, identifier, variant_id, variant:variants(option, product_id, product:products(title, style_sku)), location:locations(store_id, store:stores(name, code, shopify_domain))")
     .in("id", unitIds.slice(0, 200)).order("number");
-  return buildTags(db, (units ?? []) as unknown as TagSource[]);
+  // Metki sztuk (Magazyn): bez cen i Omnibusa – tylko sklep, nazwa, rozmiar, IMEI i kod.
+  return buildTags(db, (units ?? []) as unknown as TagSource[], false);
+}
+
+/** Zapytania po wielu id w paczkach (limit długości adresu i 1000 wierszy na odpowiedź). */
+async function chunked<T>(ids: string[], size: number, fn: (part: string[]) => PromiseLike<{ data: unknown[] | null }>) {
+  const out: T[] = [];
+  for (let i = 0; i < ids.length; i += size) out.push(...(((await fn(ids.slice(i, i + size))).data ?? []) as T[]));
+  return out;
 }
 
 import { productTagCode } from "./price-tag-code";
@@ -131,7 +139,7 @@ export async function productPriceTags(db: SupabaseClient, productIds: string[],
   const [{ data: products }, { data: store }, { data: variants }] = await Promise.all([
     db.from("products").select("id, title, style_sku, tag_no").in("id", ids),
     db.from("stores").select("id, name, code, shopify_domain").eq("id", storeId).maybeSingle(),
-    db.from("variants").select("id, product_id").in("product_id", ids),
+    Promise.resolve({ data: await chunked<{ id: string; product_id: string }>(ids, 50, (part) => db.from("variants").select("id, product_id").in("product_id", part).limit(5000)) }),
   ]);
   if (!store) return [];
   const firstVariant = new Map<string, string>();
@@ -148,24 +156,24 @@ export async function productPriceTags(db: SupabaseClient, productIds: string[],
   return (await buildTags(db, list)).map((t) => ({ ...t, productTag: true }));
 }
 
-async function buildTags(db: SupabaseClient, list: TagSource[]) {
+async function buildTags(db: SupabaseClient, list: TagSource[], withPrices = true) {
   const productIds = [...new Set(list.map((u) => u.variant.product_id))];
-  const { data: variants } = productIds.length ? await db.from("variants").select("id, product_id").in("product_id", productIds) : { data: [] };
+  const variants = await chunked<{ id: string; product_id: string }>(productIds, 50, (part) => db.from("variants").select("id, product_id").in("product_id", part).limit(5000));
   const variantIds = (variants ?? []).map((v) => v.id as string);
   const byProduct = new Map<string, string[]>();
-  for (const v of variants ?? []) byProduct.set(v.product_id as string, [...(byProduct.get(v.product_id as string) ?? []), v.id as string]);
+  for (const v of variants) byProduct.set(v.product_id as string, [...(byProduct.get(v.product_id as string) ?? []), v.id as string]);
   const since = new Date(Date.now() - 120 * 86400_000).toISOString();
-  const [{ data: links }, { data: hist }, { data: plinks }] = await Promise.all([
-    variantIds.length ? db.from("variant_store_links").select("variant_id, store_id, price, compare_at_price, base_sku, shopify_variant_id").in("variant_id", variantIds) : Promise.resolve({ data: [] }),
-    variantIds.length ? db.from("variant_price_history").select("variant_id, store_id, price, valid_from").in("variant_id", variantIds).gte("valid_from", since).order("valid_from") : Promise.resolve({ data: [] }),
-    productIds.length ? db.from("product_store_links").select("product_id, store_id, shopify_product_id, handle, tags").in("product_id", productIds) : Promise.resolve({ data: [] }),
+  const [links, hist, plinks] = await Promise.all([
+    withPrices ? chunked<Record<string, unknown>>(variantIds, 150, (part) => db.from("variant_store_links").select("variant_id, store_id, price, compare_at_price, base_sku, shopify_variant_id").in("variant_id", part).limit(5000)) : Promise.resolve([]),
+    withPrices ? chunked<Record<string, unknown>>(variantIds, 150, (part) => db.from("variant_price_history").select("variant_id, store_id, price, valid_from").in("variant_id", part).gte("valid_from", since).order("valid_from").limit(10000)) : Promise.resolve([]),
+    chunked<Record<string, unknown>>(productIds, 100, (part) => db.from("product_store_links").select("product_id, store_id, shopify_product_id, handle, tags").in("product_id", part).limit(5000)),
   ]);
   type L = { variant_id: string; store_id: string; price: number | null; compare_at_price: number | null; base_sku: string | null; shopify_variant_id: string | null };
   const linkRows = (links ?? []) as L[];
 
   // Metapola Omnibus ze Shopify (raz na produkt i sklep).
   const omni = new Map<string, { product: number | null; variants: Map<string, number>; found: string[] }>();
-  for (const key of [...new Set(list.map((u) => `${u.variant.product_id}|${u.location.store_id}`))].slice(0, 30)) {
+  for (const key of [...new Set(list.map((u) => `${u.variant.product_id}|${u.location.store_id}`))].slice(0, withPrices ? 60 : 0)) {
     const [pid, sid] = key.split("|");
     const u = list.find((x) => x.variant.product_id === pid && x.location.store_id === sid)!;
     const gid = (plinks ?? []).find((p) => p.product_id === pid && p.store_id === sid)?.shopify_product_id as string | undefined;
@@ -197,7 +205,7 @@ async function buildTags(db: SupabaseClient, list: TagSource[]) {
   // Blok Omnibus Insight na stronie produktu (gdy metapola są prywatne aplikacji): kwota dla każdego rozmiaru.
   const shopLowest = new Map<string, number>();
   const jobs: { key: string; domain: string; handle: string; gid: string | null }[] = [];
-  for (const key of [...new Set(list.map((u) => `${u.variant.product_id}|${u.location.store_id}`))].slice(0, 30)) {
+  for (const key of [...new Set(list.map((u) => `${u.variant.product_id}|${u.location.store_id}`))].slice(0, withPrices ? 60 : 0)) {
     const [pid, sid] = key.split("|");
     if (omni.get(key)?.product || omni.get(key)?.variants.size) continue;
     const u = list.find((x) => x.variant.product_id === pid && x.location.store_id === sid)!;
