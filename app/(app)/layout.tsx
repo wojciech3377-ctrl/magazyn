@@ -75,7 +75,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           "/dostawa": [{ n: delivery.accept, tone: "green", title: "Do akceptacji" }, { n: delivery.transit, tone: "orange", title: "W drodze" }],
         }}
       />
-      <main className="min-w-0 px-4 pb-[calc(5.5rem+env(safe-area-inset-bottom))] pt-[max(1rem,env(safe-area-inset-top))] sm:px-6 lg:ml-64 lg:px-8 lg:py-7 print:m-0 print:p-0">
+      <main className="app-main min-w-0 px-4 pb-[calc(5.5rem+env(safe-area-inset-bottom))] pt-[max(1rem,env(safe-area-inset-top))] sm:px-6 lg:ml-64 lg:px-8 lg:py-7 print:m-0 print:p-0">
         <div className="mx-auto max-w-[1500px]">{children}</div>
         <TableLabels />
         <LivePoller />

@@ -13,6 +13,8 @@ const H = 32 * MM;
 const PAD_X = 2.2 * MM;
 const PAD_Y = 1.6 * MM;
 const QUIET = 3 * MM; // pusty margines po bokach kodu kreskowego (czytelność skanera)
+// Odstęp od górnej krawędzi: drukarki etykiet potrafią przesunąć wydruk o ~1 mm i ucinały pasek sklepu.
+const TOP = 1.3 * MM;
 
 let fontCache: { regular: Uint8Array; bold: Uint8Array } | null = null;
 async function fonts() {
@@ -108,15 +110,16 @@ export async function renderPriceTags(tags: PriceTag[]) {
     const page = doc.addPage([W, H]);
 
     // Pasek sklepu (pełna szerokość, odwrócone kolory).
-    const band = 3.9 * MM;
-    page.drawRectangle({ x: 0, y: H - band, width: W, height: band, color: rgb(0, 0, 0) });
+    const band = 3.7 * MM;
+    const bandY = H - TOP - band;
+    page.drawRectangle({ x: 0, y: bandY, width: W, height: band, color: rgb(0, 0, 0) });
     const store = (t.storeName || "Sklep").toUpperCase();
     let ss = 6.2;
     while (ss > 4.5 && spaced(null, store, 0, 0, ss, bold, ss * 0.16) > inner) ss -= 0.2;
-    spaced(page, store, PAD_X, H - band + (band - ss * 0.72) / 2, ss, bold, ss * 0.16, white);
+    spaced(page, store, PAD_X, bandY + (band - ss * 0.72) / 2, ss, bold, ss * 0.16, white);
 
     // Nazwa produktu (do 2 linii).
-    let y = H - band - 1.2;
+    let y = bandY - 1.0;
     for (const line of wrap(bold, t.title, 7, inner, 2)) {
       y -= 7.4;
       page.drawText(line, { x: PAD_X, y, size: 7, font: bold });

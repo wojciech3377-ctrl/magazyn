@@ -107,9 +107,20 @@ export async function addExclusion(formData: FormData) {
   const kind = String(formData.get("kind")) === "title_contains" ? "title_contains" : "sku_prefix";
   const value = String(formData.get("value") ?? "").trim();
   if (value.length < 2) return done("Wpisz co najmniej 2 znaki.", "blad");
-  const { error } = await supabase.from("catalog_exclusions").insert({ kind, value });
+  const vat = formData.get("vat") === "23" ? "23" : "margin";
+  let { error } = await supabase.from("catalog_exclusions").insert({ kind, value, vat });
+  if (error && /vat/.test(error.message)) ({ error } = await supabase.from("catalog_exclusions").insert({ kind, value }));
   if (error) return done(error.message, "blad");
   await done(`Dodano wykluczenie „${value}”. Kliknij „Usuń wykluczone z magazynu”, żeby usunąć już wgrane produkty.`);
+}
+
+/** Stawka na paragonie dla pozycji z tej reguły (np. rope → VAT marża, usługa → 23%). */
+export async function setExclusionVat(formData: FormData) {
+  const { supabase } = await requireAdmin();
+  const vat = formData.get("vat") === "23" ? "23" : "margin";
+  const { error } = await supabase.from("catalog_exclusions").update({ vat }).eq("id", String(formData.get("id")));
+  if (error) return done(/vat/.test(error.message) ? "Uruchom migrację 0045_exclusion_vat.sql w Supabase." : error.message, "blad");
+  await done(`Stawka na paragonie zapisana: ${vat === "23" ? "23%" : "VAT marża"}.`);
 }
 
 export async function deleteExclusion(formData: FormData) {

@@ -34,6 +34,7 @@ export async function getFiscalSettings(db: SupabaseClient): Promise<FiscalSetti
 /** „A – 23%”, „E – zw.” */
 export function ptuLabel(s: FiscalSettings, letter: string) {
   const r = s.rates[letter];
+  if (letter === s.ptuMargin) return `${letter} – VAT marża`;
   return r === undefined ? letter : `${letter} – ${r === "zw" ? "zw." : `${r}%`}`;
 }
 
@@ -78,7 +79,8 @@ export async function enqueuePosReceipt(db: SupabaseClient, posOrderId: string, 
   const s = await getFiscalSettings(db);
   type It = { price: number; status: string; name: string | null; ptu: string | null; quantity: number | null; unit: { purchase_form: string; variant: { option: string; product: { title: string } } | null } | null };
   const lines = ((items ?? []) as unknown as It[]).filter((i) => i.status !== "returned").map((i): FiscalLine => {
-    const ptu = i.unit ? (i.unit.purchase_form === "vat_23" ? s.ptu23 : s.ptuMargin) : (i.ptu ?? s.ptu23);
+    // Stawka wybrana przy pozycji w Kasie; bez wyboru: sztuka wg formy sprzedaży (23% → A, marża → F).
+    const ptu = i.ptu && /^[A-G]$/.test(i.ptu) ? i.ptu : i.unit ? (i.unit.purchase_form === "vat_23" ? s.ptu23 : s.ptuMargin) : s.ptuMargin;
     const name = i.unit?.variant ? `${i.unit.variant.product.title} ${i.unit.variant.option}` : (i.name ?? "Towar");
     return { name: fiscalName(name), qty: Number(i.quantity ?? 1), price: round(Number(i.price)), ptu, rate: rateOf(s, ptu) };
   });
@@ -98,9 +100,13 @@ export async function enqueueOrderReceipt(db: SupabaseClient, orderId: string, u
     const ptu = i.unit === "usł." ? s.ptuService : i.vat === "23" ? s.ptu23 : s.ptuMargin;
     return { name: fiscalName(i.name), qty: i.quantity, price: round(i.unit_price_gross), ptu, rate: rateOf(s, ptu) };
   });
-  // Usługi z zamówienia (np. naprawa) – na fakturze pomijane, na paragonie muszą być.
+  // Pozycje wykluczone z magazynu (np. sznurówki rope, usługi) – na fakturze pomijane, na paragonie muszą być.
+  // Stawka z reguły wykluczenia (Ustawienia → Wykluczenia): domyślnie VAT marża (F), albo 23% (A).
+  const { loadExclusionRules, exclusionVat } = await import("@/lib/services");
+  const rules = await loadExclusionRules(db);
   for (const l of ((o.line_items ?? []) as LineItem[]).filter((x) => x.service && Number(x.price) > 0)) {
-    lines.push({ name: fiscalName([l.title, l.variant_title].filter(Boolean).join(" ")), qty: l.quantity, price: round(Number(l.price)), ptu: s.ptuService, rate: rateOf(s, s.ptuService) });
+    const ptu = exclusionVat(rules, l.sku, l.title) === "23" ? s.ptuService : s.ptuMargin;
+    lines.push({ name: fiscalName([l.title, l.variant_title].filter(Boolean).join(" ")), qty: l.quantity, price: round(Number(l.price)), ptu, rate: rateOf(s, ptu) });
   }
   return insertJob(db, { source: "order", order_id: orderId, lines, payment: d.paymentMethod, created_by: userId });
 }

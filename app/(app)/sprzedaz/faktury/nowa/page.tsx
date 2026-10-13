@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { requireProfile } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { PageHeader, Notice } from "@/components/ui";
@@ -13,31 +14,9 @@ const UUID = /^[0-9a-f-]{36}$/i;
 export default async function NewInvoicePage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const sp = await searchParams;
   await requireProfile();
-  // Najpierw wybór dokumentu: faktura do KSeF albo paragon (bez nabywcy, do druku).
-  if (sp.typ !== "ksef" && sp.typ !== "paragon") {
-    const keep = new URLSearchParams(Object.entries(sp).filter((e): e is [string, string] => !!e[1] && e[0] !== "typ"));
-    const href = (typ: string) => `/sprzedaz/faktury/nowa?${new URLSearchParams([...keep, ["typ", typ]])}`;
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" role="dialog" aria-modal="true" aria-labelledby="doc-choice">
-        <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl">
-          <h1 id="doc-choice" className="mb-1 text-center text-lg font-semibold">Jaki dokument wystawić?</h1>
-          <p className="mb-5 text-center text-sm text-muted">Faktura idzie do KSeF. Paragon to dokument do druku dla osoby prywatnej.</p>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Link href={href("ksef")} className="group rounded-xl border-2 border-line p-5 text-center transition hover:border-accent hover:bg-sky-50">
-              <span className="block text-2xl font-bold tracking-wide group-hover:text-accent">KSEF</span>
-              <span className="mt-1 block text-sm text-muted">Faktura VAT z danymi nabywcy, numer FVM/n/rok</span>
-            </Link>
-            <Link href={href("paragon")} className="group rounded-xl border-2 border-line p-5 text-center transition hover:border-accent hover:bg-sky-50">
-              <span className="block text-2xl font-bold tracking-wide group-hover:text-accent">PARAGON</span>
-              <span className="mt-1 block text-sm text-muted">Bez danych nabywcy, nie idzie do KSeF, numer PAR/miesiąc/n</span>
-            </Link>
-          </div>
-          <div className="mt-5 text-center"><Link className="text-sm text-muted hover:underline" href="/sprzedaz?widok=faktury">Anuluj</Link></div>
-        </div>
-      </div>
-    );
-  }
-  const receipt = sp.typ === "paragon";
+  // Paragony (PAR) wystawia się teraz w Kasie („Drukuj paragon PDF”, opcja „Wysyłka”) – tu tylko faktury do KSeF.
+  if (sp.typ === "paragon") redirect(sp.kasa && UUID.test(sp.kasa) ? `/kasa/${sp.kasa}` : "/kasa");
+  const receipt = false;
   const db = createAdminClient();
   let draft: InvoiceDraft | null = null;
   if (sp.zamowienie && UUID.test(sp.zamowienie)) draft = await draftFromOrder(db, sp.zamowienie);

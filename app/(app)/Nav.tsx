@@ -59,7 +59,7 @@ export function Nav({ badges = {}, user, allowed }: { badges?: Record<string, Ba
     <div className="flex h-full flex-col">
       <Link href="/magazyn" className="flex items-center gap-2.5 px-5 pb-5 pt-5">
         <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-accent to-indigo-500 text-white shadow-sm"><Icon name="box" className="h-4.5 w-4.5" /></span>
-        <span className="leading-tight">
+        <span className="brand-text leading-tight">
           <span className="block text-[15px] font-semibold tracking-tight">Magazyn</span>
           <span className="block text-[11px] text-muted">Telefoniki · Sneakers Depot</span>
         </span>
@@ -67,7 +67,7 @@ export function Nav({ badges = {}, user, allowed }: { badges?: Record<string, Ba
       <nav className="flex-1 space-y-5 overflow-y-auto px-3" aria-label="Menu główne">
         {groups.map((g) => (
           <div key={g.title}>
-            <div className="px-2 pb-1.5 text-[11px] font-medium uppercase tracking-wider text-slate-400">{g.title}</div>
+            <div className="nav-group-title px-2 pb-1.5 text-[11px] font-medium uppercase tracking-wider text-slate-400">{g.title}</div>
             <ul className="space-y-0.5">
               {g.links.map((l) => {
                 const active = current?.href === l.href;
@@ -77,12 +77,13 @@ export function Nav({ badges = {}, user, allowed }: { badges?: Record<string, Ba
                     <Link
                       href={l.href}
                       aria-current={active ? "page" : undefined}
-                      className={`group flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors ${active ? "bg-accent-soft text-accent" : "text-slate-600 hover:bg-slate-100 hover:text-ink"}`}
+                      title={l.label}
+                      className={`nav-link group relative flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors ${active ? "bg-accent-soft text-accent" : "text-slate-600 hover:bg-slate-100 hover:text-ink"}`}
                     >
                       <Icon name={l.icon} className={`h-[18px] w-[18px] shrink-0 ${active ? "text-accent" : "text-slate-400 group-hover:text-slate-600"}`} />
-                      <span className="flex-1 truncate">{l.label}</span>
+                      <span className="nav-text flex-1 truncate">{l.label}</span>
                       {bs.map((b) => (
-                        <span key={b.tone} className={`min-w-5 rounded-full px-1.5 py-px text-center text-[11px] font-semibold text-white tabular-nums ${TONE[b.tone]}`} title={b.title}>{b.n}</span>
+                        <span key={b.tone} className={`nav-badge min-w-5 rounded-full px-1.5 py-px text-center text-[11px] font-semibold text-white tabular-nums ${TONE[b.tone]}`} title={b.title}>{b.n}</span>
                       ))}
                     </Link>
                   </li>
@@ -92,10 +93,10 @@ export function Nav({ badges = {}, user, allowed }: { badges?: Record<string, Ba
           </div>
         ))}
       </nav>
-      <LiveSync />
-      <form action={signOut} className="m-3 mt-2 flex items-center gap-2.5 rounded-xl border border-line bg-slate-50/80 p-2.5">
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-200 text-xs font-semibold text-slate-700">{initials || "?"}</span>
-        <span className="min-w-0 flex-1 truncate text-sm text-slate-700" title={user}>{user}</span>
+      <div className="live-sync"><LiveSync /></div>
+      <form action={signOut} className="user-box m-3 mt-2 flex items-center gap-2.5 rounded-xl border border-line bg-slate-50/80 p-2.5">
+        <span className="user-initials flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-200 text-xs font-semibold text-slate-700">{initials || "?"}</span>
+        <span className="user-name min-w-0 flex-1 truncate text-sm text-slate-700" title={user}>{user}</span>
         <button className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-white hover:text-ink" title="Wyloguj" aria-label="Wyloguj"><Icon name="logout" className="h-4 w-4" /></button>
       </form>
     </div>
@@ -104,7 +105,7 @@ export function Nav({ badges = {}, user, allowed }: { badges?: Record<string, Ba
   return (
     <>
       {/* Komputer: stałe menu z lewej. */}
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 border-r border-line bg-white lg:block print:hidden">{menu}</aside>
+      <aside className="app-aside fixed inset-y-0 left-0 z-30 hidden w-64 border-r border-line bg-white lg:block print:hidden">{menu}</aside>
 
       {/* Telefon / tablet: górny pasek i wysuwane menu. */}
       {/* Telefon: menu w dolnym pasku – górny pasek tylko na tablecie (md–lg). */}

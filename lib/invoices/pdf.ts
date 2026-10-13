@@ -166,7 +166,7 @@ export async function renderInvoicePdf(inv: InvoiceForPdf) {
 
   // Kod QR KSeF (KOD I) – tylko dla faktur przesłanych do KSeF. Paragon nie trafia do KSeF.
   if (isPar) {
-    page.drawText("Dokument sprzedaży dla osoby prywatnej (paragon) – bez danych nabywcy, nie jest przesyłany do KSeF.", { x: M, y: Math.min(y - 6, 140), size: 8, font: regular, color: grey });
+    page.drawText("Dokument sprzedaży dla osoby prywatnej (paragon).", { x: M, y: Math.min(y - 6, 140), size: 8, font: regular, color: grey });
   } else if (inv.status !== "sending" && inv.status !== "accepted") {
     page.drawText(inv.status === "cancelled" ? "FAKTURA UNIEWAŻNIONA" : "Faktura nie została jeszcze przyjęta w KSeF – to nie jest dokument do przekazania nabywcy.", { x: M, y: 140, size: 9, font: bold, color: rgb(0.7, 0.1, 0.1) });
   } else if (inv.xml_hash && inv.seller.nip) {

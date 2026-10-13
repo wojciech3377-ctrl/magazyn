@@ -29,7 +29,7 @@ export function LabelForm({ d }: { d: LabelDefaults }) {
   const locker = toPoint(service);
   const [size, setSize] = useState<string>("");
   const custom = !lockerOnly(service) && size === "custom";
-  const [notify, setNotify] = useState(false);
+  const [notify, setNotify] = useState(true);
   const [quote, setQuote] = useState<QuoteState>(null);
   const [quoting, setQuoting] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
@@ -57,7 +57,7 @@ export function LabelForm({ d }: { d: LabelDefaults }) {
       <div className="space-y-3">
         <p className="text-sm text-ok">{state.ok}{state.tracking && <> Numer przesyłki: <b className="font-mono">{state.tracking}</b></>}</p>
         {state.warning && <p className="text-sm text-warn">{state.warning}</p>}
-        <a className="btn" href={`/api/etykiety/${state.shipmentId}`} target="_blank" rel="noreferrer">Otwórz etykietę (PDF)</a>
+        <a className="btn" href={`/druk/pdf?src=${encodeURIComponent(`/api/etykiety/${state.shipmentId}`)}&nazwa=etykieta&tytul=${encodeURIComponent("Etykieta wysyłkowa")}`}>Otwórz etykietę (PDF)</a>
       </div>
     );
   }

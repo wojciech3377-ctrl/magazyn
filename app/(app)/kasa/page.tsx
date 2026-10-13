@@ -14,10 +14,13 @@ export default async function KasaPage() {
     getFiscalSettings(db),
   ]);
   const ptu = PTU_LETTERS.map((l) => ({ letter: l, label: ptuLabel(fiscal, l) }));
+  // Program drukarki co minutę zgłasza stan – dłużej niż 3 minuty cisza = komputer przy drukarce wyłączony albo program zamknięty.
+  const { data: seen } = await db.from("fiscal_printers").select("last_seen_at").eq("active", true).order("last_seen_at", { ascending: false, nullsFirst: false }).limit(1).maybeSingle();
+  const printerOnline = !!seen?.last_seen_at && Date.now() - new Date(seen.last_seen_at as string).getTime() < 3 * 60_000;
   return (
     <>
       <PageHeader title="Kasa – sprzedaż stacjonarna" sub="Skaner kodów działa jak klawiatura: kliknij w pole i skanuj etykiety po kolei. Możesz też wpisać nazwę produktu." actions={<><Link className="btn-secondary" href="/katalog?widok=wlasne">Własne produkty</Link><Link className="btn-secondary" href="/sprzedaz?widok=stacjonarna">Historia sprzedaży</Link></>} />
-      <PosForm stores={stores ?? []} printer={printer} ptu={ptu} defaultPtu={fiscal.ptu23} />
+      <PosForm stores={stores ?? []} printer={printer} printerOnline={printerOnline} ptu={ptu} defaultPtu={fiscal.ptuMargin} ptuFor={{ vat23: fiscal.ptu23, margin: fiscal.ptuMargin }} />
     </>
   );
 }

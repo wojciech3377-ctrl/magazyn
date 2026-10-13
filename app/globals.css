@@ -97,3 +97,32 @@ body { background: var(--color-canvas); color: var(--color-ink); font-feature-se
 
 /* Aplikacja na telefonie (ekran początkowy): bez podświetlenia stuknięć i z płynnym przewijaniem. */
 html { -webkit-tap-highlight-color: transparent; }
+
+/*
+ * Ekran dotykowy kasy (POS, np. 30 × 23 cm) i tablety w poziomie: aplikacja rozpoznaje dotykowy ekran
+ * (główny wskaźnik „coarse”) o szerokości komputera i sama się dopasowuje – większe litery i przyciski
+ * pod palec, menu boczne jako wąski pasek z ikonami, teksty przycisków zawijają się zamiast wychodzić poza ramkę.
+ */
+@media (pointer: coarse) and (min-width: 900px) {
+  html { font-size: 17px; }
+  .btn, .btn-secondary, .btn-ghost, .btn-danger {
+    min-height: 2.75rem; height: auto; padding-top: 0.45rem; padding-bottom: 0.45rem;
+    white-space: normal; text-align: center; line-height: 1.2;
+  }
+  .input { min-height: 2.75rem; font-size: 1rem; }
+  select.input { padding-right: 2rem; }
+  .table td, .table th { padding-top: 0.7rem; padding-bottom: 0.7rem; }
+
+  /* Menu boczne: same ikony (podpis w dymku), znaczniki liczby w rogu ikony. */
+  .app-aside { width: 5rem; }
+  .app-aside .brand-text, .app-aside .nav-group-title, .app-aside .nav-text, .app-aside .live-sync, .app-aside .user-name { display: none; }
+  .app-aside a { justify-content: center; padding-left: 0; padding-right: 0; }
+  .app-aside nav { padding-left: 0.6rem; padding-right: 0.6rem; }
+  .app-aside .nav-link { padding-top: 0.8rem; padding-bottom: 0.8rem; justify-content: center; }
+  .app-aside .nav-link svg { width: 24px; height: 24px; }
+  .app-aside .nav-badge { position: absolute; top: 0.2rem; right: 0.25rem; }
+  .app-aside .user-box { flex-direction: column; margin-left: 0.5rem; margin-right: 0.5rem; padding: 0.5rem; }
+}
+@media (pointer: coarse) and (min-width: 1024px) {
+  .app-main { margin-left: 5rem !important; }
+}

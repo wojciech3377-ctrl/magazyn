@@ -7,6 +7,8 @@ import { adjustStock } from "@/lib/stock";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { enqueuePosReceipt } from "@/lib/fiscal/jobs";
 import { errorMessage } from "@/lib/errors";
+import { createParShippingOrder, readParShipping } from "@/lib/orders/par-order";
+import { draftFromPos, issueReceipt } from "@/lib/invoices/service";
 
 export type PosUnit = {
   id: string;
@@ -19,14 +21,16 @@ export type PosUnit = {
   location: string;
   owner: string | null;
   price: number | null;
+  /** Forma sprzedaży sztuki: vat_23 (23%) albo vat_margin (marża) – domyślna stawka PTU w koszyku. */
+  purchaseForm: string;
 };
 
-const SELECT = `id, code, identifier, status, owner_type, received_at, variant_id, location_id, consignor:consignors(name),
+const SELECT = `id, code, identifier, status, owner_type, purchase_form, received_at, variant_id, location_id, consignor:consignors(name),
   location:locations(name, store_id),
   variant:variants(option, links:variant_store_links(store_id, price), product:products(title, image_url))`;
 
 type Row = {
-  id: string; code: string; identifier: string | null; status: string; owner_type: string;
+  id: string; code: string; identifier: string | null; status: string; owner_type: string; purchase_form: string;
   consignor: { name: string } | null;
   location: { name: string; store_id: string };
   variant: { option: string; links: { store_id: string; price: number | null }[]; product: { title: string; image_url: string | null } };
@@ -39,6 +43,7 @@ function toPos(r: Row, storeId: string): PosUnit {
     id: r.id, code: r.code, identifier: r.identifier, status: r.status,
     title: r.variant.product.title, option: r.variant.option, image: r.variant.product.image_url,
     location: r.location.name, owner: r.consignor?.name ?? null, price: price !== null ? Number(price) : null,
+    purchaseForm: r.purchase_form ?? "vat_margin",
   };
 }
 
@@ -184,14 +189,21 @@ export async function finishPosOrder(_: unknown, formData: FormData): Promise<{ 
   const items = JSON.parse(String(formData.get("items") ?? "[]")) as In[];
   if (!storeId) return { error: "Wybierz sklep." };
   if (!items.length) return { error: "Koszyk jest pusty." };
+  // Tryb: "1" paragon fiskalny, "pdf" paragon fiskalny + PDF, "0" bez paragonu, "ship" wysyłka (tylko paragon PDF, poza JPK).
+  const mode = String(formData.get("receipt") ?? "1");
+  const ship = mode === "ship" ? readParShipping(formData) : null;
+  if (mode === "ship" && !ship) return { error: "Zaznacz „Wysyłka” i wpisz dane odbiorcy." };
+  if (ship && "error" in ship) return { error: ship.error };
   const parsed = [];
   const num = (v: unknown) => Number(String(v ?? "").replace(/\s/g, "").replace(",", "."));
   for (const i of items) {
     const n = num(i.price);
     if (!Number.isFinite(n) || n < 0) return { error: "Podaj poprawną cenę przy każdej pozycji." };
     const price = Math.round(n * 100) / 100;
-    if (i.unit_id) parsed.push({ unit_id: i.unit_id, price });
-    else {
+    if (i.unit_id) {
+      if (i.ptu && !/^[A-F]$/.test(String(i.ptu))) return { error: "Zła stawka PTU przy sztuce." };
+      parsed.push({ unit_id: i.unit_id, price });
+    } else {
       const name = String(i.name ?? "").trim().slice(0, 120);
       const qty = num(i.quantity ?? 1);
       if (!name) return { error: "Podaj nazwę pozycji wpisanej ręcznie." };
@@ -227,15 +239,37 @@ export async function finishPosOrder(_: unknown, formData: FormData): Promise<{ 
     base_pending: failed.map(({ variantId, locationId, delta }) => ({ variantId, locationId, delta })),
   }).eq("id", orderId);
 
-  // „Zakończ i wystaw paragon”: paragon do kolejki drukarki fiskalnej (program przy drukarce drukuje go od razu).
-  if (formData.get("receipt") === "1") {
+  // Stawka PTU wybrana przy sztukach w koszyku (domyślnie: 23% → A, marża → F).
+  const admin = createAdminClient();
+  for (const i of items.filter((x) => x.unit_id && /^[A-F]$/.test(String(x.ptu ?? "")))) {
+    await admin.from("pos_order_items").update({ ptu: i.ptu }).eq("order_id", orderId).eq("unit_id", i.unit_id!);
+  }
+
+  // „Wysyłka”: bez paragonu fiskalnego – paragon PDF (PAR) i zamówienie w Sprzedaż → Zamówienia, poza JPK.
+  if (ship && !("error" in ship)) {
+    let msg = "";
     try {
-      await enqueuePosReceipt(createAdminClient(), orderId as string, profile.id);
+      const draft = await draftFromPos(admin, orderId as string);
+      if (!draft) throw new Error("Nie ma takiej sprzedaży.");
+      const row = await issueReceipt(admin, { ...draft, notes: String(formData.get("note") ?? "").trim() || null }, profile.id);
+      const r = await createParShippingOrder(admin, { receiptId: row.id, number: row.number, payment: draft.paymentMethod, items: draft.items, ship });
+      await admin.from("pos_orders").update({ note: [String(formData.get("note") ?? "").trim(), `Wysyłka – zamówienie ${row.number}`].filter(Boolean).join(" · ") }).eq("id", orderId);
+      msg = `Paragon ${row.number} (PDF) i zamówienie do wysyłki w Sprzedaż → Zamówienia – poza JPK.${r.freedContracts ? ` Umowy wróciły do niewykorzystanych: ${r.freedContracts}.` : ""}`;
+    } catch (e) {
+      redirect(`/kasa/${orderId}?blad=${encodeURIComponent(`Sprzedaż zapisana, ale paragon PDF / zamówienie nie powstały: ${errorMessage(e)}`)}`);
+    }
+    redirect(`/kasa/${orderId}?pdf=1&ok=${encodeURIComponent(msg)}`);
+  }
+
+  // „Zakończ i wystaw paragon” / „Drukuj paragon PDF”: paragon do kolejki drukarki fiskalnej (program przy drukarce drukuje go od razu).
+  if (mode === "1" || mode === "pdf") {
+    try {
+      await enqueuePosReceipt(admin, orderId as string, profile.id);
     } catch (e) {
       redirect(`/kasa/${orderId}?blad=${encodeURIComponent(`Sprzedaż zapisana, ale paragon nie trafił do drukarki: ${errorMessage(e)}`)}`);
     }
   }
-  redirect(`/kasa/${orderId}`);
+  redirect(`/kasa/${orderId}${mode === "pdf" ? "?pdf=1" : ""}`);
 }
 
 export async function retryPosBase(formData: FormData) {

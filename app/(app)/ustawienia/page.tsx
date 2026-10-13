@@ -20,6 +20,8 @@ import { ksefConfigured, ksefEnv } from "@/lib/ksef/client";
 import { sendTestMailAction, testKsefAction } from "../sprzedaz/faktury/actions";
 import { errorMessage } from "@/lib/errors";
 import { defaultOrderStore } from "@/lib/orders/default-store";
+import { getFiscalSettings } from "@/lib/fiscal/jobs";
+import { ExclusionVatSelect } from "./ExclusionVatSelect";
 
 async function safe<T>(fn: () => Promise<T>): Promise<{ data: T | null; error: string | null }> {
   try {
@@ -54,8 +56,9 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
     Promise.resolve({ data: null }),
     supabase.from("sync_log").select("*").order("created_at", { ascending: false }).limit(15),
     supabase.from("sync_state").select("value").eq("key", "initial_stock_imported").maybeSingle(),
-    supabase.from("catalog_exclusions").select("id, kind, value").order("created_at"),
+    supabase.from("catalog_exclusions").select("*").order("created_at"),
   ]);
+  const fiscalCfg = await getFiscalSettings(createAdminClient());
   const [company, buyerSignature, { data: generalLink }] = isAdmin
     ? await Promise.all([getCompany(supabase), getBuyerSignature(supabase), supabase.from("app_settings").select("value").eq("key", "general_contract_link").maybeSingle()])
     : [null, null, { data: null }];
@@ -496,14 +499,15 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
           {tab === "wykluczenia" && (
           <section className="card p-4">
             <h2 className="h2 mb-1">Wykluczenia z magazynu</h2>
-            <p className="mb-3 text-sm text-muted">Usługi i produkty, które nie są towarem na sztuki (naprawy, mystery boxy). Nie trafiają do katalogu ani do sprzedaży; ich stan zostaje tylko w Base.</p>
+            <p className="mb-3 text-sm text-muted">Usługi i produkty, które nie są towarem na sztuki (sznurówki rope, naprawy, mystery boxy). Nie trafiają do katalogu ani do sprzedaży. Na paragonie do zamówienia mają stawkę wybraną przy regule – domyślnie <b>VAT marża</b> (na drukarce stawka {fiscalCfg.ptuMargin}).</p>
             <ul className="mb-3 flex flex-wrap gap-2">
               {exclusions?.map((e) => (
-                <li key={e.id}>
-                  <form action={deleteExclusion} className="flex items-center gap-1 rounded-md border border-line py-1 pl-2.5 pr-1 text-sm">
+                <li key={e.id} className="flex items-center gap-1 rounded-md border border-line py-1 pl-2.5 pr-1 text-sm">
+                  <span className="text-muted">{e.kind === "sku_prefix" ? "SKU od:" : "nazwa zawiera:"}</span>
+                  <b>{e.value}</b>
+                  <ExclusionVatSelect id={e.id as string} vat={(e as { vat?: string }).vat === "23" ? "23" : "margin"} letters={{ margin: fiscalCfg.ptuMargin, vat23: fiscalCfg.ptuService }} />
+                  <form action={deleteExclusion}>
                     <input type="hidden" name="id" value={e.id} />
-                    <span className="text-muted">{e.kind === "sku_prefix" ? "SKU od:" : "nazwa zawiera:"}</span>
-                    <b>{e.value}</b>
                     <button className="ml-1 rounded px-1.5 text-muted hover:bg-panel hover:text-bad" aria-label={`Usuń wykluczenie ${e.value}`}>×</button>
                   </form>
                 </li>
@@ -515,7 +519,11 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
                   <option value="sku_prefix">SKU zaczyna się od</option>
                   <option value="title_contains">nazwa zawiera</option>
                 </select>
-                <input className="input w-64" name="value" placeholder="np. TF-SRV albo mystery box" aria-label="Wartość" />
+                <input className="input w-64" name="value" placeholder="np. rope albo TF-SRV" aria-label="Wartość" />
+                <select className="input w-40" name="vat" aria-label="Stawka na paragonie" defaultValue="margin">
+                  <option value="margin">VAT marża ({fiscalCfg.ptuMargin})</option>
+                  <option value="23">23% ({fiscalCfg.ptuService})</option>
+                </select>
                 <SubmitButton className="btn-secondary">Dodaj</SubmitButton>
               </form>
               <form action={purgeExcluded}>

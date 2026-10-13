@@ -4,7 +4,7 @@ import { useActionState, useEffect, useRef, useState, useTransition } from "reac
 import { SearchInput } from "@/components/SearchInput";
 import { finishPosOrder, pickUnitForVariant, scanUnit, searchCatalog, searchOwnProducts, searchUnits, type CatalogHit, type CatalogSize, type OwnProduct, type PosUnit, type ScanChoice } from "./actions";
 
-type UnitLine = PosUnit & { kind: "unit"; key: string; priceInput: string };
+type UnitLine = PosUnit & { kind: "unit"; key: string; priceInput: string; ptu: string };
 type CustomLine = { kind: "custom"; key: string; name: string; ptu: string; qtyInput: string; priceInput: string; product_id: string | null; save: boolean; note: string };
 type Line = UnitLine | CustomLine;
 type Ptu = { letter: string; label: string };
@@ -17,7 +17,17 @@ const num = (s: string) => Number(s.replace(/\s/g, "").replace(",", ".")) || 0;
  * Kasa: skan / wpisanie kodu albo nazwy (sztuki z magazynu i własne produkty), pozycje wpisane ręcznie
  * spoza magazynu (nazwa, cena, stawka PTU) – np. towar na zamówienie albo usługa.
  */
-export function PosForm({ stores, printer, ptu, defaultPtu }: { stores: { id: string; name: string }[]; printer: boolean; ptu: Ptu[]; defaultPtu: string }) {
+const SHIP_METHODS = ["Paczkomat InPost", "Kurier InPost", "Kurier DPD", "Kurier DHL", "Poczta Polska", "Inny"];
+
+export function PosForm({ stores, printer, ptu, defaultPtu, ptuFor, printerOnline }: {
+  stores: { id: string; name: string }[]; printer: boolean; ptu: Ptu[]; defaultPtu: string;
+  /** Domyślne litery PTU dla sztuk: 23% i VAT marża (Ustawienia → Drukarka fiskalna). */
+  ptuFor: { vat23: string; margin: string };
+  /** Program drukarki odezwał się w ostatnich minutach. */
+  printerOnline: boolean;
+}) {
+  const [ship, setShip] = useState(false);
+  const [shipMethod, setShipMethod] = useState(SHIP_METHODS[0]);
   const [state, action, submitting] = useActionState(finishPosOrder, null);
   const [storeId, setStoreId] = useState(stores[0]?.id ?? "");
   const [lines, setLines] = useState<Line[]>([]);
@@ -60,7 +70,7 @@ export function PosForm({ stores, printer, ptu, defaultPtu }: { stores: { id: st
 
   function addUnit(u: PosUnit) {
     if (unitIds.includes(u.id)) return setMessage({ tone: "error", text: `${u.code} jest już w koszyku.` });
-    setLines((prev) => [...prev, { ...u, kind: "unit", key: u.id, priceInput: u.price !== null ? String(u.price) : "" }]);
+    setLines((prev) => [...prev, { ...u, kind: "unit", key: u.id, priceInput: u.price !== null ? String(u.price) : "", ptu: u.purchaseForm === "vat_23" ? ptuFor.vat23 : ptuFor.margin }]);
     setMessage({ tone: "ok", text: `Dodano ${u.code} · ${u.title} ${u.option}` });
     setScan("");
     setHits(null);
@@ -142,7 +152,7 @@ export function PosForm({ stores, printer, ptu, defaultPtu }: { stores: { id: st
   const total = lines.reduce((s, l) => s + num(l.priceInput) * (l.kind === "custom" ? num(l.qtyInput) || 1 : 1), 0);
   const count = lines.reduce((s, l) => s + (l.kind === "custom" ? num(l.qtyInput) || 1 : 1), 0);
   const items = lines.map((l) => (l.kind === "unit"
-    ? { unit_id: l.id, price: l.priceInput }
+    ? { unit_id: l.id, price: l.priceInput, ptu: l.ptu }
     : { name: l.name, ptu: l.ptu, price: l.priceInput, quantity: l.qtyInput, product_id: l.product_id, save: l.save }));
   const ptuText = (letter: string) => ptu.find((p) => p.letter === letter)?.label ?? letter;
 
@@ -277,34 +287,38 @@ export function PosForm({ stores, printer, ptu, defaultPtu }: { stores: { id: st
           </div>
         </section>
 
-        <section className="card overflow-x-auto">
-          <table className="table mtable" style={{ "--m-cols": "minmax(0,1fr) 5rem 7.5rem", "--m-areas": "'name name del' 'code qty price'" } as React.CSSProperties}>
-            <thead><tr><th>Kod</th><th>Pozycja</th><th className="w-20">Ilość</th><th className="w-36">Cena (zł)</th><th /></tr></thead>
-            <tbody>
-              {lines.length === 0 && <tr><td colSpan={5} className="py-8 text-center text-muted">Zeskanuj pierwszą sztukę albo wpisz nazwę.</td></tr>}
-              {lines.map((l) => (
-                <tr key={l.key}>
+        <section className="card">
+          <div className="flex items-center justify-between border-b border-line px-4 py-2.5 text-xs font-medium uppercase tracking-wider text-muted">
+            <span>Koszyk</span><span>stawka VAT · ilość · cena</span>
+          </div>
+          {lines.length === 0 && <p className="py-8 text-center text-sm text-muted">Zeskanuj pierwszą sztukę albo wpisz nazwę.</p>}
+          <ul className="divide-y divide-line">
+            {lines.map((l) => (
+              <li key={l.key} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
+                <div className="min-w-0 flex-[1_1_14rem]">
                   {l.kind === "unit" ? (
                     <>
-                      <td className="whitespace-nowrap font-mono text-xs max-md:self-center" style={{ gridArea: "code" }}>{l.code}{l.identifier && <span className="block text-muted">{l.identifier}</span>}</td>
-                      <td style={{ gridArea: "name" }}>{l.title} · <b>{l.option}</b>{l.owner && <span className="block text-xs text-muted">komis · {l.owner}</span>}</td>
-                      <td className="text-muted max-md:self-center max-md:text-center" style={{ gridArea: "qty" }}>1 szt.</td>
+                      <div className="leading-snug">{l.title} · <b>{l.option}</b></div>
+                      <div className="font-mono text-xs text-muted">{l.code}{l.identifier ? ` · ${l.identifier}` : ""}{l.owner ? <span className="font-sans"> · komis {l.owner}</span> : null}</div>
                     </>
                   ) : (
                     <>
-                      <td className="text-xs text-muted max-md:self-center" style={{ gridArea: "code" }}>PTU {l.ptu}</td>
-                      <td style={{ gridArea: "name" }}>{l.name}<span className="block text-xs text-muted">{l.note} · {ptuText(l.ptu)}</span></td>
-                      <td style={{ gridArea: "qty" }}><input className="input tabular-nums" inputMode="decimal" value={l.qtyInput} aria-label={`Ilość ${l.name}`} onChange={(e) => setLine(l.key, { qtyInput: e.target.value })} /></td>
+                      <div className="leading-snug">{l.name}</div>
+                      <div className="text-xs text-muted">{l.note}</div>
                     </>
                   )}
-                  <td style={{ gridArea: "price" }}>
-                    <input className="input tabular-nums" inputMode="decimal" value={l.priceInput} aria-label="Cena" onChange={(e) => setLine(l.key, { priceInput: e.target.value })} />
-                  </td>
-                  <td className="max-md:text-right" style={{ gridArea: "del" }}><button type="button" className="text-sm text-bad hover:underline" onClick={() => setLines((p) => p.filter((x) => x.key !== l.key))}>Usuń</button></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                </div>
+                <div className="flex flex-[0_1_auto] items-center gap-2">
+                  <div className="w-44"><PtuSelect value={l.ptu} ptu={ptu} label={`Stawka VAT ${l.kind === "unit" ? l.code : l.name}`} onChange={(v) => setLine(l.key, { ptu: v })} /></div>
+                  {l.kind === "unit"
+                    ? <span className="w-14 text-center text-sm text-muted">1 szt.</span>
+                    : <input className="input w-14 text-center tabular-nums" inputMode="decimal" value={l.qtyInput} aria-label={`Ilość ${l.name}`} onChange={(e) => setLine(l.key, { qtyInput: e.target.value })} />}
+                  <input className="input w-24 text-right tabular-nums" inputMode="decimal" value={l.priceInput} aria-label="Cena" onChange={(e) => setLine(l.key, { priceInput: e.target.value })} />
+                  <button type="button" className="btn-ghost px-2 text-bad" onClick={() => setLines((p) => p.filter((x) => x.key !== l.key))} aria-label="Usuń z koszyka">Usuń</button>
+                </div>
+              </li>
+            ))}
+          </ul>
         </section>
       </div>
 
@@ -342,14 +356,73 @@ export function PosForm({ stores, printer, ptu, defaultPtu }: { stores: { id: st
             <span className="text-2xl font-semibold tabular-nums">{fmt(total)}</span>
           </div>
           {state?.error && <p className="text-sm text-bad">{state.error}</p>}
-          <button className="btn w-full py-3 text-base" name="receipt" value="1" disabled={submitting || !lines.length}>{submitting ? "Zapisuję…" : "Zakończ i wystaw paragon"}</button>
-          <button className="btn-ghost w-full text-xs" name="receipt" value="0" disabled={submitting || !lines.length}>Zakończ bez paragonu (np. na fakturę)</button>
+          {ship ? (
+            <>
+              <button className="btn w-full whitespace-normal py-3 text-base leading-tight" name="receipt" value="ship" disabled={submitting || !lines.length}>{submitting ? "Zapisuję…" : "Zakończ – wysyłka i paragon PDF"}</button>
+              <p className="text-xs text-muted">Bez paragonu fiskalnego. Paragon PDF otworzy się do wydruku, zamówienie pojawi się w Sprzedaż → Zamówienia.</p>
+            </>
+          ) : (
+            <>
+              <button className="btn w-full whitespace-normal py-3 text-base leading-tight" name="receipt" value="1" disabled={submitting || !lines.length}>{submitting ? "Zapisuję…" : "Zakończ i wystaw paragon"}</button>
+              <button className="btn-ghost h-auto w-full whitespace-normal py-1.5 text-xs leading-tight" name="receipt" value="0" disabled={submitting || !lines.length}>Zakończ bez paragonu (np. na fakturę)</button>
+              <button className="btn-secondary w-full whitespace-normal py-2.5 leading-tight" name="receipt" value="pdf" disabled={submitting || !lines.length}>Drukuj paragon PDF</button>
+              <p className="text-xs text-muted">„Drukuj paragon PDF” – paragon fiskalny z drukarki, a po wydruku otwiera się jego PDF z tym samym numerem.</p>
+            </>
+          )}
           <p className="text-xs text-muted">
             Sztuki z magazynu zmienią status na „sprzedana”, a stan w Shopify spadnie o 1 za każdą.{" "}
-            {printer ? "Paragon wydrukuje się od razu na drukarce fiskalnej." : "Drukarka fiskalna nie jest jeszcze podłączona (Ustawienia → Drukarka fiskalna) – paragon trafi do kolejki i wydrukuje się po podłączeniu."}
+            {!printer ? "Drukarka fiskalna nie jest jeszcze podłączona (Ustawienia → Drukarka fiskalna) – paragon trafi do kolejki i wydrukuje się po podłączeniu."
+              : printerOnline ? "Paragon wydrukuje się od razu na drukarce fiskalnej." : ""}
           </p>
+          {printer && !printerOnline && !ship && (
+            <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">Program drukarki fiskalnej nie odpowiada od kilku minut – sprawdź, czy komputer przy drukarce jest włączony. Paragon poczeka w kolejce i wydrukuje się, gdy program wróci.</p>
+          )}
+        </section>
+        <section className={`card p-4 ${ship ? "border-accent/50" : ""}`}>
+          <input type="hidden" name="ship" value={ship ? "1" : "0"} />
+          <label className="flex cursor-pointer items-start gap-3">
+            <input type="checkbox" checked={ship} onChange={(e) => setShip(e.target.checked)} className="mt-1 h-5 w-5 accent-[var(--color-accent)]" />
+            <span>
+              <span className="block font-semibold">Wysyłka</span>
+              <span className="block text-sm text-muted">Bez paragonu fiskalnego: paragon PDF i zamówienie w Sprzedaż → Zamówienia (etykieta). <b>Nie wchodzi do JPK</b>, umowy sztuk wracają do niewykorzystanych.</span>
+            </span>
+          </label>
+          {ship && (
+            <div className="mt-3 grid gap-3">
+              <div><label className="label" htmlFor="ship_store">Wysyłka ze sklepu</label>
+                <select id="ship_store" className="input" name="ship_store" value={storeId} onChange={(e) => setStoreId(e.target.value)}>{stores.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select></div>
+              <div><label className="label" htmlFor="ship_method">Sposób wysyłki</label>
+                <select id="ship_method" className="input" name="ship_method" value={shipMethod} onChange={(e) => setShipMethod(e.target.value)}>
+                  {SHIP_METHODS.map((m) => <option key={m}>{m}</option>)}
+                </select></div>
+              {/paczkomat/i.test(shipMethod) && <div><label className="label" htmlFor="ship_point">Kod paczkomatu</label><input id="ship_point" className="input font-mono uppercase" name="ship_point" placeholder="np. WAW123M" required /></div>}
+              <div><label className="label" htmlFor="ship_name">Odbiorca</label><input id="ship_name" className="input" name="ship_name" autoComplete="name" required /></div>
+              <div><label className="label" htmlFor="ship_phone">Telefon</label><input id="ship_phone" className="input" name="ship_phone" inputMode="tel" autoComplete="tel" required /></div>
+              <div><label className="label" htmlFor="ship_email">E-mail (opcjonalnie)</label><input id="ship_email" className="input" type="email" name="ship_email" autoComplete="email" /></div>
+              {!/paczkomat/i.test(shipMethod) && (
+                <>
+                  <div><label className="label" htmlFor="ship_street">Ulica i numer</label><input id="ship_street" className="input" name="ship_street" autoComplete="address-line1" required /></div>
+                  <div className="grid grid-cols-[7rem_1fr] gap-2">
+                    <div><label className="label" htmlFor="ship_zip">Kod</label><input id="ship_zip" className="input" name="ship_zip" autoComplete="postal-code" placeholder="00-000" required /></div>
+                    <div><label className="label" htmlFor="ship_city">Miasto</label><input id="ship_city" className="input" name="ship_city" autoComplete="address-level2" required /></div>
+                  </div>
+                </>
+              )}
+              <div><label className="label" htmlFor="ship_country">Kraj</label><input id="ship_country" className="input uppercase" name="ship_country" defaultValue="PL" maxLength={2} /></div>
+              <div><label className="label" htmlFor="ship_note">Uwagi do wysyłki</label><input id="ship_note" className="input" name="ship_note" /></div>
+              <button className="btn w-full whitespace-normal py-3 text-base leading-tight" name="receipt" value="ship" disabled={submitting || !lines.length}>{submitting ? "Zapisuję…" : "Zakończ – wysyłka i paragon PDF"}</button>
+            </div>
+          )}
         </section>
       </div>
     </form>
+  );
+}
+
+function PtuSelect({ value, ptu, label, onChange }: { value: string; ptu: Ptu[]; label: string; onChange: (v: string) => void }) {
+  return (
+    <select className="input py-1.5 text-sm" value={value} onChange={(e) => onChange(e.target.value)} aria-label={label}>
+      {ptu.map((p) => <option key={p.letter} value={p.letter}>{p.label}</option>)}
+    </select>
   );
 }

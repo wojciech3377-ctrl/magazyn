@@ -41,7 +41,7 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
             {isPar && <PrintPdfButton url={`/api/faktury/${inv.id}/pdf`}>Wydrukuj dokument</PrintPdfButton>}
             <a className={isPar ? "btn-secondary" : "btn"} href={`/api/faktury/${inv.id}/pdf`} target="_blank" rel="noreferrer">PDF</a>
             {!isPar && <a className="btn-secondary" href={`/api/faktury/${inv.id}/xml`}>XML</a>}
-            {inv.kind !== "correction" && <Link className="btn-secondary" href={`/sprzedaz/faktury/nowa?typ=${isPar ? "paragon" : "ksef"}&podobna=${inv.id}`}>Wystaw podobny</Link>}
+            {inv.kind !== "correction" && !isPar && <Link className="btn-secondary" href={`/sprzedaz/faktury/nowa?typ=ksef&podobna=${inv.id}`}>Wystaw podobny</Link>}
             {inv.kind !== "correction" && inv.status === "accepted" && inv.ksef_number && <Link className="btn-secondary" href={`/sprzedaz/faktury/${inv.id}/korekta`}>Wystaw korektę</Link>}
             {profile.role === "admin" && !inKsef && (
               <form action={deleteInvoiceAction}>

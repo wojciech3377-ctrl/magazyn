@@ -115,7 +115,9 @@ export async function draftFromPos(db: SupabaseClient, posOrderId: string): Prom
       }
       return {
         name: u.variant ? `${u.variant.product.title} ${u.variant.option}` : "Towar", quantity: 1, unit: "szt.",
-        unit_price_gross: Number(i.price), total_gross: Number(i.price), vat: u.purchase_form === "vat_23" ? "23" : "margin",
+        // Stawka wybrana w Kasie (np. A = 23%, F = marża); bez wyboru – wg formy sprzedaży sztuki.
+        unit_price_gross: Number(i.price), total_gross: Number(i.price),
+        vat: i.ptu ? (rateOf(fiscal, i.ptu as string) === 23 ? "23" : "margin") : u.purchase_form === "vat_23" ? "23" : "margin",
         unit_id: u.id, pos_item_id: i.id,
       } satisfies DraftItem;
     }),

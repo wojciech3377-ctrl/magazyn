@@ -44,17 +44,21 @@ if ($tryb -eq 'test') { $drukarka.tryb = 'test' }
 $ust = [ordered]@{ adres = $Szablon.Trim(); klucz = ($klucz | ConvertFrom-SecureString); drukarka = $drukarka }
 $ust | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $Cel 'config.json') -Encoding UTF8
 
-# Autostart po zalogowaniu (ukryte okno) i uruchomienie od razu.
+# Autostart po zalogowaniu (ukryte okno), uruchomienie od razu i strażnik: co 5 minut Harmonogram zadań sprawdza,
+# czy program działa – jeśli ktoś go zamknął albo się wyłączył, uruchamia go ponownie (drugiej kopii nie tworzy).
 $skrypt = Join-Path $Cel 'DrukarkaMagazyn.ps1'
 $akcja = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$skrypt`""
-$wyzwalacz = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-$opcje = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
-Register-ScheduledTask -TaskName 'Drukarka Magazyn' -Action $akcja -Trigger $wyzwalacz -Settings $opcje -Force | Out-Null
+$wyzwalacze = @(
+  (New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME),
+  (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650))
+)
+$opcje = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
+Register-ScheduledTask -TaskName 'Drukarka Magazyn' -Action $akcja -Trigger $wyzwalacze -Settings $opcje -Force | Out-Null
 Stop-ScheduledTask -TaskName 'Drukarka Magazyn' -ErrorAction SilentlyContinue
 Start-ScheduledTask -TaskName 'Drukarka Magazyn'
 
 Write-Host ''
-Write-Host "Gotowe. Program działa w tle i uruchamia się sam po zalogowaniu do Windows." -ForegroundColor Green
+Write-Host "Gotowe. Program działa w tle, uruchamia się sam po zalogowaniu do Windows i wraca sam, gdyby się zamknął." -ForegroundColor Green
 Write-Host "Folder programu i dziennik: $Cel"
 Write-Host 'W aplikacji (Ustawienia -> Drukarka fiskalna) za minutę zobaczysz, że drukarka jest połączona.'
 Read-Host 'Naciśnij Enter, aby zamknąć'

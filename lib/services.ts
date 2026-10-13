@@ -23,3 +23,24 @@ export function isExcluded(ex: Exclusions, skus: (string | null | undefined)[], 
     return !!s && ex.skuPrefixes.some((p) => s.startsWith(p));
   });
 }
+
+export type ExclusionRule = { kind: string; value: string; vat: "margin" | "23" };
+
+/** Reguły wykluczeń ze stawką na paragon (bez migracji 0045 – wszystkie jako marża). */
+export async function loadExclusionRules(db: SupabaseClient): Promise<ExclusionRule[]> {
+  let { data, error } = await db.from("catalog_exclusions").select("kind, value, vat");
+  if (error) ({ data } = await db.from("catalog_exclusions").select("kind, value"));
+  // Bez migracji 0045: jak dotąd 23%, poza regułami „rope” / „sznur” (marża).
+  return ((data ?? []) as { kind: string; value: string; vat?: string }[]).map((r) => ({
+    kind: r.kind, value: String(r.value).trim(),
+    vat: r.vat ? (r.vat === "23" ? "23" : "margin") : /rope|sznur/i.test(String(r.value)) ? "margin" : "23",
+  }));
+}
+
+/** Stawka pozycji wykluczonej z magazynu (np. sznurówki rope → marża). Bez pasującej reguły – marża. */
+export function exclusionVat(rules: ExclusionRule[], sku: string | null | undefined, title: string | null | undefined): "margin" | "23" {
+  const t = (title ?? "").toLowerCase();
+  const s = (sku ?? "").trim().toUpperCase();
+  const hit = rules.find((r) => (r.kind === "title_contains" && t.includes(r.value.toLowerCase())) || (r.kind === "sku_prefix" && !!s && s.startsWith(r.value.toUpperCase())));
+  return hit?.vat ?? "margin";
+}

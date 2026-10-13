@@ -26,6 +26,23 @@ export type ParShipping = {
   note: string | null;
 };
 
+/** Dane wysyłki z formularza (pola ship_*; opcja „Wysyłka” w Kasie). null = bez wysyłki. */
+export function readParShipping(fd: FormData): ParShipping | { error: string } | null {
+  if (fd.get("ship") !== "1") return null;
+  const v = (k: string) => String(fd.get(`ship_${k}`) ?? "").trim().slice(0, 200);
+  const ship: ParShipping = {
+    storeId: v("store"), name: v("name"), phone: v("phone"), email: v("email") || null, street: v("street"), zip: v("zip"), city: v("city"),
+    country: (v("country") || "PL").toUpperCase().slice(0, 2), method: v("method") || "Kurier", point: v("point") || null, note: v("note") || null,
+  };
+  if (!/^[0-9a-f-]{36}$/.test(ship.storeId)) return { error: "Wybierz sklep, z którego idzie wysyłka." };
+  if (!ship.name || !ship.phone) return { error: "Wysyłka: podaj odbiorcę i telefon." };
+  const locker = /paczkomat/i.test(ship.method);
+  if (locker && !ship.point) return { error: "Wysyłka do paczkomatu: podaj kod paczkomatu (np. WAW123M)." };
+  if (!locker && (!ship.street || !ship.zip || !ship.city)) return { error: "Wysyłka kurierem: podaj ulicę, kod pocztowy i miasto." };
+  if (ship.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(ship.email)) return { error: "Wysyłka: nieprawidłowy e-mail." };
+  return ship;
+}
+
 type Item = { name: string; quantity: number; unit_price_gross: number; unit_id?: string | null };
 
 export async function createParShippingOrder(

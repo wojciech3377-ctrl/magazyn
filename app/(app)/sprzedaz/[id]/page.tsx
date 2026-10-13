@@ -134,7 +134,7 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
                   {classifyShipment(s) === null && <Pill>anulowana</Pill>}
                 </div>
                 {s.state_description && <div className={classifyShipment(s) === "problem" ? "font-medium text-bad" : "text-muted"}>{s.state_description}{s.state_at ? ` · ${dateTime(s.state_at)}` : ""}</div>}
-                <a className="mt-1 inline-block text-xs text-accent hover:underline" href={`/api/etykiety/${s.id}`} target="_blank" rel="noreferrer">Etykieta PDF</a>
+                <a className="mt-1 inline-block text-xs text-accent hover:underline" href={`/druk/pdf?src=${encodeURIComponent(`/api/etykiety/${s.id}`)}&wroc=${encodeURIComponent(`/sprzedaz/${order.id}`)}&nazwa=etykieta-${s.tracking_number ?? s.id}&tytul=${encodeURIComponent(`Etykieta ${s.tracking_number ?? ""}`)}`}>Etykieta PDF</a>
               </li>
             ))}
             {fulfillments.flatMap((f) => f.trackingInfo.filter((t) => t.number && !(shipments ?? []).some((s) => s.tracking_number === t.number)).map((t) => (

@@ -8,7 +8,9 @@ DRUKARKA MAGAZYN – paragony fiskalne z aplikacji Magazyn
 4. W aplikacji (Ustawienia -> Drukarka fiskalna) po minucie zobaczysz „połączona” i stan połączenia z drukarką.
    Przycisk „Sprawdź połączenie z drukarką” wysyła zadanie testowe (bez paragonu).
 
-Program działa w tle (Harmonogram zadań Windows: „Drukarka Magazyn”) i startuje sam po zalogowaniu.
+Program działa w tle (Harmonogram zadań Windows: „Drukarka Magazyn”), startuje sam po zalogowaniu do Windows
+i co 5 minut jest sprawdzany – jeśli się zamknął, uruchamia się ponownie. Nie trzeba go włączać ręcznie.
+Wskazówka: ustaw w Windows automatyczne logowanie na komputerze przy drukarce, wtedy po włączeniu prądu wszystko startuje samo.
 Dziennik: %LOCALAPPDATA%\DrukarkaMagazyn\dziennik.txt
 Usunięcie: Odinstaluj.bat
 
