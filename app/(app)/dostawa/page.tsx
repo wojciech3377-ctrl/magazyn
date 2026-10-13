@@ -47,6 +47,8 @@ export default async function DostawaPage({ searchParams }: { searchParams: Prom
         consignors={consignors ?? []}
         contracts={(contracts ?? []).map((c) => ({ id: c.id, label: `${c.counterparty}${c.contract_date ? ` · ${dateOnly(c.contract_date)}` : ""}` }))}
         canSeePrices={profile.can_see_prices}
+        defaultConsignorId={sp.komisant && (consignors ?? []).some((c) => c.id === sp.komisant) ? sp.komisant : undefined}
+        defaultInTransit={sp.w_drodze === "1"}
       />
     </>
   );

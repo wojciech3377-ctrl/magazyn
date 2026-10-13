@@ -114,7 +114,7 @@ export async function draftFromPos(db: SupabaseClient, posOrderId: string): Prom
         return { name: (i.name as string | null) ?? "Pozycja", quantity: qty, unit: "szt.", unit_price_gross: Number(i.price), total_gross: Math.round(Number(i.price) * qty * 100) / 100, vat: is23 ? "23" : "margin", pos_item_id: i.id, checkVat: !is23 } satisfies DraftItem;
       }
       return {
-        name: u.variant ? `${u.variant.product.title} ${u.variant.option}` : "Towar", quantity: 1, unit: "szt.",
+        name: (i.name as string | null)?.trim() || (u.variant ? `${u.variant.product.title} ${u.variant.option}` : "Towar"), quantity: 1, unit: "szt.",
         // Stawka wybrana w Kasie (np. A = 23%, F = marża); bez wyboru – wg formy sprzedaży sztuki.
         unit_price_gross: Number(i.price), total_gross: Number(i.price),
         vat: i.ptu ? (rateOf(fiscal, i.ptu as string) === 23 ? "23" : "margin") : u.purchase_form === "vat_23" ? "23" : "margin",
@@ -189,7 +189,10 @@ export async function draftFromInvoice(db: SupabaseClient, invoiceId: string): P
   };
 }
 
-/** Wystawienie faktury: numer FVM/n/rok, XML FA(3) i skrót do KSeF. */
+/** Seria faktur sprzedaży: FM/kolejny/rok (od FM/113/2026 – migracja 0048). */
+export const INVOICE_SERIES = "FM";
+
+/** Wystawienie faktury: numer FM/n/rok, XML FA(3) i skrót do KSeF. */
 export async function issueInvoice(db: SupabaseClient, d: InvoiceDraft, userId: string) {
   const company = await getCompany(db);
   d = { ...d, items: d.items.map((i) => {
@@ -203,6 +206,7 @@ export async function issueInvoice(db: SupabaseClient, d: InvoiceDraft, userId: 
   const t = invoiceTotals(d.items);
   const { data, error } = await db.rpc("create_invoice", {
     p_invoice: {
+      series: INVOICE_SERIES,
       issue_date: d.issueDate, sale_date: d.saleDate, place: company.city.replace(/^\d{2}-\d{3}\s*/, "") || null, seller, buyer: d.buyer,
       currency: "PLN", payment_method: d.paymentMethod, paid: d.paid, paid_at: d.paid ? d.paidAt ?? d.issueDate : null, due_date: d.paid ? null : d.dueDate,
       total_gross: t.total, net_23: t.net23, vat_23: t.vat23, margin_total: t.margin, notes: d.notes, order_id: d.orderId, pos_order_id: d.posOrderId, created_by: userId,

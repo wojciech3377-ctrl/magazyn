@@ -5,7 +5,7 @@
 param([switch]$Raz)  # -Raz: jedno sprawdzenie kolejki i koniec (do testów)
 
 $ErrorActionPreference = 'Stop'
-$Wersja = '0.2.0'
+$Wersja = '0.3.0'
 $Folder = Split-Path -Parent $MyInvocation.MyCommand.Path
 $PlikUstawien = Join-Path $Folder 'config.json'
 $PlikDziennika = Join-Path $Folder 'dziennik.txt'
@@ -75,6 +75,8 @@ public static class ElzabSterownik {
   [DllImport(Dll, CallingConvention = CallingConvention.StdCall)] static extern int ReceiptEnd(int rabat);
   [DllImport(Dll, CallingConvention = CallingConvention.StdCall)] static extern int ReceiptCancel();
   [DllImport(Dll, CallingConvention = CallingConvention.StdCall)] static extern int ReceiptNumber(out int number);
+  [DllImport(Dll, CallingConvention = CallingConvention.StdCall)] static extern int DailyReportNumber(out int number);
+  [DllImport(Dll, CallingConvention = CallingConvention.StdCall)] static extern int ReadReceiptVisualizationLine(int fiscalReportNumber, int receiptNumber, int readFirst, byte[] buf, uint bufSize, out int isEnd);
   [DllImport(Dll, CallingConvention = CallingConvention.StdCall)] static extern int pDeviceName(byte[] name);
   [DllImport(Dll, CallingConvention = CallingConvention.StdCall)] static extern int pDllVersion(byte[] ver);
   [DllImport(Dll, CallingConvention = CallingConvention.StdCall)] static extern int pErrMessage(int number, byte[] message);
@@ -107,7 +109,22 @@ public static class ElzabSterownik {
   public static string Wersja() { byte[] b = new byte[256]; try { pDllVersion(b); } catch { } return D(b); }
   /// 0 = można wystawić paragon; inaczej kod powodu (np. brak papieru, otwarta pokrywa, zablokowana drukarka).
   public static int Warunki() { return ReceiptConditions(); }
+  /// Numer paragonu w bieżącej dobie fiskalnej (liczony od 1 po każdym raporcie dobowym).
   public static int OstatniNumer() { int n; Ok(ReceiptNumber(out n), "Odczyt numeru paragonu"); return n; }
+  public static int OstatniRaport() { int n; Ok(DailyReportNumber(out n), "Odczyt numeru raportu dobowego"); return n; }
+  /// Treść paragonu z kopii elektronicznej (linia po linii) – stąd numer wydruku, np. 000001441.
+  public static string[] Wizualizacja(int doba, int paragon) {
+    var linie = new System.Collections.Generic.List<string>();
+    for (int i = 0; i < 400; i++) {
+      byte[] b = new byte[256];
+      int koniec;
+      int kod = ReadReceiptVisualizationLine(doba, paragon, i == 0 ? 1 : 0, b, (uint)b.Length, out koniec);
+      if (kod != 0) { if (i == 0) throw new Exception("Odczyt treści paragonu: " + Opis(kod) + " (kod " + kod + ")"); break; }
+      if (koniec != 0) break;
+      linie.Add(D(b));
+    }
+    return linie.ToArray();
+  }
   public static void Otworz() { ErasePayments(); EraseLines(); Ok(ReceiptBegin(), "Otwarcie paragonu"); }
   public static void Pozycja(string nazwa, int stawka, int ilosc, int miejsca, string jedn, int cena) {
     int wartosc = 0;
@@ -203,7 +220,28 @@ function Pozycje-Elzab($zadanie) {
 
 $Platnosci = @{ card = @('Karta', 2); transfer = @('Przelew', 7); mobile = @('BLIK', 9) }
 
-# ELZAB (np. Zeta Online): paragon przez bibliotekę ElzabDR.dll. Zwraca numer paragonu z drukarki.
+# Numer wydruku z treści paragonu (9 cyfr, np. 000001441 – ten sam, co na papierze).
+# Doba fiskalna paragonu = ostatni raport dobowy + 1 (gdyby się nie udało – sam ostatni raport).
+function Numer-Wydruku([int]$paragon) {
+  $linie = @()
+  $raport = $(try { [ElzabSterownik]::OstatniRaport() } catch { $null })
+  foreach ($doba in @(($raport + 1), $raport)) {
+    if ($null -eq $doba -or $doba -le 0) { continue }
+    try { $linie = [ElzabSterownik]::Wizualizacja([int]$doba, $paragon); if ($linie.Count) { break } } catch { Zapisz-Dziennik "  treść paragonu (doba $doba): $(Tresc-Bledu $_)" }
+  }
+  $numer = $null
+  # Od końca paragonu: linia z 9-cyfrowym numerem (stopka z numerem wydruku), z pominięciem NIP / telefonu.
+  for ($i = $linie.Count - 1; $i -ge 0 -and -not $numer; $i--) {
+    $l = [string]$linie[$i]
+    if ($l -match '(?i)nip|tel') { continue }
+    $m = [regex]::Match($l, '(?<![\d,.])(\d{9})(?![\d,.])')
+    if ($m.Success) { $numer = $m.Groups[1].Value }
+  }
+  return [pscustomobject]@{ Numer = $numer; Linie = $linie }
+}
+
+# ELZAB (np. Zeta Online): paragon przez bibliotekę ElzabDR.dll. Zwraca numer wydruku z drukarki (jak na papierze)
+# i numer paragonu w dobie.
 function Drukuj-Elzab($zadanie) {
   $pozycje = Pozycje-Elzab $zadanie
   $suma = 0; foreach ($p in $pozycje) { $suma += $p.Wartosc }
@@ -222,14 +260,19 @@ function Drukuj-Elzab($zadanie) {
     [ElzabSterownik]::Zamknij()
     $otwarty = $false
     $numer = [ElzabSterownik]::OstatniNumer()
-    return "$numer"
+    $wydruk = Numer-Wydruku $numer
+    return [pscustomobject]@{ Numer = $(if ($wydruk.Numer) { $wydruk.Numer } else { "$numer" }); Doba = "$numer"; Tresc = ($wydruk.Linie -join "`n"); ZWydruku = [bool]$wydruk.Numer }
   } catch {
     $blad = Tresc-Bledu $_
     # Zabezpieczenie przed podwójnym paragonem: jeśli mimo błędu (np. zerwane połączenie przy zamknięciu)
     # numer ostatniego paragonu w drukarce wzrósł, paragon jest wydrukowany.
     if ($otwarty -and $null -ne $przed) {
       $po = $(try { [ElzabSterownik]::OstatniNumer() } catch { $null })
-      if ($null -ne $po -and $po -gt $przed) { Zapisz-Dziennik "  błąd po zamknięciu ($blad), ale drukarka ma nowy paragon nr $po"; return "$po" }
+      if ($null -ne $po -and $po -gt $przed) {
+        Zapisz-Dziennik "  błąd po zamknięciu ($blad), ale drukarka ma nowy paragon nr $po"
+        $wydruk = $(try { Numer-Wydruku $po } catch { [pscustomobject]@{ Numer = $null; Linie = @() } })
+        return [pscustomobject]@{ Numer = $(if ($wydruk.Numer) { $wydruk.Numer } else { "$po" }); Doba = "$po"; Tresc = ($wydruk.Linie -join "`n"); ZWydruku = [bool]$wydruk.Numer }
+      }
     }
     if ($otwarty) { [ElzabSterownik]::Anuluj() }
     throw $blad
@@ -268,9 +311,10 @@ while ($true) {
           $wynik = Sprawdz-Polaczenie
           $null = Wywolaj-Api 'POST' "/api/drukarka/zadanie/$($zadanie.id)" @{ ok = $true; number = $wynik }
         } else {
-          $numer = Drukuj-Paragon $zadanie
-          $null = Wywolaj-Api 'POST' "/api/drukarka/zadanie/$($zadanie.id)" @{ ok = $true; number = "$numer" }
-          Zapisz-Dziennik "  wydrukowany, nr $numer"
+          $w = Drukuj-Paragon $zadanie
+          $null = Wywolaj-Api 'POST' "/api/drukarka/zadanie/$($zadanie.id)" @{ ok = $true; number = "$($w.Numer)"; daily = "$($w.Doba)"; printout = [bool]$w.ZWydruku; text = "$($w.Tresc)" }
+          Zapisz-Dziennik "  wydrukowany, nr $($w.Numer) (w dobie: $($w.Doba))"
+          if (-not $w.ZWydruku) { Zapisz-Dziennik "  UWAGA: nie odczytano numeru wydruku z treści paragonu – wysłano numer w dobie. Treść: $($w.Tresc)" }
         }
       } catch {
         $blad = Tresc-Bledu $_

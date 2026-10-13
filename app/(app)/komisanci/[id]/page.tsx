@@ -8,6 +8,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { consignorBalance, consignorUnits, SHIPMENT_METHOD, SHIPMENT_STATUS, type Consignor, type ConsignorShipment } from "@/lib/consignment";
 import { addPayout, createConsignorAccount, deleteConsignor, deletePayout, openLabel, processShipment, removeConsignorAccount, resetConsignorPassword, saveConsignor, toggleUnitPaid } from "../actions";
 import { ConfirmSubmit } from "@/components/ConfirmSubmit";
+import { AddUnits } from "./AddUnits";
 
 export default async function ConsignorPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<Record<string, string | undefined>> }) {
   const { id } = await params;
@@ -98,6 +99,8 @@ export default async function ConsignorPage({ params, searchParams }: { params: 
           </tbody>
         </table>
       </section>
+
+      <AddUnits consignorId={id} prices={prices} />
 
       <div className="grid gap-5 lg:grid-cols-3">
         <section className="card min-w-0 overflow-x-auto lg:col-span-2">

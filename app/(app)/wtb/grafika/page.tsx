@@ -4,7 +4,7 @@ import { PageHeader } from "@/components/ui";
 import { wtbPages } from "@/lib/wtb";
 import { groupWtb } from "@/lib/wtb-group";
 
-/** Podgląd grafik WTB (po maks. 16 par na grafikę) z przyciskami pobierania. */
+/** Podgląd grafik WTB (po maks. 30 modeli na grafikę) z przyciskami pobierania. */
 export default async function WtbGrafikaPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const sp = await searchParams;
   const { supabase } = await requireProfile();

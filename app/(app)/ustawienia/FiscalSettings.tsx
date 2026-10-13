@@ -5,10 +5,10 @@ import { Notice, Pill } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
 import { ConfirmSubmit } from "@/components/ConfirmSubmit";
 import { AddPrinterForm, RegenerateKeyForm } from "./PrinterKeyForms";
-import { deletePrinter, saveFiscalSettings, testPrinter, togglePrinter } from "./fiscal-actions";
+import { deletePrinter, fixReceiptNumber, saveFiscalSettings, testPrinter, togglePrinter } from "./fiscal-actions";
 
-/** Wersja programu „Drukarka Magazyn” w agent/drukarka (0.2.0: sterownik ELZAB). */
-const AGENT_VERSION = "0.2.0";
+/** Wersja programu „Drukarka Magazyn” w agent/drukarka (0.3.0: numer wydruku z treści paragonu). */
+const AGENT_VERSION = "0.3.0";
 
 type Printer = { id: string; name: string; active: boolean; last_seen_at: string | null; last_status: Record<string, string> | null; created_at: string };
 type Job = { id: string; number: number; source: string; status: string; total: number; receipt_number: string | null; error: string | null; created_at: string; pos_order_id: string | null; order_id: string | null; printer: { name: string } | null };
@@ -116,7 +116,17 @@ export async function FiscalSettings() {
                     <td className="whitespace-nowrap text-sm text-muted">{dateTime(j.created_at)}</td>
                     <td className="text-sm">{j.source === "test" ? "test połączenia" : j.pos_order_id ? <a className="text-accent hover:underline" href={`/kasa/${j.pos_order_id}`}>Kasa</a> : j.order_id ? <a className="text-accent hover:underline" href={`/sprzedaz/${j.order_id}`}>zamówienie</a> : "–"}</td>
                     <td className="text-right tabular-nums">{j.source === "test" ? "–" : money(j.total)}</td>
-                    <td className="text-sm"><Pill tone={st.tone}>{st.text}</Pill>{j.receipt_number && <span className="ml-1 font-mono text-xs">{j.receipt_number}</span>}{j.error && <span className="block max-w-md text-xs text-bad">{j.error}</span>}</td>
+                    <td className="text-sm">
+                      <Pill tone={st.tone}>{st.text}</Pill>
+                      {j.status === "printed" && j.source !== "test" ? (
+                        <form action={fixReceiptNumber} className="mt-1 flex items-center gap-1" title="Numer jak na papierze (numer wydruku). Popraw, jeśli się różni.">
+                          <input type="hidden" name="id" value={j.id} />
+                          <input name="number" defaultValue={j.receipt_number ?? ""} className="input h-7 w-32 py-0 font-mono text-xs" aria-label="Numer paragonu" inputMode="numeric" />
+                          <button className="text-xs text-accent hover:underline">popraw</button>
+                        </form>
+                      ) : j.receipt_number && <span className="ml-1 font-mono text-xs">{j.receipt_number}</span>}
+                      {j.error && <span className="block max-w-md text-xs text-bad">{j.error}</span>}
+                    </td>
                     <td className="text-sm text-muted">{j.printer?.name ?? "–"}</td>
                   </tr>
                 );

@@ -201,7 +201,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
       </ListToolbar>
 
       <Pagination page={page} total={count ?? 0} perPage={PER_PAGE} params={listParams} top />
-      <div className="card overflow-x-auto lg:overflow-visible">
+      <div className="card overflow-x-auto 2xl:overflow-visible">
         <table className="table mtable" style={{ "--m-areas": "'order pay' 'date status' 'prod prod' 'ship ship' 'act act'" } as React.CSSProperties}>
           <thead><tr><th>Data</th><th>Zamówienie</th><th>Produkty</th><th>Wysyłka</th><th>Płatność</th><th>Status</th><th /></tr></thead>
           <tbody>

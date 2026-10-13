@@ -11,15 +11,16 @@ type Contract = { id: string; label: string };
 type Line = { key: string; variantId: string; title: string; option: string; baseLinked: boolean; quantity: number; price: string; payout: string; identifiers: string };
 
 export function DeliveryForm({
-  stores, locations, consignors, contracts, canSeePrices,
-}: { stores: Option[]; locations: Loc[]; consignors: Option[]; contracts: Contract[]; canSeePrices: boolean }) {
+  stores, locations, consignors, contracts, canSeePrices, defaultConsignorId, defaultInTransit = false,
+}: { stores: Option[]; locations: Loc[]; consignors: Option[]; contracts: Contract[]; canSeePrices: boolean; defaultConsignorId?: string; defaultInTransit?: boolean }) {
   const [state, action, submitting] = useActionState(createDelivery, null);
   const [storeId, setStoreId] = useState(stores[0]?.id ?? "");
   const storeLocations = useMemo(() => locations.filter((l) => l.store_id === storeId), [locations, storeId]);
   const [locationId, setLocationId] = useState(storeLocations[0]?.id ?? "");
-  const [ownerType, setOwnerType] = useState<"own" | "consignment">("own");
+  // Z profilu komisanta („Przyjmij nowe rzeczy”): od razu komis tego komisanta.
+  const [ownerType, setOwnerType] = useState<"own" | "consignment">(defaultConsignorId ? "consignment" : "own");
   const [contractMode, setContractMode] = useState<"none" | "existing" | "new">("none");
-  const [inTransit, setInTransit] = useState(false);
+  const [inTransit, setInTransit] = useState(defaultInTransit);
   const [lines, setLines] = useState<Line[]>([]);
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<VariantHit[]>([]);
@@ -193,7 +194,7 @@ export function DeliveryForm({
           {ownerType === "consignment" && (
             <div>
               <label className="label" htmlFor="consignor_id">Komisant</label>
-              <select className="input" id="consignor_id" name="consignor_id" defaultValue="">
+              <select className="input" id="consignor_id" name="consignor_id" defaultValue={defaultConsignorId ?? ""}>
                 <option value="">Wybierz…</option>
                 {consignors.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>

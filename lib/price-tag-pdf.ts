@@ -93,7 +93,8 @@ function roundRect(page: PDFPage, x: number, y: number, w: number, h: number, r:
 }
 
 /**
- * Metka 57 × 32 mm: czarny pasek z nazwą sklepu (Sneakers Depot / Telefoniki), nazwa produktu, cena (Telefoniki: z ramką wariantu),
+ * Metka 57 × 32 mm: czarny pasek z nazwą sklepu (Sneakers Depot / Telefoniki), nazwa produktu, cena z ramką rozmiaru
+ * (metka produktu – bez rozmiaru, z napisem „Zeskanuj – dostępne rozmiary”),
  * informacja Omnibus, IMEI telefonu (gdy jest) i kod kreskowy sztuki z numerem pod spodem.
  */
 export async function renderPriceTags(tags: PriceTag[]) {
@@ -125,8 +126,8 @@ export async function renderPriceTags(tags: PriceTag[]) {
       page.drawText(line, { x: PAD_X, y, size: 7, font: bold });
     }
 
-    // Cena + (tylko Telefoniki) ramka z wariantem po prawej. Sneakers Depot: bez rozmiaru na metce.
-    const withBox = /telefon/i.test(t.storeName ?? "");
+    // Cena + ramka z rozmiarem / wariantem po prawej. Metka produktu (Stan produktu + metka): bez rozmiaru.
+    const withBox = !t.productTag;
     const sizeVal = t.option || "–";
     const sv = fitSize(bold, sizeVal, 9.5, 18 * MM, 6);
     const boxW = withBox ? Math.max(9.5 * MM, bold.widthOfTextAtSize(sizeVal, sv) + 3.2 * MM) : 0;
@@ -156,7 +157,7 @@ export async function renderPriceTags(tags: PriceTag[]) {
       const boxX = W - PAD_X - boxW;
       const boxY = Math.min(blockTop - boxH, y - 1.6);
       roundRect(page, boxX, boxY, boxW, boxH, 1.6 * MM / 1.2, { border: 0.8 });
-      // Telefony: wariant (128GB, Midnight); gdyby trafił się rozmiar liczbowy – „ROZMIAR”.
+      // Buty: rozmiar (42, 44.5, 44 2/3); telefony i reszta: wariant (128GB, Midnight).
       const lab = /^\d{1,2}([.,]\d|\s?\d\/\d)?$/.test(sizeVal.trim()) ? "ROZMIAR" : "WARIANT";
       const labW = spaced(null, lab, 0, 0, 3.7, regular, 0.35);
       spaced(page, lab, boxX + (boxW - labW) / 2, boxY + boxH - 5.4, 3.7, regular, 0.35);
@@ -169,6 +170,14 @@ export async function renderPriceTags(tags: PriceTag[]) {
     const lsz = fitSize(regular, low, 5.2, inner, 4.2);
     y -= lsz + 1.3;
     page.drawText(low, { x: PAD_X, y, size: lsz, font: regular });
+
+    // Metka produktu: podpowiedź nad kodem – po zeskanowaniu aplikacja pokazuje dostępne rozmiary.
+    if (t.productTag) {
+      const hint = "Zeskanuj kod – dostępne rozmiary";
+      const hs = fitSize(bold, hint, 5.6, inner, 4.4);
+      y -= hs + 1.6;
+      page.drawText(hint, { x: PAD_X, y, size: hs, font: bold });
+    }
 
     // IMEI telefonu (Telefoniki) – numer sztuki zapisany przy przyjęciu.
     const imei = (t.identifier ?? "").trim();

@@ -1,5 +1,7 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { requireProfile } from "@/lib/auth";
+import { parseProductTagCode } from "@/lib/price-tag-code";
 import { queryUnits, UNIT_SORTS, type UnitFilters, type UnitRow } from "@/lib/queries/units";
 import { money, dateOnly, OWNER_TYPE, PURCHASE_FORM, UNIT_STATUS } from "@/lib/labels";
 import { Notice, PageHeader, Pagination, Pill, StatusBadge, Thumb } from "@/components/ui";
@@ -53,6 +55,8 @@ const MAGAZYN_STATUSES = ["in_stock", "reserved", "in_transit", "consignor_hold"
 export default async function MagazynPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const sp = await searchParams;
   const { supabase, profile } = await requireProfile();
+  // Zeskanowany kod z metki produktu (PR000123) – od razu stan produktu i dostępne rozmiary.
+  if (sp.q && parseProductTagCode(sp.q) !== null) redirect(`/magazyn/produkt/${encodeURIComponent(sp.q.trim().toUpperCase())}`);
   const page = Math.max(1, Number(sp.strona ?? 1));
   const filters: UnitFilters = {
     q: sp.q, sklep: sp.sklep, lokalizacja: sp.lokalizacja, status: MAGAZYN_STATUSES.includes(sp.status ?? "") ? sp.status : undefined, umowa: sp.umowa, wlasciciel: sp.wlasciciel, komisant: sp.komisant,
@@ -134,6 +138,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
           <>
             {profile.role === "admin" && <form action={runAutoCatalogNow}><SubmitButton className="btn-secondary" pendingText="Sprawdzam…">Sprawdź nowe produkty i stany</SubmitButton></form>}
             {profile.role === "admin" && filters.q && <Link className="btn-secondary" href={`/ustawienia?zakladka=stany&sprawdz=${encodeURIComponent(filters.q)}#sprawdz`}>Porównaj „{filters.q.slice(0, 20)}” ze Shopify</Link>}
+            <Link className="btn" href="/magazyn/produkty">Stan produktu + metka</Link>
             <Link className="btn-secondary" href="/magazyn/przesuniecie">Wyślij na inny magazyn</Link>
             <Link className="btn-secondary" href="/magazyn/inwentaryzacja">Inwentaryzacja</Link>
             <Link className="btn-secondary" href="/magazyn/historia">Historia</Link>

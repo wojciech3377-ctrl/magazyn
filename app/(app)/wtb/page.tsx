@@ -34,7 +34,7 @@ export default async function WtbPage({ searchParams }: { searchParams: Promise<
     <>
       <PageHeader
         title="WTB – szukamy"
-        sub="Buty, które chcemy odkupić – jeden model na karcie z rozmiarami pod spodem. Zaznacz model albo pojedyncze rozmiary i zrób grafikę „SNEAKERS DEPOT WTB” (do 16 modeli na jednej grafice)."
+        sub="Buty, które chcemy odkupić – jeden model na karcie z rozmiarami pod spodem. Zaznacz model albo pojedyncze rozmiary i zrób grafikę „SNEAKERS DEPOT WTB” (do 30 modeli na jednej grafice)."
         actions={active && items?.length ? <Link className="btn" href="/wtb/grafika">Grafika z całej listy ({groups.length} {groups.length === 1 ? "model" : "modeli"})</Link> : null}
       />
       {sp.ok && <div className="mb-4"><Notice tone="ok">{sp.ok}</Notice></div>}
@@ -45,7 +45,7 @@ export default async function WtbPage({ searchParams }: { searchParams: Promise<
           <WtbAdd />
           {!!items?.length && (
             <Link href="/wtb/grafika" className="group block rounded-lg border border-line bg-white p-2 transition hover:border-accent hover:shadow-md" title="Podgląd grafiki z całej listy">
-              <span className="mb-1 block text-xs font-medium text-muted group-hover:text-accent">Podgląd grafiki z całej listy{groups.length > 16 ? " (pierwsza z kilku)" : ""} →</span>
+              <span className="mb-1 block text-xs font-medium text-muted group-hover:text-accent">Podgląd grafiki z całej listy{groups.length > 30 ? " (pierwsza z kilku)" : ""} →</span>
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={`/api/wtb?strona=1&v=${version}`} alt="Podgląd grafiki WTB" className="w-full rounded" loading="lazy" />
             </Link>

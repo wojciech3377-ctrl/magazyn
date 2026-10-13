@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { CollapsibleFilters } from "@/components/CollapsibleFilters";
 import { requireProfile } from "@/lib/auth";
 import { loadJpkLines, sortBy, type DocKind, type JpkSort } from "@/lib/jpk";
 import { attachContractForPiece, deletePosOrder } from "./actions";
@@ -62,6 +63,7 @@ export async function Jpk({ sp }: { sp: Record<string, string | undefined> }) {
 
   return (
     <>
+      <CollapsibleFilters summary={<>{range.label} · {KINDS.find((k) => k.key === kind)?.label ?? ""}</>}>
       <form method="get" className="mb-3 flex flex-wrap items-end gap-2">
         <input type="hidden" name="widok" value="jpk" />
         <div>
@@ -99,6 +101,7 @@ export async function Jpk({ sp }: { sp: Record<string, string | undefined> }) {
         </form>
         <span className="text-xs text-muted sm:ml-auto">Paragony z drukarki fiskalnej i faktury wysłane do KSeF.</span>
       </div>
+      </CollapsibleFilters>
       {error && <div className="mb-4"><Notice tone="error">{error}</Notice></div>}
       {kind === "none" && <div className="mb-4"><Notice>Sprzedaże ({range.label}), do których nie ma jeszcze paragonu ani faktury w KSeF – nie wchodzą do JPK, dopóki nie wystawisz dokumentu.</Notice></div>}
 
@@ -172,7 +175,7 @@ export async function Jpk({ sp }: { sp: Record<string, string | undefined> }) {
   );
 }
 
-/** Zakładka Faktury: lista faktur (FVM/n/rok) ze statusem KSeF. */
+/** Zakładka Faktury: lista faktur (FM/n/rok) ze statusem KSeF. */
 export async function Invoices({ sp }: { sp: Record<string, string | undefined> }) {
   const { supabase } = await requireProfile();
   const status = sp.ksef ?? "";
@@ -193,7 +196,7 @@ export async function Invoices({ sp }: { sp: Record<string, string | undefined> 
           </select>
           <button className="btn-secondary">Pokaż</button>
         </form>
-        <Link className="btn ml-auto" href="/sprzedaz/faktury/nowa">Nowa faktura / paragon</Link>
+        <Link className="btn ml-auto" href="/sprzedaz/faktury/nowa?typ=ksef">Nowa faktura</Link>
       </div>
       <div className="card overflow-x-auto">
         <table className="table mtable mtable-flow">

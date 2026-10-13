@@ -213,7 +213,7 @@ async function docsFor(db: SupabaseClient, orders: Order[], posIds: string[]) {
   const better = (cur: Receipt | undefined, r: Receipt) => !cur || (cur.source === "base" && r.source !== "base");
   for (const r of rb) if (r.base_order_id && better(byBase.get(Number(r.base_order_id)), r)) byBase.set(Number(r.base_order_id), r);
   for (const r of rp) if (r.pos_order_id && better(byPos.get(r.pos_order_id), r)) byPos.set(r.pos_order_id, r);
-  // Paragony PAR (z modułu faktur, bez KSeF) nie trafiają do JPK – liczą się faktury FVM (KSeF) i paragony z kasy / Base.
+  // Paragony PAR (z modułu faktur, bez KSeF) nie trafiają do JPK – liczą się faktury FM (KSeF) i paragony z kasy / Base.
   const invByOrder = new Map(ib.map((i) => [i.order_id as string, i]));
   const invByPos = new Map(ip.map((i) => [i.pos_order_id as string, i]));
   return {

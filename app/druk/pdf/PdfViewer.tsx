@@ -6,7 +6,7 @@ import { printPdf } from "@/components/PrintPdf";
 const isIos = () =>
   typeof navigator !== "undefined" && (/iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1));
 
-export function PdfViewer({ src, back, name, title }: { src: string; back: string; name: string; title: string }) {
+export function PdfViewer({ src, back, next, nextLabel, name, title }: { src: string; back: string; next?: string | null; nextLabel?: string; name: string; title: string }) {
   const [file, setFile] = useState<{ url: string; blob: File } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [canShare, setCanShare] = useState(false);
@@ -39,10 +39,7 @@ export function PdfViewer({ src, back, name, title }: { src: string; back: strin
       // zamknięte okno udostępniania – nic nie robimy
     }
   };
-  const goBack = () => {
-    if (window.history.length > 1) window.history.back();
-    else window.location.href = back;
-  };
+  const goBack = () => { window.location.href = back; };
 
   return (
     <div className="fixed inset-0 flex flex-col bg-slate-100">
@@ -63,6 +60,7 @@ export function PdfViewer({ src, back, name, title }: { src: string; back: strin
             <a className="btn-secondary" href={file.url} download={name}>Pobierz</a>
           </>
         )}
+        {next && <a className="btn bg-emerald-600 hover:bg-emerald-700" href={next}>{nextLabel ?? "Dalej"} →</a>}
       </div>
       {error ? (
         <p className="m-4 rounded-lg bg-red-50 p-3 text-sm text-bad">Nie udało się otworzyć dokumentu: {error}</p>

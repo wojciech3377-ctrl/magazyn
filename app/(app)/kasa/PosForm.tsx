@@ -2,9 +2,10 @@
 
 import { useActionState, useEffect, useRef, useState, useTransition } from "react";
 import { SearchInput } from "@/components/SearchInput";
+import { FISCAL_NAME_MAX, receiptName } from "@/lib/fiscal/name";
 import { finishPosOrder, pickUnitForVariant, scanUnit, searchCatalog, searchOwnProducts, searchUnits, type CatalogHit, type CatalogSize, type OwnProduct, type PosUnit, type ScanChoice } from "./actions";
 
-type UnitLine = PosUnit & { kind: "unit"; key: string; priceInput: string; ptu: string };
+type UnitLine = PosUnit & { kind: "unit"; key: string; priceInput: string; ptu: string; label: string };
 type CustomLine = { kind: "custom"; key: string; name: string; ptu: string; qtyInput: string; priceInput: string; product_id: string | null; save: boolean; note: string };
 type Line = UnitLine | CustomLine;
 type Ptu = { letter: string; label: string };
@@ -70,7 +71,7 @@ export function PosForm({ stores, printer, ptu, defaultPtu, ptuFor, printerOnlin
 
   function addUnit(u: PosUnit) {
     if (unitIds.includes(u.id)) return setMessage({ tone: "error", text: `${u.code} jest już w koszyku.` });
-    setLines((prev) => [...prev, { ...u, kind: "unit", key: u.id, priceInput: u.price !== null ? String(u.price) : "", ptu: u.purchaseForm === "vat_23" ? ptuFor.vat23 : ptuFor.margin }]);
+    setLines((prev) => [...prev, { ...u, kind: "unit", key: u.id, priceInput: u.price !== null ? String(u.price) : "", ptu: u.purchaseForm === "vat_23" ? ptuFor.vat23 : ptuFor.margin, label: receiptName(u.title, u.option) }]);
     setMessage({ tone: "ok", text: `Dodano ${u.code} · ${u.title} ${u.option}` });
     setScan("");
     setHits(null);
@@ -152,7 +153,7 @@ export function PosForm({ stores, printer, ptu, defaultPtu, ptuFor, printerOnlin
   const total = lines.reduce((s, l) => s + num(l.priceInput) * (l.kind === "custom" ? num(l.qtyInput) || 1 : 1), 0);
   const count = lines.reduce((s, l) => s + (l.kind === "custom" ? num(l.qtyInput) || 1 : 1), 0);
   const items = lines.map((l) => (l.kind === "unit"
-    ? { unit_id: l.id, price: l.priceInput, ptu: l.ptu }
+    ? { unit_id: l.id, price: l.priceInput, ptu: l.ptu, ...(l.label.trim() && l.label.trim() !== receiptName(l.title, l.option) ? { name: l.label.trim() } : {}) }
     : { name: l.name, ptu: l.ptu, price: l.priceInput, quantity: l.qtyInput, product_id: l.product_id, save: l.save }));
   const ptuText = (letter: string) => ptu.find((p) => p.letter === letter)?.label ?? letter;
 
@@ -197,7 +198,7 @@ export function PosForm({ stores, printer, ptu, defaultPtu, ptuFor, printerOnlin
               {hits.own.map((p) => (
                 <li key={p.id} className="flex items-center gap-3 px-3 py-2">
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate font-medium">{p.name}</span>
+                    <span className="block font-medium leading-snug">{p.name}</span>
                     <span className="text-xs text-muted">własny produkt · PTU {ptuText(p.ptu)}{p.track_stock ? ` · stan ${p.stock}` : " · bez stanu"}</span>
                   </span>
                   <span className="tabular-nums">{p.price !== null ? fmt(p.price) : "–"}</span>
@@ -207,7 +208,7 @@ export function PosForm({ stores, printer, ptu, defaultPtu, ptuFor, printerOnlin
               {hits.units.map((u) => (
                 <li key={u.id} className="flex items-center gap-3 px-3 py-2">
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate font-medium">{u.title} · {u.option}</span>
+                    <span className="block font-medium leading-snug">{u.title} · {u.option}</span>
                     <span className="text-xs text-muted">{u.code}{u.identifier ? ` · ${u.identifier}` : ""} · {u.location}{u.owner ? ` · komis ${u.owner}` : ""}</span>
                   </span>
                   <span className="tabular-nums">{u.price !== null ? fmt(u.price) : "–"}</span>
@@ -295,16 +296,22 @@ export function PosForm({ stores, printer, ptu, defaultPtu, ptuFor, printerOnlin
           <ul className="divide-y divide-line">
             {lines.map((l) => (
               <li key={l.key} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
-                <div className="min-w-0 flex-[1_1_14rem]">
+                <div className="min-w-0 flex-[1_1_16rem]">
+                  {/* Nazwa na paragonie – można ją zmienić (drukarka fiskalna przyjmuje do 40 znaków; rozmiar zostaje na końcu). */}
                   {l.kind === "unit" ? (
                     <>
-                      <div className="leading-snug">{l.title} · <b>{l.option}</b></div>
-                      <div className="font-mono text-xs text-muted">{l.code}{l.identifier ? ` · ${l.identifier}` : ""}{l.owner ? <span className="font-sans"> · komis {l.owner}</span> : null}</div>
+                      <input className="input py-1.5 font-medium" value={l.label} maxLength={FISCAL_NAME_MAX} aria-label={`Nazwa na paragonie ${l.code}`}
+                        onChange={(e) => setLine(l.key, { label: e.target.value })} />
+                      <div className="mt-0.5 text-xs text-muted">
+                        <span className="font-mono">{l.code}</span>{l.identifier ? ` · ${l.identifier}` : ""} · {l.title} · <b>{l.option}</b>{l.owner ? ` · komis ${l.owner}` : ""}
+                        <span className="ml-1 tabular-nums">({l.label.length}/{FISCAL_NAME_MAX})</span>
+                      </div>
                     </>
                   ) : (
                     <>
-                      <div className="leading-snug">{l.name}</div>
-                      <div className="text-xs text-muted">{l.note}</div>
+                      <input className="input py-1.5 font-medium" value={l.name} maxLength={120} aria-label="Nazwa na paragonie"
+                        onChange={(e) => setLine(l.key, { name: e.target.value })} />
+                      <div className="mt-0.5 text-xs text-muted">{l.note}{l.name.length > FISCAL_NAME_MAX && <span className="text-warn"> · na paragonie {FISCAL_NAME_MAX} znaków</span>}</div>
                     </>
                   )}
                 </div>

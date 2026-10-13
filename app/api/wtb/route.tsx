@@ -8,7 +8,7 @@ export const maxDuration = 60;
 
 const UUID = /^[0-9a-f-]{36}$/i;
 
-/** Grafika WTB z wybranych pozycji (ids=…) albo całej aktywnej listy; strona=N przy więcej niż 16 modelach. */
+/** Grafika WTB z wybranych pozycji (ids=…) albo całej aktywnej listy; strona=N przy więcej niż 30 modelach. */
 export async function GET(req: NextRequest) {
   const { supabase } = await requireProfile();
   const sp = req.nextUrl.searchParams;

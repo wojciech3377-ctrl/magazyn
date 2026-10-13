@@ -12,7 +12,7 @@ export function ReceiptPdfButton({ posOrderId, ready: initialReady, jobId, auto 
   const router = useRouter();
   const [ready, setReady] = useState(initialReady);
   const [failed, setFailed] = useState(false);
-  const href = `/druk/pdf?src=${encodeURIComponent(`/api/kasa/${posOrderId}/paragon`)}&wroc=${encodeURIComponent(`/kasa/${posOrderId}`)}&nazwa=paragon&tytul=${encodeURIComponent("Paragon")}`;
+  const href = `/druk/pdf?src=${encodeURIComponent(`/api/kasa/${posOrderId}/paragon`)}&wroc=${encodeURIComponent(`/kasa/${posOrderId}`)}&dalej=${encodeURIComponent("/kasa")}&dalej_tekst=${encodeURIComponent("Nowa sprzedaż")}&nazwa=paragon&tytul=${encodeURIComponent("Paragon")}`;
 
   useEffect(() => {
     if (ready || !jobId) return;

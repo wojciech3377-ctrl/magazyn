@@ -7,6 +7,7 @@ import { adjustStock } from "@/lib/stock";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { enqueuePosReceipt } from "@/lib/fiscal/jobs";
 import { errorMessage } from "@/lib/errors";
+import { parseProductTagCode } from "@/lib/price-tag-code";
 import { createParShippingOrder, readParShipping } from "@/lib/orders/par-order";
 import { draftFromPos, issueReceipt } from "@/lib/invoices/service";
 
@@ -141,6 +142,17 @@ export async function scanUnit(code: string, storeId: string, exclude: string[] 
   const c = raw.toUpperCase().replace(/[^A-Z0-9_./-]/g, "");
   if (!c) return { error: "Pusty kod." };
 
+  // 0. Metka produktu (PR000123): wybór rozmiaru tego produktu.
+  const tagNo = parseProductTagCode(c);
+  if (tagNo !== null) {
+    const { data: prod } = await supabase.from("products").select("id").eq("tag_no", tagNo).maybeSingle();
+    if (!prod) return { error: `Nie ma produktu o kodzie ${c}.` };
+    const { data: vs } = await supabase.from("variants").select("id").eq("product_id", prod.id);
+    const ids = (vs ?? []).map((v) => v.id as string);
+    if (ids.length === 1) return pickUnitForVariant(ids[0], storeId, exclude);
+    return variantChoices(supabase, ids);
+  }
+
   // 1. Konkretna sztuka: kod z etykiety albo IMEI.
   const { data } = await supabase.from("units").select(SELECT).or(`code.eq.${c},identifier.eq.${c}`).limit(5);
   const rows = (data ?? []) as unknown as Row[];
@@ -158,6 +170,10 @@ export async function scanUnit(code: string, storeId: string, exclude: string[] 
   if (variantIds.length === 1) return pickUnitForVariant(variantIds[0], storeId, exclude);
 
   // Kilka rozmiarów (SKU modelu ze Shopify) – pokazujemy rozmiary z sztukami na stanie.
+  return variantChoices(supabase, variantIds);
+}
+
+async function variantChoices(supabase: Awaited<ReturnType<typeof requireSection>>["supabase"], variantIds: string[]): Promise<{ choices?: ScanChoice[]; error?: string }> {
   const { data: variants } = await supabase.from("variants").select("id, option, product:products(title)").in("id", variantIds.slice(0, 100));
   const { data: stock } = await supabase.from("variant_stock_totals").select("variant_id, in_stock").in("variant_id", variantIds.slice(0, 100));
   const counts = new Map((stock ?? []).map((s) => [s.variant_id as string, Number(s.in_stock)]));
@@ -241,8 +257,12 @@ export async function finishPosOrder(_: unknown, formData: FormData): Promise<{ 
 
   // Stawka PTU wybrana przy sztukach w koszyku (domyślnie: 23% → A, marża → F).
   const admin = createAdminClient();
-  for (const i of items.filter((x) => x.unit_id && /^[A-F]$/.test(String(x.ptu ?? "")))) {
-    await admin.from("pos_order_items").update({ ptu: i.ptu }).eq("order_id", orderId).eq("unit_id", i.unit_id!);
+  // Nazwa zmieniona w koszyku (na paragon) – też przy sztuce.
+  for (const i of items.filter((x) => x.unit_id && (/^[A-F]$/.test(String(x.ptu ?? "")) || x.name))) {
+    const patch: { ptu?: string; name?: string } = {};
+    if (/^[A-F]$/.test(String(i.ptu ?? ""))) patch.ptu = i.ptu;
+    if (i.name && String(i.name).trim()) patch.name = String(i.name).trim().slice(0, 120);
+    await admin.from("pos_order_items").update(patch).eq("order_id", orderId).eq("unit_id", i.unit_id!);
   }
 
   // „Drukuj paragon PDF” i „Wysyłka”: bez paragonu fiskalnego – tylko paragon PDF (PAR), poza JPK.

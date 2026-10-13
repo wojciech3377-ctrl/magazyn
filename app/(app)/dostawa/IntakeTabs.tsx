@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { TransitNoDoc, type TransitUnit } from "./TransitNoDoc";
 import { requireProfile } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { dateOnly, dateTime, money } from "@/lib/labels";
@@ -150,6 +151,11 @@ export async function TransitTab() {
   const units = unitsRes.error
     ? (await supabase.from("units").select(unitFields).eq("status", "in_transit").not("contract_id", "is", null).order("received_at").limit(500)).data
     : unitsRes.data;
+  // Rzeczy w drodze bez umowy / faktury (np. z Przyjęcia dostawy z opcją „w drodze”) – do „Umowa” / „Faktura” jednym kliknięciem.
+  const noDocRes = await supabase.from("units").select("id, code, purchase_price, variant:variants(option, product:products(title)), location:locations(name)")
+    .eq("status", "in_transit").is("contract_id", null).is("transfer_id", null).order("received_at").limit(300);
+  const noDoc: TransitUnit[] = ((noDocRes.error ? [] : noDocRes.data ?? []) as unknown as { id: string; code: string; purchase_price: number | null; variant: { option: string; product: { title: string } }; location: { name: string } | null }[])
+    .map((u) => ({ id: u.id, code: u.code, title: u.variant.product.title, option: u.variant.option, location: u.location?.name ?? "–", price: profile.can_see_prices && u.purchase_price != null ? Number(u.purchase_price) : null }));
   const transfers = (transfersRes.error ? [] : transfersRes.data ?? []) as { id: string; number: number; note: string | null; created_at: string; from_location_id: string; to_location_id: string }[];
   const { data: tItems } = transfers.length ? await supabase.from("stock_transfer_items").select("transfer_id, unit_id, received_at").in("transfer_id", transfers.map((t) => t.id)) : { data: [] };
   const tIds = (tItems ?? []).map((i) => i.unit_id as string);
@@ -164,7 +170,12 @@ export async function TransitTab() {
 
   return (
     <div className="space-y-6">
-      {!list.length && !byContract.size && !transfers.length && <p className="text-sm text-muted">Nic nie jest w drodze.</p>}
+      <div className="flex flex-wrap items-center gap-2">
+        <Link className="btn" href="/dostawa?w_drodze=1">Dodaj rzeczy w drodze</Link>
+        <span className="text-sm text-muted">Przyjęcie dostawy z zaznaczonym „w drodze” – potem tu: umowa albo faktura jednym kliknięciem.</span>
+      </div>
+      {!list.length && !byContract.size && !transfers.length && !noDoc.length && <p className="text-sm text-muted">Nic nie jest w drodze.</p>}
+      {noDoc.length > 0 && <TransitNoDoc units={noDoc} prices={profile.can_see_prices} />}
 
       {transfers.map((t) => {
         const its = (tItems ?? []).filter((i) => i.transfer_id === t.id);

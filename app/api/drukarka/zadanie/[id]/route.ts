@@ -10,7 +10,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const printer = await printerFromRequest(db, req);
   if (!printer) return Response.json({ error: "Zły klucz drukarki." }, { status: 401 });
   if (!/^[0-9a-f-]{36}$/i.test(id)) return Response.json({ error: "Złe zadanie." }, { status: 400 });
-  let body: { ok?: boolean; number?: string; error?: string };
+  let body: { ok?: boolean; number?: string; error?: string; daily?: string; printout?: boolean; text?: string };
   try {
     body = await req.json();
   } catch {
@@ -23,5 +23,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (ok && !number) return Response.json({ error: "Brak numeru paragonu." }, { status: 400 });
   const { data, error } = await db.rpc("finish_receipt_job", { p_printer: printer.id, p_id: id, p_ok: ok, p_number: number || null, p_error: ok ? null : String(body.error ?? "błąd drukarki") });
   if (error) return Response.json({ error: error.message }, { status: 409 });
+  // Program 0.3+: numer w dobie i treść paragonu z kopii elektronicznej (do sprawdzenia numeru wydruku). Bez migracji 0047 – pomijane.
+  if (ok && (body.daily || body.text)) {
+    const extra = { daily_no: String(body.daily ?? "").slice(0, 20) || null, printout_text: String(body.text ?? "").slice(0, 8000) || null };
+    await db.from("receipt_jobs").update(extra).eq("id", id).then(() => null, () => null);
+    await db.from("receipts").update({ daily_no: extra.daily_no }).eq("job_id", id).then(() => null, () => null);
+  }
   return Response.json({ status: data });
 }

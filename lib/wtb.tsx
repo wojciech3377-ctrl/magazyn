@@ -3,13 +3,15 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { ImageResponse } from "next/og";
 
-/** Grafika „SNEAKERS DEPOT WTB” (1080×1350): nagłówek i siatka butów, które chcemy kupić. */
+/**
+ * Grafika „SNEAKERS DEPOT WTB”: nagłówek i siatka butów, które chcemy kupić. Do 16 modeli 1080×1350 (Instagram),
+ * więcej – szersza grafika (do 30 modeli na jednej: 1500×1650 albo 1800×1800).
+ */
 
-const W = 1080;
-const H = 1350;
 const HEADER = 190;
 const PAD = 40;
-export const WTB_PER_PAGE = 16;
+export const WTB_PER_PAGE = 30;
+const sheetSize = (n: number) => (n <= 16 ? { W: 1080, H: 1350 } : n <= 25 ? { W: 1500, H: 1650 } : { W: 1800, H: 1800 });
 
 export type WtbItem = { title: string; size: string | null; sku: string | null; image: string | null };
 
@@ -40,7 +42,7 @@ export async function imageData(url: string | null, width = 1200) {
   }
 }
 
-/** Podział listy na strony po maks. 16 butów, możliwie równo (np. 20 → 10 + 10). */
+/** Podział listy na strony po maks. 30 butów, możliwie równo (np. 40 → 20 + 20). */
 export function wtbPages<T>(items: T[]): T[][] {
   if (!items.length) return [];
   const pages = Math.ceil(items.length / WTB_PER_PAGE);
@@ -49,13 +51,14 @@ export function wtbPages<T>(items: T[]): T[][] {
 }
 
 function grid(n: number) {
-  const cols = n <= 1 ? 1 : n <= 4 ? 2 : n <= 9 ? 3 : 4;
+  const cols = n <= 1 ? 1 : n <= 4 ? 2 : n <= 9 ? 3 : n <= 16 ? 4 : n <= 25 ? 5 : 6;
   return { cols, rows: Math.ceil(n / cols) };
 }
 
 export async function renderWtbSheet(items: (WtbItem & { img: string | null })[], opts: { page: number; pages: number; download: boolean }) {
   const f = await fonts();
   const { cols, rows } = grid(items.length);
+  const { W, H } = sheetSize(items.length);
   const gap = cols >= 3 ? 16 : 24;
   const cellW = Math.floor((W - PAD * 2 - gap * (cols - 1)) / cols);
   const cellH = Math.floor((H - HEADER - PAD * 2 - gap * (rows - 1)) / rows);

@@ -207,3 +207,56 @@ export async function deleteConsignor(formData: FormData) {
   revalidatePath("/komisanci");
   redirect(`/komisanci?ok=${encodeURIComponent(`Komisant ${c?.name ?? ""} usunięty.`)}`);
 }
+
+export type OwnUnitHit = { id: string; code: string; title: string; option: string; identifier: string | null; location: string; price: number | null };
+
+/** Sztuki własne na stanie (do dopisania komisantowi) – po kodzie, IMEI albo nazwie. */
+export async function searchOwnUnitsForConsignor(q: string): Promise<OwnUnitHit[]> {
+  const { supabase } = await requireSection("komisanci");
+  const text = q.trim().replace(/[,()*%\\]/g, " ").trim().slice(0, 80);
+  if (text.length < 2) return [];
+  const sel = "id, code, identifier, location:locations(name, store_id), variant:variants(option, links:variant_store_links(store_id, price), product:products(title))";
+  const code = text.toUpperCase();
+  const { findVariantIds } = await import("@/lib/queries/units");
+  const [byCode, vids] = await Promise.all([
+    supabase.from("units").select(sel).or(`code.eq.${code.replace(/[^A-Z0-9_.-]/g, "")},identifier.eq.${code.replace(/[^A-Z0-9_.-]/g, "")}`).eq("owner_type", "own").in("status", ["in_stock", "in_transit", "reserved"]).limit(5),
+    findVariantIds(supabase, text),
+  ]);
+  const { data: byName } = vids.length
+    ? await supabase.from("units").select(sel).in("variant_id", vids.slice(0, 150)).eq("owner_type", "own").in("status", ["in_stock", "in_transit", "reserved"]).order("received_at").limit(40)
+    : { data: [] };
+  type R = { id: string; code: string; identifier: string | null; location: { name: string; store_id: string }; variant: { option: string; links: { store_id: string; price: number | null }[]; product: { title: string } } };
+  const all = [...((byCode.data ?? []) as unknown as R[]), ...((byName ?? []) as unknown as R[])];
+  return [...new Map(all.map((u) => [u.id, {
+    id: u.id, code: u.code, identifier: u.identifier, title: u.variant.product.title, option: u.variant.option, location: u.location.name,
+    price: u.variant.links.find((l) => l.store_id === u.location.store_id)?.price ?? null,
+  }])).values()];
+}
+
+/** Dopisanie komisantowi sztuk z magazynu: stają się rzeczami w komisie z kwotą dla komisanta. */
+export async function assignUnitsToConsignor(_: { error?: string } | null, fd: FormData): Promise<{ error?: string }> {
+  const { profile } = await requireSection("komisanci");
+  const id = s(fd, "id");
+  if (!/^[0-9a-f-]{36}$/.test(id)) return { error: "Zły komisant." };
+  let rows: { unit_id: string; payout: string }[] = [];
+  try { rows = JSON.parse(s(fd, "units") || "[]"); } catch { return { error: "Błąd listy rzeczy." }; }
+  rows = rows.filter((r) => /^[0-9a-f-]{36}$/.test(String(r.unit_id))).slice(0, 100);
+  if (!rows.length) return { error: "Wybierz rzeczy z magazynu." };
+  const db = createAdminClient();
+  const { data: c } = await db.from("consignors").select("id, name").eq("id", id).maybeSingle();
+  if (!c) return { error: "Nie ma takiego komisanta." };
+  let n = 0;
+  for (const r of rows) {
+    const payout = String(r.payout ?? "").trim() ? Math.round(Number(String(r.payout).replace(/\s/g, "").replace(",", ".")) * 100) / 100 : null;
+    if (payout !== null && (!Number.isFinite(payout) || payout < 0)) return { error: "Podaj poprawną kwotę dla komisanta." };
+    const { data: done } = await db.from("units").update({ owner_type: "consignment", consignor_id: id, ...(payout !== null ? { payout_amount: payout } : {}) })
+      .eq("id", r.unit_id).eq("owner_type", "own").select("id");
+    if (done?.length) {
+      n++;
+      await db.from("unit_events").insert({ unit_id: r.unit_id, type: "owner", data: { to: "consignment", consignor_id: id, consignor: c.name, payout, by: profile.id, note: "dopisane komisantowi z magazynu" } });
+    }
+  }
+  revalidatePath(`/komisanci/${id}`);
+  back(id, n ? `Dopisano komisantowi ${n} szt. z magazynu.` : "Nic nie dopisano – rzeczy są już w komisie albo nie są własne.", n > 0);
+  return {};
+}

@@ -131,7 +131,7 @@ export default async function PosOrderPage({ params, searchParams }: { params: P
 
 /** PDF paragonu PAR (sprzedaż z wysyłką) – po „Zakończ – wysyłka” otwiera się sam. */
 function ParPdfLink({ invoiceId, posOrderId, auto }: { invoiceId: string; posOrderId: string; auto: boolean }) {
-  const href = `/druk/pdf?src=${encodeURIComponent(`/api/faktury/${invoiceId}/pdf`)}&wroc=${encodeURIComponent(`/kasa/${posOrderId}`)}&nazwa=paragon&tytul=${encodeURIComponent("Paragon")}`;
+  const href = `/druk/pdf?src=${encodeURIComponent(`/api/faktury/${invoiceId}/pdf`)}&wroc=${encodeURIComponent(`/kasa/${posOrderId}`)}&dalej=${encodeURIComponent("/kasa")}&dalej_tekst=${encodeURIComponent("Nowa sprzedaż")}&nazwa=paragon&tytul=${encodeURIComponent("Paragon")}`;
   return (
     <>
       <a className="btn" href={href}>Drukuj paragon PDF</a>

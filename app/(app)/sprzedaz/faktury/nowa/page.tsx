@@ -39,7 +39,7 @@ export default async function NewInvoicePage({ searchParams }: { searchParams: P
     <>
       <PageHeader
         title={receipt ? "Nowy paragon" : sp.podobna ? "Nowa faktura (podobna)" : "Nowa faktura"}
-        sub={receipt ? "Numer nadawany przy wydruku: PAR/miesiąc/kolejny – od 1 w każdym miesiącu." : "Numer nadawany automatycznie: FVM/kolejny/rok – kolejny po ostatnio wystawionej."}
+        sub={receipt ? "Numer nadawany przy wydruku: PAR/miesiąc/kolejny – od 1 w każdym miesiącu." : "Numer nadawany automatycznie: FM/kolejny/rok – kolejny po ostatnio wystawionej."}
         actions={<Link className="btn-secondary" href="/sprzedaz?widok=faktury">Wróć</Link>}
       />
       {existing && <div className="mb-4"><Notice tone="error">Do tej sprzedaży jest już {receipt ? "paragon" : "faktura"} <Link className="underline" href={`/sprzedaz/faktury/${existing.id}`}>{existing.number}</Link>.</Notice></div>}

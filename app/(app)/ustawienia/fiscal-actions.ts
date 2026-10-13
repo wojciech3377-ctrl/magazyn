@@ -76,3 +76,20 @@ export async function testPrinter(fd: FormData) {
   revalidatePath("/ustawienia");
   back(error ? errorMessage(error) : "Zadanie testowe wysłane – wynik pojawi się w tabeli poniżej za kilka sekund (odśwież stronę).", !error);
 }
+
+/** Ręczna poprawka numeru wydrukowanego paragonu (np. numer w dobie zamiast numeru wydruku z papieru). */
+export async function fixReceiptNumber(fd: FormData) {
+  await requireAdmin();
+  const id = String(fd.get("id") ?? "");
+  const raw = String(fd.get("number") ?? "").replace(/\s/g, "");
+  if (!/^[0-9a-f-]{36}$/.test(id)) back("Złe zadanie.", false);
+  if (!/^\d{1,12}$/.test(raw)) back("Numer paragonu to same cyfry, np. 000001441.", false);
+  const number = raw.padStart(9, "0");
+  const db = createAdminClient();
+  const { data: job } = await db.from("receipt_jobs").select("id, status").eq("id", id).maybeSingle();
+  if (!job || job.status !== "printed") back("Poprawić można tylko numer wydrukowanego paragonu.", false);
+  await db.from("receipt_jobs").update({ receipt_number: number }).eq("id", id);
+  await db.from("receipts").update({ number }).eq("job_id", id);
+  revalidatePath("/ustawienia");
+  back(`Numer paragonu poprawiony na ${number}.`);
+}

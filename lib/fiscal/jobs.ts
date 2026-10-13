@@ -3,6 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { draftFromOrder, type PaymentMethod } from "@/lib/invoices/service";
 import type { LineItem } from "@/lib/sync/shop-orders";
+import { receiptName } from "@/lib/fiscal/name";
 
 /**
  * Paragony fiskalne z naszej drukarki: aplikacja odkłada paragon do kolejki (receipt_jobs),
@@ -52,7 +53,11 @@ export async function fiscalPrinterReady(db: SupabaseClient) {
 
 /** Nazwa towaru na paragonie: bez znaków sterujących, do 40 znaków (limit drukarek). */
 export function fiscalName(s: string) {
-  return s.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 40) || "Towar";
+  const t = s.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+  if (t.length <= 40) return t || "Towar";
+  // Za długa nazwa: rozmiar / wariant z końca zostaje (np. „… 44.5”, „… 2/3”, „… XL”, „… 128GB”), skracany jest model.
+  const m = t.match(/\s((?:EU\s?)?\d{1,2}(?:[.,]\d)?(?:\s?\d\/\d)?|[2-5]?X?[SML]|XXL|\d+\s?(?:GB|TB))$/i);
+  return m ? receiptName(t.slice(0, m.index), m[1]) : t.slice(0, 40).trim();
 }
 
 const round = (n: number) => Math.round(n * 100) / 100;
@@ -81,7 +86,8 @@ export async function enqueuePosReceipt(db: SupabaseClient, posOrderId: string, 
   const lines = ((items ?? []) as unknown as It[]).filter((i) => i.status !== "returned").map((i): FiscalLine => {
     // Stawka wybrana przy pozycji w Kasie; bez wyboru: sztuka wg formy sprzedaży (23% → A, marża → F).
     const ptu = i.ptu && /^[A-G]$/.test(i.ptu) ? i.ptu : i.unit ? (i.unit.purchase_form === "vat_23" ? s.ptu23 : s.ptuMargin) : s.ptuMargin;
-    const name = i.unit?.variant ? `${i.unit.variant.product.title} ${i.unit.variant.option}` : (i.name ?? "Towar");
+    // Nazwa zmieniona w Kasie ma pierwszeństwo; sztuka bez zmiany: model + rozmiar (rozmiar zawsze widoczny).
+    const name = i.name?.trim() ? i.name : i.unit?.variant ? receiptName(i.unit.variant.product.title, i.unit.variant.option) : "Towar";
     return { name: fiscalName(name), qty: Number(i.quantity ?? 1), price: round(Number(i.price)), ptu, rate: rateOf(s, ptu) };
   });
   return insertJob(db, { source: "pos", pos_order_id: posOrderId, lines, payment: PAYMENT[o.payment_method as string] ?? "cash", created_by: userId });

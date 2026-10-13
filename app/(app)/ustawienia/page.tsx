@@ -245,7 +245,7 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
           <section id="ksef" className="card scroll-mt-4 p-4">
             <h2 className="h2 mb-1">Faktury i KSeF</h2>
             <p className="mb-3 text-sm text-muted">
-              Faktury FVM/kolejny/rok wysyłane do KSeF ({ksefEnv() === "prod" ? "produkcja" : ksefEnv()}). Token KSeF (z uprawnieniem do wystawiania faktur) i NIP wpisuje się w Vercel jako
+              Faktury FM/kolejny/rok wysyłane do KSeF ({ksefEnv() === "prod" ? "produkcja" : ksefEnv()}). Token KSeF (z uprawnieniem do wystawiania faktur) i NIP wpisuje się w Vercel jako
               KSEF_TOKEN i KSEF_NIP – nigdy w czacie. Dane sprzedawcy i numer konta na fakturach: sekcja „Umowy i dane firmy”.
             </p>
             {ksefConfigured()

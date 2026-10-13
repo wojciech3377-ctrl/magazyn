@@ -24,7 +24,11 @@ export type PriceTag = {
   price: Range; compareAt: Range; promo: boolean; lowest30: Range; lowestSource: string; storeName: string; used: boolean;
   /** IMEI / numer seryjny sztuki (telefony) – drukowany na metce. */
   identifier?: string | null;
+  /** Metka produktu (Stan produktu + metka): bez rozmiaru, kod PR… prowadzi do rozmiarów produktu. */
+  productTag?: boolean;
 };
+
+type TagSource = { id: string; code: string; identifier: string | null; variant_id: string; variant: { option: string; product_id: string; product: { title: string; style_sku: string | null } }; location: { store_id: string; store: { name: string; code: string; shopify_domain: string | null } } };
 
 /** Używane: produkt ma w Shopify tag „reused” (w sklepie sztuki, a gdy go tam nie ma – w którymkolwiek). */
 export function isReused(links: { store_id: string; tags?: string[] | null }[], storeId?: string) {
@@ -115,8 +119,36 @@ export async function priceTags(db: SupabaseClient, unitIds: string[]) {
   const { data: units } = await db.from("units")
     .select("id, code, identifier, variant_id, variant:variants(option, product_id, product:products(title, style_sku)), location:locations(store_id, store:stores(name, code, shopify_domain))")
     .in("id", unitIds.slice(0, 200)).order("number");
-  type U = { id: string; code: string; identifier: string | null; variant_id: string; variant: { option: string; product_id: string; product: { title: string; style_sku: string | null } }; location: { store_id: string; store: { name: string; code: string; shopify_domain: string | null } } };
-  const list = (units ?? []) as unknown as U[];
+  return buildTags(db, (units ?? []) as unknown as TagSource[]);
+}
+
+import { productTagCode } from "./price-tag-code";
+export { productTagCode, parseProductTagCode } from "./price-tag-code";
+
+/** Metki produktów z katalogu (jedna na produkt, bez rozmiaru) – ceny i Omnibus jak na metkach sztuk, w wybranym sklepie. */
+export async function productPriceTags(db: SupabaseClient, productIds: string[], storeId: string) {
+  const ids = productIds.slice(0, 200);
+  const [{ data: products }, { data: store }, { data: variants }] = await Promise.all([
+    db.from("products").select("id, title, style_sku, tag_no").in("id", ids),
+    db.from("stores").select("id, name, code, shopify_domain").eq("id", storeId).maybeSingle(),
+    db.from("variants").select("id, product_id").in("product_id", ids),
+  ]);
+  if (!store) return [];
+  const firstVariant = new Map<string, string>();
+  for (const v of variants ?? []) if (!firstVariant.has(v.product_id as string)) firstVariant.set(v.product_id as string, v.id as string);
+  const order = new Map(ids.map((id, i) => [id, i]));
+  const list: TagSource[] = ((products ?? []) as { id: string; title: string; style_sku: string | null; tag_no: number }[])
+    .filter((p) => firstVariant.has(p.id))
+    .sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
+    .map((p) => ({
+      id: p.id, code: productTagCode(p.tag_no), identifier: null, variant_id: firstVariant.get(p.id)!,
+      variant: { option: "", product_id: p.id, product: { title: p.title, style_sku: p.style_sku } },
+      location: { store_id: store.id as string, store: { name: store.name as string, code: store.code as string, shopify_domain: (store.shopify_domain as string | null) ?? null } },
+    }));
+  return (await buildTags(db, list)).map((t) => ({ ...t, productTag: true }));
+}
+
+async function buildTags(db: SupabaseClient, list: TagSource[]) {
   const productIds = [...new Set(list.map((u) => u.variant.product_id))];
   const { data: variants } = productIds.length ? await db.from("variants").select("id, product_id").in("product_id", productIds) : { data: [] };
   const variantIds = (variants ?? []).map((v) => v.id as string);
