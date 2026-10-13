@@ -121,7 +121,7 @@ export async function attachExistingContract(formData: FormData) {
 
 /**
  * Usunięcie sprzedaży stacjonarnej (administrator): sprzedane sztuki wracają na stan (+1 w Shopify),
- * paragon z aplikacji znika z JPK. Sprzedaży z fakturą nie usuwa się – najpierw faktura.
+ * wydrukowany paragon fiskalny zostaje w JPK (migracja 0046). Sprzedaży z fakturą nie usuwa się – najpierw faktura.
  */
 export async function deletePosOrder(formData: FormData) {
   const { supabase } = await requireAdmin();

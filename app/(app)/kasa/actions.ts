@@ -189,7 +189,7 @@ export async function finishPosOrder(_: unknown, formData: FormData): Promise<{ 
   const items = JSON.parse(String(formData.get("items") ?? "[]")) as In[];
   if (!storeId) return { error: "Wybierz sklep." };
   if (!items.length) return { error: "Koszyk jest pusty." };
-  // Tryb: "1" paragon fiskalny, "pdf" paragon fiskalny + PDF, "0" bez paragonu, "ship" wysyłka (tylko paragon PDF, poza JPK).
+  // Tryb: "1" paragon fiskalny, "pdf" tylko paragon PDF (bez fiskalnego, poza JPK), "0" bez paragonu, "ship" wysyłka (paragon PDF + zamówienie, poza JPK).
   const mode = String(formData.get("receipt") ?? "1");
   const ship = mode === "ship" ? readParShipping(formData) : null;
   if (mode === "ship" && !ship) return { error: "Zaznacz „Wysyłka” i wpisz dane odbiorcy." };
@@ -245,31 +245,37 @@ export async function finishPosOrder(_: unknown, formData: FormData): Promise<{ 
     await admin.from("pos_order_items").update({ ptu: i.ptu }).eq("order_id", orderId).eq("unit_id", i.unit_id!);
   }
 
-  // „Wysyłka”: bez paragonu fiskalnego – paragon PDF (PAR) i zamówienie w Sprzedaż → Zamówienia, poza JPK.
-  if (ship && !("error" in ship)) {
+  // „Drukuj paragon PDF” i „Wysyłka”: bez paragonu fiskalnego – tylko paragon PDF (PAR), poza JPK.
+  // Przy wysyłce dodatkowo zamówienie w Sprzedaż → Zamówienia (etykieta), umowy sztuk wracają do niewykorzystanych.
+  if (mode === "pdf" || (mode === "ship" && ship && !("error" in ship))) {
     let msg = "";
     try {
       const draft = await draftFromPos(admin, orderId as string);
       if (!draft) throw new Error("Nie ma takiej sprzedaży.");
-      const row = await issueReceipt(admin, { ...draft, notes: String(formData.get("note") ?? "").trim() || null }, profile.id);
-      const r = await createParShippingOrder(admin, { receiptId: row.id, number: row.number, payment: draft.paymentMethod, items: draft.items, ship });
-      await admin.from("pos_orders").update({ note: [String(formData.get("note") ?? "").trim(), `Wysyłka – zamówienie ${row.number}`].filter(Boolean).join(" · ") }).eq("id", orderId);
-      msg = `Paragon ${row.number} (PDF) i zamówienie do wysyłki w Sprzedaż → Zamówienia – poza JPK.${r.freedContracts ? ` Umowy wróciły do niewykorzystanych: ${r.freedContracts}.` : ""}`;
+      const note = String(formData.get("note") ?? "").trim();
+      const row = await issueReceipt(admin, { ...draft, notes: note || null }, profile.id);
+      if (ship && !("error" in ship)) {
+        const r = await createParShippingOrder(admin, { receiptId: row.id, number: row.number, payment: draft.paymentMethod, items: draft.items, ship });
+        await admin.from("pos_orders").update({ note: [note, `Wysyłka – zamówienie ${row.number}`].filter(Boolean).join(" · ") }).eq("id", orderId);
+        msg = `Paragon ${row.number} (PDF) i zamówienie do wysyłki w Sprzedaż → Zamówienia – poza JPK.${r.freedContracts ? ` Umowy wróciły do niewykorzystanych: ${r.freedContracts}.` : ""}`;
+      } else {
+        msg = `Paragon ${row.number} (PDF, bez paragonu fiskalnego) – poza JPK.`;
+      }
     } catch (e) {
-      redirect(`/kasa/${orderId}?blad=${encodeURIComponent(`Sprzedaż zapisana, ale paragon PDF / zamówienie nie powstały: ${errorMessage(e)}`)}`);
+      redirect(`/kasa/${orderId}?blad=${encodeURIComponent(`Sprzedaż zapisana, ale paragon PDF nie powstał: ${errorMessage(e)}`)}`);
     }
     redirect(`/kasa/${orderId}?pdf=1&ok=${encodeURIComponent(msg)}`);
   }
 
-  // „Zakończ i wystaw paragon” / „Drukuj paragon PDF”: paragon do kolejki drukarki fiskalnej (program przy drukarce drukuje go od razu).
-  if (mode === "1" || mode === "pdf") {
+  // „Zakończ i wystaw paragon”: paragon do kolejki drukarki fiskalnej (program przy drukarce drukuje go od razu).
+  if (mode === "1") {
     try {
       await enqueuePosReceipt(admin, orderId as string, profile.id);
     } catch (e) {
       redirect(`/kasa/${orderId}?blad=${encodeURIComponent(`Sprzedaż zapisana, ale paragon nie trafił do drukarki: ${errorMessage(e)}`)}`);
     }
   }
-  redirect(`/kasa/${orderId}${mode === "pdf" ? "?pdf=1" : ""}`);
+  redirect(`/kasa/${orderId}`);
 }
 
 export async function retryPosBase(formData: FormData) {

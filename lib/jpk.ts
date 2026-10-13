@@ -240,6 +240,45 @@ async function manualInvoiceLines(db: SupabaseClient, invoiceIds: string[]) {
   }));
 }
 
+type OrphanReceipt = { id: string; number: string | null; issued_at: string; sale_ref: string | null; items: { name: string; price_brutto: number; tax_rate: number; quantity?: number; ptu?: string }[] };
+
+/**
+ * Paragony fiskalne, których sprzedaż została usunięta (albo nigdy nie była powiązana): zostają w JPK
+ * z pozycjami zapisanymi przy wydruku – paragon z drukarki fiskalnej nie znika z ewidencji.
+ */
+function orphanReceiptLines(receipts: OrphanReceipt[]): JpkLine[] {
+  return receipts.flatMap((r) => (r.items ?? []).map((it, k): JpkLine => {
+    const qty = Number(it.quantity ?? 1);
+    return {
+      key: `r:${r.id}:${k}`, source: "pos", kind: "receipt", docNumber: r.number, docDate: r.issued_at, saleDate: r.issued_at,
+      name: `${it.name}${qty !== 1 ? ` × ${qty}` : ""}`, price: Math.round(Number(it.price_brutto) * qty * 100) / 100,
+      vat: it.ptu ?? (Number(it.tax_rate) === 23 ? "A" : "F"), unitId: null, unitCode: null,
+      contractId: null, contractNumber: null, contractDate: null, purchasePrice: null, currency: null, contractStage: null, consignorWait: false,
+      orderLabel: r.sale_ref ?? `paragon ${r.number ?? ""}`, orderHref: null, saleNote: "SPRZEDAŻ USUNIĘTA",
+      saleId: null, variantLinked: false, baseOrderId: null, pieceRef: null, pendingContractId: null,
+    };
+  }));
+}
+const ORPHAN_FIELDS = "id, number, issued_at, sale_ref, items";
+
+async function orphanReceipts(db: SupabaseClient, q: { from?: string; to?: string; ids?: string[] }) {
+  let query = db.from("receipts").select(ORPHAN_FIELDS).neq("source", "base").is("pos_order_id", null).is("order_id", null).is("base_order_id", null).limit(5000);
+  if (q.from) query = query.gte("issued_at", q.from);
+  if (q.to) query = query.lt("issued_at", q.to);
+  if (q.ids) query = query.in("id", q.ids);
+  const { data, error } = await query;
+  if (error) {
+    // Bez migracji 0046 (brak kolumny sale_ref) – bez opisu sprzedaży.
+    let q2 = db.from("receipts").select("id, number, issued_at, items").neq("source", "base").is("pos_order_id", null).is("order_id", null).is("base_order_id", null).limit(5000);
+    if (q.from) q2 = q2.gte("issued_at", q.from);
+    if (q.to) q2 = q2.lt("issued_at", q.to);
+    if (q.ids) q2 = q2.in("id", q.ids);
+    const { data: d2 } = await q2;
+    return ((d2 ?? []) as Omit<OrphanReceipt, "sale_ref">[]).map((r) => ({ ...r, sale_ref: null }));
+  }
+  return (data ?? []) as OrphanReceipt[];
+}
+
 /**
  * Sprzedaże miesiąca: z dokumentem wystawionym w tym miesiącu albo – bez dokumentu – złożone w tym miesiącu
  * (anulowane bez dokumentu pomijane).
@@ -280,8 +319,11 @@ export async function loadJpkLines(db: SupabaseClient, opts: { from: Date; to: D
     if (d) return inMonth(d.date);
     return !o.cancelled_at && inMonth(o.ordered_at);
   });
+  // Sprzedaż z Kasy z samym paragonem PDF (PAR, bez fiskalnego) – poza JPK, także poza „bez dokumentu”.
+  const parPos = new Set((await inChunks<{ pos_order_id: string }>(posIds, (part) => db.from("invoices").select("pos_order_id").in("pos_order_id", part as string[]).eq("kind", "receipt").not("status", "in", "(rejected,cancelled)"))).map((i) => i.pos_order_id));
   const keepPos = posIds.filter((id) => {
     const d = posDoc(id);
+    if (!d && parPos.has(id)) return false;
     return d ? inMonth(d.date) : posInMonth.has(id);
   });
   // Korekty faktur: osobna linia z różnicą (nie pozycje po korekcie).
@@ -305,6 +347,7 @@ export async function loadJpkLines(db: SupabaseClient, opts: { from: Date; to: D
     ...(await posLines(db, keepPos, posDoc)),
     ...(await manualInvoiceLines(db, manual)),
     ...correctionLines,
+    ...orphanReceiptLines(await orphanReceipts(db, { from, to })),
   ];
   // JPK = tylko sprzedaże z dokumentem: faktury w KSeF, paragony fiskalne (kasa i zamówienia). „Bez dokumentu” to
   // osobny podgląd sprzedaży, do których trzeba jeszcze wystawić paragon / fakturę – nie wchodzą do JPK.
@@ -317,6 +360,7 @@ export async function loadJpkLinesByKeys(db: SupabaseClient, keys: string[]) {
   const orderIds = [...new Set(keys.filter((k) => k.startsWith("o:")).map((k) => k.split(":")[1]))];
   const posItemIds = keys.filter((k) => k.startsWith("p:")).map((k) => k.slice(2));
   const invItemIds = keys.filter((k) => k.startsWith("i:")).map((k) => k.slice(2));
+  const receiptIds = [...new Set(keys.filter((k) => k.startsWith("r:")).map((k) => k.split(":")[1]).filter((x) => /^[0-9a-f-]{36}$/.test(x)))];
   const orders = await inChunks<Order>(orderIds, (part) => db.from("orders").select(ORDER_FIELDS).in("id", part as string[]));
   const posItems = await inChunks<{ order_id: string }>(posItemIds, (part) => db.from("pos_order_items").select("order_id").in("id", part as string[]));
   const invItems = await inChunks<{ invoice_id: string }>(invItemIds, (part) => db.from("invoice_items").select("invoice_id").in("id", part as string[]));
@@ -327,6 +371,7 @@ export async function loadJpkLinesByKeys(db: SupabaseClient, keys: string[]) {
     ...(await shopLines(db, orders, orderDoc)),
     ...(await posLines(db, posIds, posDoc)),
     ...(await manualInvoiceLines(db, [...new Set(invItems.map((i) => i.invoice_id))])),
+    ...(receiptIds.length ? orphanReceiptLines(await orphanReceipts(db, { ids: receiptIds })) : []),
   ].filter((l) => want.has(l.key));
   return sortLines(lines);
 }

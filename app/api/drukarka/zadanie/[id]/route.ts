@@ -17,7 +17,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     return Response.json({ error: "Zła treść." }, { status: 400 });
   }
   const ok = body.ok === true;
-  const number = String(body.number ?? "").trim();
+  // Numer jak na wydruku z drukarki: 9 cyfr z zerami z przodu (np. 1441 → 000001441).
+  const raw = String(body.number ?? "").trim().slice(0, 60);
+  const number = /^\d{1,8}$/.test(raw) ? raw.padStart(9, "0") : raw;
   if (ok && !number) return Response.json({ error: "Brak numeru paragonu." }, { status: 400 });
   const { data, error } = await db.rpc("finish_receipt_job", { p_printer: printer.id, p_id: id, p_ok: ok, p_number: number || null, p_error: ok ? null : String(body.error ?? "błąd drukarki") });
   if (error) return Response.json({ error: error.message }, { status: 409 });

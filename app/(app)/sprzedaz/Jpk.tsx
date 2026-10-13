@@ -158,7 +158,7 @@ export async function Jpk({ sp }: { sp: Record<string, string | undefined> }) {
                       {l.orderHref ? <Link className="text-accent hover:underline" href={l.orderHref}>{l.orderLabel}</Link> : l.orderLabel}
                       {profile.role === "admin" && l.source === "pos" && l.orderHref?.startsWith("/kasa/") && (
                         <ConfirmSubmit formAction={deletePosOrder} name="id" value={l.orderHref.slice(6)} className="ml-2 text-bad hover:underline"
-                          message={`Usunąć sprzedaż stacjonarną ${l.orderLabel}? Sztuki wrócą na stan, a sprzedaż zniknie z JPK.`}>usuń</ConfirmSubmit>
+                          message={`Usunąć sprzedaż stacjonarną ${l.orderLabel}? Sztuki wrócą na stan. Wydrukowany paragon fiskalny zostaje w JPK.`}>usuń</ConfirmSubmit>
                       )}
                     </td>
                   </tr>

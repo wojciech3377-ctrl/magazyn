@@ -366,7 +366,7 @@ export function PosForm({ stores, printer, ptu, defaultPtu, ptuFor, printerOnlin
               <button className="btn w-full whitespace-normal py-3 text-base leading-tight" name="receipt" value="1" disabled={submitting || !lines.length}>{submitting ? "Zapisuję…" : "Zakończ i wystaw paragon"}</button>
               <button className="btn-ghost h-auto w-full whitespace-normal py-1.5 text-xs leading-tight" name="receipt" value="0" disabled={submitting || !lines.length}>Zakończ bez paragonu (np. na fakturę)</button>
               <button className="btn-secondary w-full whitespace-normal py-2.5 leading-tight" name="receipt" value="pdf" disabled={submitting || !lines.length}>Drukuj paragon PDF</button>
-              <p className="text-xs text-muted">„Drukuj paragon PDF” – paragon fiskalny z drukarki, a po wydruku otwiera się jego PDF z tym samym numerem.</p>
+              <p className="text-xs text-muted">„Drukuj paragon PDF” – tylko paragon PDF do wydruku, <b>bez paragonu fiskalnego</b> (poza JPK). Paragon fiskalny drukuje tylko „Zakończ i wystaw paragon”.</p>
             </>
           )}
           <p className="text-xs text-muted">

@@ -93,7 +93,7 @@ function roundRect(page: PDFPage, x: number, y: number, w: number, h: number, r:
 }
 
 /**
- * Metka 57 × 32 mm: czarny pasek z nazwą sklepu (Sneakers Depot / Telefoniki), nazwa produktu, cena z ramką rozmiaru,
+ * Metka 57 × 32 mm: czarny pasek z nazwą sklepu (Sneakers Depot / Telefoniki), nazwa produktu, cena (Telefoniki: z ramką wariantu),
  * informacja Omnibus, IMEI telefonu (gdy jest) i kod kreskowy sztuki z numerem pod spodem.
  */
 export async function renderPriceTags(tags: PriceTag[]) {
@@ -125,12 +125,13 @@ export async function renderPriceTags(tags: PriceTag[]) {
       page.drawText(line, { x: PAD_X, y, size: 7, font: bold });
     }
 
-    // Cena + ramka z rozmiarem po prawej.
+    // Cena + (tylko Telefoniki) ramka z wariantem po prawej. Sneakers Depot: bez rozmiaru na metce.
+    const withBox = /telefon/i.test(t.storeName ?? "");
     const sizeVal = t.option || "–";
     const sv = fitSize(bold, sizeVal, 9.5, 18 * MM, 6);
-    const boxW = Math.max(9.5 * MM, bold.widthOfTextAtSize(sizeVal, sv) + 3.2 * MM);
+    const boxW = withBox ? Math.max(9.5 * MM, bold.widthOfTextAtSize(sizeVal, sv) + 3.2 * MM) : 0;
     const boxH = 7.4 * MM;
-    const priceW = inner - boxW - 1.6 * MM;
+    const priceW = withBox ? inner - boxW - 1.6 * MM : inner;
     y -= 1.6;
     const blockTop = y;
     if (t.promo && t.compareAt) {
@@ -151,15 +152,17 @@ export async function renderPriceTags(tags: PriceTag[]) {
       // Podkreślenie ceny promocyjnej.
       page.drawRectangle({ x: PAD_X, y: y - 1.6, width: Math.min(priceW, bold.widthOfTextAtSize(price, ps)), height: 0.7, color: rgb(0, 0, 0) });
     }
-    const boxX = W - PAD_X - boxW;
-    const boxY = Math.min(blockTop - boxH, y - 1.6);
-    roundRect(page, boxX, boxY, boxW, boxH, 1.6 * MM / 1.2, { border: 0.8 });
-    // Buty: rozmiar (42, 44.5, 44 2/3); telefony i reszta: wariant (128GB, Midnight).
-    const lab = /^\d{1,2}([.,]\d|\s?\d\/\d)?$/.test(sizeVal.trim()) ? "ROZMIAR" : "WARIANT";
-    const labW = spaced(null, lab, 0, 0, 3.7, regular, 0.35);
-    spaced(page, lab, boxX + (boxW - labW) / 2, boxY + boxH - 5.4, 3.7, regular, 0.35);
-    page.drawText(sizeVal, { x: boxX + (boxW - bold.widthOfTextAtSize(sizeVal, sv)) / 2, y: boxY + 2.9, size: sv, font: bold });
-    y = Math.min(y - 1.6, boxY);
+    if (withBox) {
+      const boxX = W - PAD_X - boxW;
+      const boxY = Math.min(blockTop - boxH, y - 1.6);
+      roundRect(page, boxX, boxY, boxW, boxH, 1.6 * MM / 1.2, { border: 0.8 });
+      // Telefony: wariant (128GB, Midnight); gdyby trafił się rozmiar liczbowy – „ROZMIAR”.
+      const lab = /^\d{1,2}([.,]\d|\s?\d\/\d)?$/.test(sizeVal.trim()) ? "ROZMIAR" : "WARIANT";
+      const labW = spaced(null, lab, 0, 0, 3.7, regular, 0.35);
+      spaced(page, lab, boxX + (boxW - labW) / 2, boxY + boxH - 5.4, 3.7, regular, 0.35);
+      page.drawText(sizeVal, { x: boxX + (boxW - bold.widthOfTextAtSize(sizeVal, sv)) / 2, y: boxY + 2.9, size: sv, font: bold });
+      y = Math.min(y - 1.6, boxY);
+    } else y -= 1.6;
 
     // Najniższa cena z 30 dni (Omnibus).
     const low = `Najniższa cena z 30 dni${t.promo ? " przed obniżką" : ""}: ${fmtRange(t.lowest30)}`;

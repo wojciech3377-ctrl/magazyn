@@ -420,7 +420,7 @@ async function Tabs({ active }: { active: "orders" | "lines" | "pos" | "faktury"
       <nav className="segmented flex-nowrap whitespace-nowrap" aria-label="Sprzedaż">
         {sales && <Link href="/sprzedaz" aria-current={cur(active === "orders")}>Zamówienia</Link>}
         {sales && <Link href="/sprzedaz?widok=stacjonarna" aria-current={cur(active === "pos")}>Stacjonarna</Link>}
-        {invoices && <Link href="/sprzedaz?widok=faktury" aria-current={cur(active === "faktury")}>Faktury i paragony</Link>}
+        {invoices && <Link href="/sprzedaz?widok=faktury" aria-current={cur(active === "faktury")}>Faktury</Link>}
         {invoices && <Link href="/sprzedaz?widok=jpk" aria-current={cur(active === "jpk" || active === "lines")}>JPK</Link>}
       </nav>
     </div>
@@ -537,7 +537,7 @@ async function PosList({ page, q, sp }: { page: number; q: string; sp: Record<st
                     <form action={deletePosOrder}>
                       <input type="hidden" name="id" value={o.id} />
                       <input type="hidden" name="back" value={`/sprzedaz?widok=stacjonarna${q ? `&q=${encodeURIComponent(q)}` : ""}`} />
-                      <ConfirmSubmit className="text-sm text-bad hover:underline" message={`Usunąć sprzedaż ${o.code}? Sztuki wrócą na stan, a sprzedaż zniknie z JPK.`}>Usuń</ConfirmSubmit>
+                      <ConfirmSubmit className="text-sm text-bad hover:underline" message={`Usunąć sprzedaż ${o.code}? Sztuki wrócą na stan. Wydrukowany paragon fiskalny zostaje w JPK.`}>Usuń</ConfirmSubmit>
                     </form>
                   </td>
                 )}

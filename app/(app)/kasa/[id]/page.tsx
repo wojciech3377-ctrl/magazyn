@@ -53,7 +53,7 @@ export default async function PosOrderPage({ params, searchParams }: { params: P
       {sp.blad && <div className="mb-4"><Notice tone="error">{sp.blad}</Notice></div>}
       {par ? (
         <div className="card mb-4 flex flex-wrap items-center gap-2 p-4 text-sm">
-          <span className="text-muted">Wysyłka – paragon PDF:</span>
+          <span className="text-muted">{shipOrder ? "Wysyłka – paragon PDF" : "Paragon PDF"}:</span>
           <b className="font-mono">{par.number}</b>
           <span className="text-muted">· bez paragonu fiskalnego, poza JPK</span>
           {shipOrder && <Link className="text-accent hover:underline" href={`/sprzedaz/${shipOrder.id}`}>zamówienie {shipOrder.name}</Link>}

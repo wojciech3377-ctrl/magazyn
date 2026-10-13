@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 /**
- * Zamówienie „wysyłka z paragonu PAR”: paragon wystawiony w Faktury i paragony z opcją Wysyłka trafia jako
+ * Zamówienie „wysyłka z paragonu PAR”: paragon PDF z Kasy z opcją Wysyłka trafia jako
  * zamówienie do Sprzedaż → Zamówienia (etykieta, statusy), ale nie wchodzi do JPK. Umowy jego sztuk są odpinane –
  * wracają do „Umowy bez rzeczy” (niewykorzystane) i można je użyć przy innej sprzedaży.
  */
