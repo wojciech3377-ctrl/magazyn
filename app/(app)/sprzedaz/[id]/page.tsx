@@ -36,24 +36,30 @@ function shopifyAdminUrl(domain: string | null, legacyId: string | null) {
 export default async function OrderPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const { supabase, profile } = await requireProfile();
-  const { data: order } = await supabase.from("orders").select("*, store:stores(name, code, shopify_domain)").eq("id", id).maybeSingle();
-  if (!order) notFound();
-
-  const [{ data: shipments }, { data: sales }] = await Promise.all([
+  // Wszystko, co zależy tylko od id zamówienia – równolegle.
+  const [{ data: order }, { data: shipments }, { data: sales }, furgonetka, { data: invoice }, { data: receiptJob }, printer, { data: parDoc }] = await Promise.all([
+    supabase.from("orders").select("*, store:stores(name, code, shopify_domain)").eq("id", id).maybeSingle(),
     supabase.from("shipments").select("*").eq("order_id", id).order("created_at", { ascending: false }),
     supabase.from("sales").select(SALE_SELECT).eq("order_id", id).order("sold_at"),
-  ]);
-  const saleIds = (sales ?? []).map((s) => s.id);
-  const { data: pendingContracts } = saleIds.length
-    ? await supabase.from("contracts").select("id, status, template, paid_at, source, number, doc_number, counterparty, amount, type, sale_id").in("sale_id", saleIds).not("status", "in", "(cancelled,rejected)")
-    : { data: [] };
-  const pendingBySale = new Map((pendingContracts ?? []).map((c) => [c.sale_id as string, c as unknown as ContractLite]));
-  const furgonetkaReady = furgonetkaConfigured() && !!(await furgonetkaConnection(createAdminClient()));
-  const { data: invoice } = await supabase.from("invoices").select("id, number").eq("order_id", id).neq("kind", "receipt").not("status", "in", "(rejected,cancelled)").limit(1).maybeSingle();
-  const [{ data: receiptJob }, printer] = await Promise.all([
+    furgonetkaConfigured() ? furgonetkaConnection(createAdminClient()) : Promise.resolve(null),
+    supabase.from("invoices").select("id, number").eq("order_id", id).neq("kind", "receipt").not("status", "in", "(rejected,cancelled)").limit(1).maybeSingle(),
     supabase.from("receipt_jobs").select("id, status, receipt_number, error, claimed_at, number").eq("order_id", id).neq("status", "cancelled").order("created_at", { ascending: false }).limit(1).maybeSingle(),
     fiscalPrinterReady(createAdminClient()),
+    supabase.from("invoices").select("id, number").eq("order_id", id).eq("kind", "receipt").not("status", "in", "(rejected,cancelled)").limit(1).maybeSingle(),
   ]);
+  if (!order) notFound();
+  const furgonetkaReady = !!furgonetka;
+
+  // Umowy linii sprzedaży i rozmiary pozycji – drugi rzut, też równolegle.
+  const saleIds = (sales ?? []).map((s) => s.id);
+  const gids = [...new Set(((order.line_items ?? []) as LineItem[]).map((l) => l.shopify_variant_id).filter((x): x is string => !!x))];
+  const [{ data: pendingContracts }, { data: vLinks }] = await Promise.all([
+    saleIds.length
+      ? supabase.from("contracts").select("id, status, template, paid_at, source, number, doc_number, counterparty, amount, type, sale_id").in("sale_id", saleIds).not("status", "in", "(cancelled,rejected)")
+      : Promise.resolve({ data: [] }),
+    gids.length ? supabase.from("variant_store_links").select("variant_id, shopify_variant_id").in("shopify_variant_id", gids) : Promise.resolve({ data: [] }),
+  ]);
+  const pendingBySale = new Map((pendingContracts ?? []).map((c) => [c.sale_id as string, c as unknown as ContractLite]));
 
   const store = order.store as { name: string; code: string; shopify_domain: string | null } | null;
   const addr = order.shipping_address as Address;
@@ -62,15 +68,12 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
   const pay = paymentLabel(order);
   const refundedLines = (order.refunded_lines ?? {}) as Record<string, number>;
   // Sztuki pozycji bez linii sprzedaży – „Dołącz umowę” utworzy linię i połączy ją z magazynem.
-  const gids = [...new Set(lines.map((l) => l.shopify_variant_id).filter((x): x is string => !!x))];
-  const { data: vLinks } = gids.length ? await supabase.from("variant_store_links").select("variant_id, shopify_variant_id").in("shopify_variant_id", gids) : { data: [] };
   const variantOf = new Map((vLinks ?? []).map((l) => [l.shopify_variant_id as string, l.variant_id as string]));
   const loosePieces = order.status === "cancelled" ? [] : matchPieces(order.id, lines, (sales ?? []) as unknown as PieceSale[], (g) => variantOf.get(g)).filter((p) => !p.sale);
   const status = order.status as OrderStatus;
   const activeShipments = (shipments ?? []).filter((s) => classifyShipment(s) !== null);
   const par = isParOrder(order.shopify_order_id as string);
   const shopUrl = par ? null : shopifyAdminUrl(store?.shopify_domain ?? null, order.shopify_legacy_id);
-  const { data: parDoc } = await supabase.from("invoices").select("id, number").eq("order_id", order.id).eq("kind", "receipt").not("status", "in", "(rejected,cancelled)").limit(1).maybeSingle();
 
   return (
     <>

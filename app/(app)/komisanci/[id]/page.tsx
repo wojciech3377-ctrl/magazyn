@@ -5,7 +5,7 @@ import { dateOnly, dateTime, money, UNIT_STATUS } from "@/lib/labels";
 import { Notice, PageHeader, Pill } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { consignorBalance, consignorUnits, SHIPMENT_METHOD, SHIPMENT_STATUS, type Consignor, type ConsignorShipment } from "@/lib/consignment";
+import { balanceFrom, consignorUnits, SHIPMENT_METHOD, SHIPMENT_STATUS, type Consignor, type ConsignorShipment } from "@/lib/consignment";
 import { addPayout, createConsignorAccount, deleteConsignor, deletePayout, openLabel, processShipment, removeConsignorAccount, resetConsignorPassword, saveConsignor, toggleUnitPaid } from "../actions";
 import { ConfirmSubmit } from "@/components/ConfirmSubmit";
 import { AddUnits } from "./AddUnits";
@@ -14,22 +14,33 @@ export default async function ConsignorPage({ params, searchParams }: { params: 
   const { id } = await params;
   const sp = await searchParams;
   const { supabase, profile } = await requireProfile();
-  const { data: c } = await supabase.from("consignors").select("*").eq("id", id).maybeSingle();
+  const db = createAdminClient();
+  // Komisant, jego rzeczy, wysyłki i numery umów – równolegle.
+  async function unitExtras() {
+    const out: { id: string; consignor_payout_id: string | null; contract: unknown }[] = [];
+    for (let from = 0; from < 20_000; from += 1000) {
+      const { data } = await db.from("units").select("id, consignor_payout_id, contract:contracts(number, doc_number, template)").eq("consignor_id", id).order("id").range(from, from + 999);
+      out.push(...((data ?? []) as typeof out));
+      if (!data || data.length < 1000) break;
+    }
+    return out;
+  }
+  const [{ data: c }, units, { data: shipments }, extraRows, { data: payouts }] = await Promise.all([
+    supabase.from("consignors").select("*").eq("id", id).maybeSingle(),
+    consignorUnits(db, id),
+    supabase.from("consignor_shipments").select("*").eq("consignor_id", id).order("created_at", { ascending: false }).limit(50),
+    unitExtras(),
+    db.from("consignor_payouts").select("id, amount, paid_at, note, created_at").eq("consignor_id", id).order("paid_at", { ascending: false }),
+  ]);
   if (!c) notFound();
   const consignor = c as Consignor;
-  const db = createAdminClient();
-  const units = await consignorUnits(db, id);
-  const bal = await consignorBalance(db, id, units);
-  const { data: shipments } = await supabase.from("consignor_shipments").select("*").eq("consignor_id", id).order("created_at", { ascending: false }).limit(50);
+  const bal = balanceFrom(units, payouts ?? []);
   const nameOf = new Map(units.map((u) => [u.id, `${u.title} ${u.option} (${u.code})`]));
   // Numer umowy (tytuł przelewu) i rozliczenie każdej rzeczy.
   const extra = new Map<string, { paid: boolean; title: string | null }>();
-  for (let i = 0; i < units.length; i += 200) {
-    const { data } = await db.from("units").select("id, consignor_payout_id, contract:contracts(number, doc_number, template)").in("id", units.slice(i, i + 200).map((u) => u.id));
-    for (const r of data ?? []) {
-      const ct = r.contract as unknown as { number: number | null; doc_number: string | null; template: string | null } | null;
-      extra.set(r.id as string, { paid: !!r.consignor_payout_id, title: ct ? (ct.template && ct.number ? `NR${ct.number}` : ct.doc_number ?? (ct.number ? `NR${ct.number}` : null)) : null });
-    }
+  for (const r of extraRows) {
+    const ct = r.contract as { number: number | null; doc_number: string | null; template: string | null } | null;
+    extra.set(r.id, { paid: !!r.consignor_payout_id, title: ct ? (ct.template && ct.number ? `NR${ct.number}` : ct.doc_number ?? (ct.number ? `NR${ct.number}` : null)) : null });
   }
   const prices = profile.can_see_prices;
   const isAdmin = profile.role === "admin";

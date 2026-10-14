@@ -4,7 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { findVariantIds } from "@/lib/queries/units";
 import { parseProductTagCode, productTagCode } from "@/lib/price-tag-code";
 import { redirect } from "next/navigation";
-import { defaultOrderStore } from "@/lib/orders/default-store";
+import { pickDefaultStore } from "@/lib/orders/default-store";
 import { PageHeader, Thumb } from "@/components/ui";
 import { SearchInput } from "@/components/SearchInput";
 import { ProductTagsForm, type ProductRow } from "./ProductTagsForm";
@@ -32,30 +32,40 @@ export default async function ProductTagsPage({ searchParams }: { searchParams: 
   const sp = await searchParams;
   const { supabase } = await requireProfile();
   const db = createAdminClient();
-  const { data: stores } = await supabase.from("stores").select("id, name").order("name");
+  const [{ data: stores }, { data: ordersCfg }] = await Promise.all([
+    supabase.from("stores").select("id, name").order("name"),
+    db.from("app_settings").select("value").eq("key", "orders").maybeSingle(),
+  ]);
   const storeList = (stores ?? []) as { id: string; name: string }[];
-  const storeId = storeList.some((s) => s.id === sp.sklep) ? sp.sklep! : await defaultOrderStore(db, storeList);
+  const storeId = storeList.some((s) => s.id === sp.sklep) ? sp.sklep! : pickDefaultStore(ordersCfg?.value, storeList);
   if (sp.q && parseProductTagCode(sp.q) !== null) redirect(`/magazyn/produkt/${encodeURIComponent(sp.q.trim().toUpperCase())}`);
   const q = (sp.q ?? "").trim().replace(/[,()*%\\]/g, " ").trim().slice(0, 80);
   const tylkoNaStanie = sp.wszystkie !== "1";
 
   // Produkty: wyszukane (nazwa, SKU, EAN) albo – bez wyszukiwania – te, które mają sztuki na stanie.
   // Supabase oddaje najwyżej 1000 wierszy naraz, więc stany i listy czytamy stronami.
-  let productIds: string[] = [];
-  if (q.length >= 2) {
+  // Wyszukiwanie, stany i produkty sklepu – równolegle.
+  async function searchIds() {
     let byTitle = supabase.from("products").select("id").limit(1000);
     for (const w of q.split(/\s+/).filter(Boolean).slice(0, 5)) byTitle = byTitle.ilike("title", `%${w}%`);
     const [{ data: titled }, vids] = await Promise.all([byTitle, findVariantIds(supabase, q)]);
     const ids = new Set((titled ?? []).map((p) => p.id as string));
-    for (let i = 0; i < vids.length && i < 2000; i += 300) {
-      const { data } = await supabase.from("variants").select("product_id").in("id", vids.slice(i, i + 300));
-      for (const v of data ?? []) ids.add(v.product_id as string);
-    }
-    productIds = [...ids];
+    const parts = await Promise.all(Array.from({ length: Math.ceil(Math.min(vids.length, 2000) / 300) }, (_, i) =>
+      supabase.from("variants").select("product_id").in("id", vids.slice(i * 300, i * 300 + 300))));
+    for (const { data } of parts) for (const v of data ?? []) ids.add(v.product_id as string);
+    return [...ids];
   }
   type StockRow = { variant: { product_id: string } | null; location: { store_id: string } | null };
-  const stock = await allPages<StockRow>((from, to) =>
-    supabase.from("units").select("variant:variants(product_id), location:locations(store_id)").eq("status", "in_stock").order("id").range(from, to) as unknown as PromiseLike<{ data: StockRow[] | null }>);
+  type LinkRow = { product_id: string };
+  const [found, stock, links] = await Promise.all([
+    q.length >= 2 ? searchIds() : Promise.resolve([] as string[]),
+    allPages<StockRow>((from, to) =>
+      supabase.from("units").select("variant:variants(product_id), location:locations(store_id)").eq("status", "in_stock").order("id").range(from, to) as unknown as PromiseLike<{ data: StockRow[] | null }>),
+    // Produkty sklepu (do „brak w tym sklepie” i listy bez sztuk na stanie).
+    allPages<LinkRow>((from, to) =>
+      supabase.from("product_store_links").select("product_id").eq("store_id", storeId).order("product_id").range(from, to) as unknown as PromiseLike<{ data: LinkRow[] | null }>),
+  ]);
+  let productIds: string[] = found;
   const inStore = new Map<string, number>();
   const anywhere = new Map<string, number>();
   for (const u of stock) {
@@ -63,10 +73,7 @@ export default async function ProductTagsPage({ searchParams }: { searchParams: 
     anywhere.set(u.variant.product_id, (anywhere.get(u.variant.product_id) ?? 0) + 1);
     if (u.location?.store_id === storeId) inStore.set(u.variant.product_id, (inStore.get(u.variant.product_id) ?? 0) + 1);
   }
-  // Produkty sklepu (do „brak w tym sklepie” i listy bez sztuk na stanie).
-  type LinkRow = { product_id: string };
-  const linkedIds = new Set((await allPages<LinkRow>((from, to) =>
-    supabase.from("product_store_links").select("product_id").eq("store_id", storeId).order("product_id").range(from, to) as unknown as PromiseLike<{ data: LinkRow[] | null }>)).map((l) => l.product_id));
+  const linkedIds = new Set(links.map((l) => l.product_id));
   let capped = false;
   if (q.length < 2 && tylkoNaStanie) {
     // Na stanie: sztuki w lokalizacjach tego sklepu albo produkt tego sklepu ze sztukami gdziekolwiek.
@@ -77,9 +84,9 @@ export default async function ProductTagsPage({ searchParams }: { searchParams: 
   } else if (tylkoNaStanie) productIds = productIds.filter((id) => (anywhere.get(id) ?? 0) > 0);
 
   const rows: ProductRow[] = [];
-  for (let i = 0; i < productIds.length; i += 200) {
-    const part = productIds.slice(i, i + 200);
-    const { data } = await supabase.from("products").select("*").in("id", part);
+  const chunks = await Promise.all(Array.from({ length: Math.ceil(productIds.length / 200) }, (_, i) =>
+    supabase.from("products").select("*").in("id", productIds.slice(i * 200, i * 200 + 200))));
+  for (const { data } of chunks) {
     for (const p of (data ?? []) as { id: string; title: string; style_sku: string | null; image_url: string | null; tag_no?: number | null }[]) {
       rows.push({
         id: p.id, title: p.title, sku: p.style_sku, image: p.image_url, code: p.tag_no ? productTagCode(p.tag_no) : null,

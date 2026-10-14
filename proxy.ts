@@ -2,6 +2,9 @@ import { createServerClient } from "@supabase/ssr";
 import { supabaseUrl } from "@/lib/supabase/url";
 import { NextResponse, type NextRequest } from "next/server";
 
+/** Nagłówek z id osoby sprawdzonej w proxy (czyta go lib/auth.ts). */
+const USER_HEADER = "x-magazyn-uid";
+
 const PUBLIC_PATHS = ["/login", "/manifest.webmanifest", "/api/shopify/webhook", "/api/cron", "/api/drukarka/", "/podpis", "/umowa/"];
 
 /**
@@ -41,8 +44,12 @@ export async function proxy(request: NextRequest) {
   const csp = isPage ? contentSecurityPolicy(nonce, request.nextUrl.protocol === "https:") : "";
 
   // Nagłówki zapytania z nonce – Next.js dodaje go do swoich skryptów podczas renderowania.
-  const forward = () => {
+  // Zalogowana osoba sprawdzona tutaj trafia do strony nagłówkiem USER_HEADER (strona nie sprawdza tokenu drugi raz).
+  // Nagłówek z przeglądarki jest zawsze usuwany – ustawia go tylko proxy po weryfikacji.
+  const forward = (userId?: string) => {
     const h = new Headers(request.headers);
+    h.delete(USER_HEADER);
+    if (userId) h.set(USER_HEADER, userId);
     if (isPage) {
       h.set("x-nonce", nonce);
       h.set("Content-Security-Policy", csp);
@@ -57,6 +64,7 @@ export async function proxy(request: NextRequest) {
   let response = forward();
   if (PUBLIC_PATHS.some((p) => path.startsWith(p))) return finish(response);
 
+  const refreshed: { name: string; value: string; options?: object }[] = [];
   const supabase = createServerClient(
     supabaseUrl(),
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -67,20 +75,22 @@ export async function proxy(request: NextRequest) {
         },
         setAll(cookiesToSet) {
           cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
-          response = forward();
-          cookiesToSet.forEach(({ name, value, options }) => response.cookies.set(name, value, hardened(options)));
+          refreshed.push(...cookiesToSet);
         },
       },
     },
   );
 
   const { data } = await supabase.auth.getClaims();
-  if (!data?.claims?.sub) {
+  const userId = typeof data?.claims?.sub === "string" ? data.claims.sub : "";
+  if (!userId) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     url.search = path === "/" ? "" : `?next=${encodeURIComponent(path + request.nextUrl.search)}`;
     return finish(NextResponse.redirect(url));
   }
+  response = forward(userId);
+  refreshed.forEach(({ name, value, options }) => response.cookies.set(name, value, hardened(options)));
   return finish(response);
 }
 

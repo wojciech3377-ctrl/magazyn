@@ -17,18 +17,17 @@ export default async function TodoPage({ searchParams }: { searchParams: Promise
   const sp = await searchParams;
   const { supabase, profile } = await requireProfile();
   const tab = TABS.find((t) => t.key === sp.widok)?.key ?? "";
-  const { data: profiles } = await supabase.from("profiles").select("id, full_name, email, active").order("full_name");
+  let q = supabase.from("tasks").select("*");
+  if (tab === "zrobione") q = q.not("done_at", "is", null).order("done_at", { ascending: false }).limit(100);
+  else q = q.is("done_at", null).order("due_date", { ascending: true, nullsFirst: false }).order("created_at", { ascending: false }).limit(500);
+  if (tab === "") q = q.or(`assignees.eq.{},assignees.cs.{${profile.id}}`);
+  const [{ data: profiles }, { data, error }] = await Promise.all([supabase.from("profiles").select("id, full_name, email, active").order("full_name"), q]);
   const people: Person[] = (profiles ?? []).filter((p) => p.active).map((p, i) => {
     const name = (p.full_name as string | null) || (p.email as string | null)?.split("@")[0] || "?";
     return { id: p.id as string, name, initials: name.split(/[\s.]+/).filter(Boolean).slice(0, 2).map((x) => x[0]?.toUpperCase()).join(""), color: COLORS[i % COLORS.length] };
   });
   const nameOf = (id: string | null) => (id ? people.find((p) => p.id === id)?.name ?? null : null);
 
-  let q = supabase.from("tasks").select("*");
-  if (tab === "zrobione") q = q.not("done_at", "is", null).order("done_at", { ascending: false }).limit(100);
-  else q = q.is("done_at", null).order("due_date", { ascending: true, nullsFirst: false }).order("created_at", { ascending: false }).limit(500);
-  if (tab === "") q = q.or(`assignees.eq.{},assignees.cs.{${profile.id}}`);
-  const { data, error } = await q;
   const tasks = (data ?? []) as Task[];
   const today = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Warsaw" });
   const rank = { high: 0, normal: 1, low: 2 };

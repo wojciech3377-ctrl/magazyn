@@ -55,11 +55,18 @@ export async function consignorUnits(db: SupabaseClient, consignorId: string) {
 
 /** Saldo: kwoty komisanta za rzeczy sprzedane z paragonem / fakturą minus wypłaty. */
 export async function consignorBalance(db: SupabaseClient, consignorId: string, units?: ConsignorUnit[]) {
-  const list = units ?? (await consignorUnits(db, consignorId));
-  const { data: payouts } = await db.from("consignor_payouts").select("id, amount, paid_at, note, created_at").eq("consignor_id", consignorId).order("paid_at", { ascending: false });
+  const [list, { data: payouts }] = await Promise.all([
+    units ? Promise.resolve(units) : consignorUnits(db, consignorId),
+    db.from("consignor_payouts").select("id, amount, paid_at, note, created_at").eq("consignor_id", consignorId).order("paid_at", { ascending: false }),
+  ]);
+  return balanceFrom(list, payouts ?? []);
+}
+
+/** Saldo z już odczytanych rzeczy i wypłat (bez zapytań). */
+export function balanceFrom(list: ConsignorUnit[], payouts: { id: string; amount: number | string; paid_at: string; note: string | null; created_at: string }[]) {
   const earned = list.filter((u) => u.has_document).reduce((s, u) => s + (u.payout_amount ?? 0), 0);
-  const paid = (payouts ?? []).reduce((s, p) => s + Number(p.amount), 0);
-  return { earned: round(earned), paid: round(paid), balance: round(earned - paid), payouts: (payouts ?? []) as { id: string; amount: number; paid_at: string; note: string | null; created_at: string }[] };
+  const paid = payouts.reduce((s, p) => s + Number(p.amount), 0);
+  return { earned: round(earned), paid: round(paid), balance: round(earned - paid), payouts: payouts as { id: string; amount: number; paid_at: string; note: string | null; created_at: string }[] };
 }
 
 export async function consignmentFee(db: SupabaseClient) {

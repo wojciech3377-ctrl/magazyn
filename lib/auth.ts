@@ -1,4 +1,5 @@
 import { cache } from "react";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { can, homeFor, SECTIONS, type Section } from "@/lib/permissions";
@@ -18,11 +19,25 @@ export type Profile = {
  * Zalogowana osoba z profilem. Bez sesji → /login. Raz na zapytanie (cache): layout i strona
  * nie pytają bazy dwa razy. getClaims sprawdza token lokalnie, bez dodatkowego połączenia z Supabase Auth.
  */
+/** Profile pamiętane krótko (15 s) – każde kliknięcie nie czeka na bazę. Zmiana w Pracownikach czyści pamięć od razu. */
+const profileCache = new Map<string, { at: number; profile: Profile }>();
+const PROFILE_TTL = 15_000;
+export function forgetProfile(id?: string) {
+  if (id) profileCache.delete(id);
+  else profileCache.clear();
+}
+
 export const requireProfile = cache(async () => {
   const supabase = await createClient();
-  const { data: auth } = await supabase.auth.getClaims();
-  const userId = auth?.claims?.sub;
+  // Id osoby sprawdzone już w proxy (nagłówek ustawia tylko proxy) – bez drugiego sprawdzania tokenu.
+  let userId = (await headers()).get("x-magazyn-uid") || undefined;
+  if (!userId) {
+    const { data: auth } = await supabase.auth.getClaims();
+    userId = auth?.claims?.sub;
+  }
   if (!userId) redirect("/login");
+  const hit = profileCache.get(userId);
+  if (hit && Date.now() - hit.at < PROFILE_TTL) return { supabase, profile: hit.profile };
   const { data: profile } = await supabase.from("profiles").select("*").eq("id", userId).maybeSingle();
   if (!profile) {
     // Konto komisanta nie ma profilu pracownika → jego panel.
@@ -31,6 +46,8 @@ export const requireProfile = cache(async () => {
     redirect(consignor ? "/komis" : "/login?blad=konto");
   }
   if (!profile.active) redirect("/login?blad=konto");
+  profileCache.set(userId, { at: Date.now(), profile: profile as Profile });
+  if (profileCache.size > 500) profileCache.delete(profileCache.keys().next().value!);
   return { supabase, profile: profile as Profile };
 });
 

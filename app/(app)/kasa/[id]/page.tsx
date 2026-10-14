@@ -20,20 +20,22 @@ export default async function PosOrderPage({ params, searchParams }: { params: P
   const { id } = await params;
   const sp = await searchParams;
   const { supabase } = await requireProfile();
-  const { data: o } = await supabase.from("pos_orders").select("*, store:stores(name)").eq("id", id).maybeSingle();
+  // Wszystkie odczyty sprzedaży równolegle (każdy zależy tylko od id).
+  const [{ data: o }, { data: receipt }, company, fiscal, { data: receiptJob }, { data: invoice }, { data: par }, { data: items }] = await Promise.all([
+    supabase.from("pos_orders").select("*, store:stores(name)").eq("id", id).maybeSingle(),
+    supabase.from("receipts").select("number, issued_at, source, items, base_receipt_id").eq("pos_order_id", id).order("issued_at", { ascending: false }).limit(1).maybeSingle(),
+    getCompany(supabase),
+    getFiscalSettings(createAdminClient()),
+    supabase.from("receipt_jobs").select("id, status, receipt_number, error, claimed_at, number").eq("pos_order_id", id).neq("status", "cancelled").order("created_at", { ascending: false }).limit(1).maybeSingle(),
+    supabase.from("invoices").select("id, number").eq("pos_order_id", id).neq("kind", "receipt").not("status", "in", "(rejected,cancelled)").limit(1).maybeSingle(),
+    // Sprzedaż z wysyłką: paragon PDF (PAR) bez paragonu fiskalnego, poza JPK.
+    supabase.from("invoices").select("id, number").eq("pos_order_id", id).eq("kind", "receipt").not("status", "in", "(rejected,cancelled)").limit(1).maybeSingle(),
+    supabase.from("pos_order_items")
+      .select("id, price, status, name, ptu, quantity, unit:units(id, code, identifier, purchase_form, variant:variants(option, product:products(title)))")
+      .eq("order_id", id),
+  ]);
   if (!o) notFound();
-  const { data: receipt } = await supabase.from("receipts").select("number, issued_at, source, items, base_receipt_id").eq("pos_order_id", id).order("issued_at", { ascending: false }).limit(1).maybeSingle();
-  const company = await getCompany(supabase);
-  const fiscal = await getFiscalSettings(createAdminClient());
-  const { data: receiptJob } = await supabase.from("receipt_jobs").select("id, status, receipt_number, error, claimed_at, number").eq("pos_order_id", id).neq("status", "cancelled").order("created_at", { ascending: false }).limit(1).maybeSingle();
-  const { data: invoice } = await supabase.from("invoices").select("id, number").eq("pos_order_id", id).neq("kind", "receipt").not("status", "in", "(rejected,cancelled)").limit(1).maybeSingle();
-  // Sprzedaż z wysyłką: paragon PDF (PAR) bez paragonu fiskalnego, poza JPK.
-  const { data: par } = await supabase.from("invoices").select("id, number").eq("pos_order_id", id).eq("kind", "receipt").not("status", "in", "(rejected,cancelled)").limit(1).maybeSingle();
   const { data: shipOrder } = par ? await supabase.from("orders").select("id, name").eq("shopify_order_id", `par:${par.id}`).maybeSingle() : { data: null };
-  const { data: items } = await supabase
-    .from("pos_order_items")
-    .select("id, price, status, name, ptu, quantity, unit:units(id, code, identifier, purchase_form, variant:variants(option, product:products(title)))")
-    .eq("order_id", id);
 
   return (
     <>

@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { redirect, unstable_rethrow } from "next/navigation";
-import { requireAdmin } from "@/lib/auth";
+import { forgetProfile, requireAdmin } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { deleteWebhooks, listWebhooks, registerProductWebhooks } from "@/lib/integrations/shopify";
 import { disconnect } from "@/lib/integrations/furgonetka";
@@ -84,6 +84,7 @@ export async function saveUser(formData: FormData) {
   };
   if (id === profile.id && (patch.role !== "admin" || !patch.active)) return done("Nie możesz odebrać sobie uprawnień administratora.", "blad");
   const { error } = await supabase.from("profiles").update(patch).eq("id", id);
+  forgetProfile();
   if (error) return done(error.message, "blad");
   await done("Użytkownik zapisany.");
 }
@@ -99,6 +100,7 @@ export async function createUser(formData: FormData) {
   if (error) return done(error.message, "blad");
   // Konto dodane przez administratora od razu aktywne (samodzielne rejestracje zostają nieaktywne).
   await admin.from("profiles").update({ active: true }).eq("id", data.user.id);
+  forgetProfile();
   await done(`Konto ${email} utworzone. Przekaż hasło osobiście i poproś o zmianę po pierwszym logowaniu.`);
 }
 

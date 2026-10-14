@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { requireAdmin } from "@/lib/auth";
+import { forgetProfile, requireAdmin } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { SECTION_KEYS, type Section } from "@/lib/permissions";
 import { errorMessage } from "@/lib/errors";
@@ -43,6 +43,7 @@ export async function createEmployee(_: CreateState, fd: FormData): Promise<Crea
     can_see_prices: fd.get("can_see_prices") !== null,
     active: true,
   }).eq("id", data.user.id);
+  forgetProfile();
   if (pErr) return { error: `Konto utworzone, ale nie zapisały się uprawnienia: ${pErr.message}. Uruchom migrację 0038.` };
   revalidatePath("/pracownicy");
   return { ok: `Dodano ${email}. Przekaż hasło osobiście – pracownik loguje się e-mailem i tym hasłem.` };
@@ -65,6 +66,7 @@ export async function saveEmployee(fd: FormData) {
     can_see_prices: fd.get("can_see_prices") !== null,
     active,
   }).eq("id", id);
+  forgetProfile();
   if (error) return done(error.message, "blad", id);
   await done("Zapisano zmiany pracownika.");
 }
@@ -88,9 +90,11 @@ export async function deleteEmployee(fd: FormData) {
   const admin = createAdminClient();
   try {
     const { error } = await admin.auth.admin.deleteUser(id);
+    forgetProfile();
     if (error) throw error;
   } catch (e) {
     await admin.from("profiles").update({ active: false }).eq("id", id);
+    forgetProfile();
     return done(`Konto ma historię w aplikacji, więc zostało zablokowane zamiast usunięte (${errorMessage(e).slice(0, 120)}).`, "ok");
   }
   await done("Konto usunięte.");

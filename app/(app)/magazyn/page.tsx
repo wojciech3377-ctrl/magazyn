@@ -65,26 +65,27 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
   };
   const more = false;
 
-  const [{ rows, count }, { data: stores }, { data: locations }, { data: contracts }, { count: noContract }, { data: consignors }] = await Promise.all([
+  const [{ rows, count }, { data: stores }, { data: locations }, { data: contracts }, { count: noContract }, { data: consignors }, { count: unusedContracts }] = await Promise.all([
     queryUnits(supabase, filters, [(page - 1) * PER_PAGE, page * PER_PAGE - 1]),
     supabase.from("stores").select("id, name").order("name"),
     supabase.from("locations").select("id, name, store_id").eq("active", true).order("name"),
     supabase.from("contracts").select("id, type, counterparty, contract_date").order("created_at", { ascending: false }).limit(200),
     supabase.from("units").select("id", { count: "exact", head: true }).is("contract_id", null).in("status", ["in_stock", "in_transit", "reserved"]),
     supabase.from("consignors").select("id, name").order("name"),
+    supabase.from("contracts_unused").select("id", { count: "exact", head: true }),
   ]);
 
   // Etap umów widocznych sztuk (zielony / pomarańczowy).
   const contractIds = [...new Set(rows.map((r) => r.contract_id).filter((x): x is string => !!x))];
-  const { data: contractRows } = contractIds.length ? await supabase.from("contracts").select(CONTRACT_LITE_FIELDS).in("id", contractIds) : { data: [] };
-  const contractById = new Map((contractRows ?? []).map((c) => [c.id as string, c as unknown as ContractLite]));
   // Shopify: SKU rozmiaru, wersja robocza (draft) i tag „reused” produktu w sklepie sztuki.
   const productIds = [...new Set(rows.map((r) => r.variant.product.id))];
   const variantIds = [...new Set(rows.map((r) => r.variant.id))];
-  const [{ data: pLinks }, { data: vLinks }] = await Promise.all([
+  const [{ data: contractRows }, { data: pLinks }, { data: vLinks }] = await Promise.all([
+    contractIds.length ? supabase.from("contracts").select(CONTRACT_LITE_FIELDS).in("id", contractIds) : Promise.resolve({ data: [] }),
     productIds.length ? supabase.from("product_store_links").select("product_id, store_id, status, tags").in("product_id", productIds) : Promise.resolve({ data: [] }),
     variantIds.length ? supabase.from("variant_store_links").select("variant_id, store_id, sku").in("variant_id", variantIds) : Promise.resolve({ data: [] }),
   ]);
+  const contractById = new Map((contractRows ?? []).map((c) => [c.id as string, c as unknown as ContractLite]));
   type PL = { product_id: string; store_id: string; status: string | null; tags: string[] | null };
   const shopOf = (productId: string, storeId: string) => {
     const ls = ((pLinks ?? []) as PL[]).filter((l) => l.product_id === productId);
@@ -126,8 +127,6 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
       </th>
     );
   };
-
-  const { count: unusedContracts } = await supabase.from("contracts_unused").select("id", { count: "exact", head: true });
 
   return (
     <>

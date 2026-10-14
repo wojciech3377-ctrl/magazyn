@@ -21,7 +21,7 @@ import { ConsignorWaiting, ContractDone, ContractInProgress } from "@/components
 import { classifyShipment, ORDER_STATUS, paymentLabel, type Fulfillment, type OrderStatus } from "@/lib/orders/status";
 import { FilterField, ListToolbar } from "@/components/ListToolbar";
 import { activeFilters, filterChips } from "@/lib/list-params";
-import { defaultOrderStore } from "@/lib/orders/default-store";
+import { pickDefaultStore } from "@/lib/orders/default-store";
 import { isParOrder } from "@/lib/orders/par-order";
 import type { LineItem } from "@/lib/sync/shop-orders";
 
@@ -60,8 +60,11 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
   const { supabase, profile } = await requireProfile();
   const tab = ORDER_TABS.some((t) => t.key === sp.status) ? sp.status ?? "" : "";
   // Sklep: wybrany w przełączniku albo domyślny z Ustawień (bez ustawienia – Sneakers Depot).
-  const { data: storeList } = await supabase.from("stores").select("id, name").order("name");
-  const storeSel = sp.sklep === "wszystkie" || storeList?.some((x) => x.id === sp.sklep) ? sp.sklep! : await defaultOrderStore(supabase, storeList ?? []);
+  const [{ data: storeList }, { data: ordersCfg }] = await Promise.all([
+    supabase.from("stores").select("id, name").order("name"),
+    supabase.from("app_settings").select("value").eq("key", "orders").maybeSingle(),
+  ]);
+  const storeSel = sp.sklep === "wszystkie" || storeList?.some((x) => x.id === sp.sklep) ? sp.sklep! : pickDefaultStore(ordersCfg?.value, storeList ?? []);
   const storeId = storeSel === "wszystkie" ? null : storeSel;
 
   const orderSort = ORDER_SORTS[sp.sort ?? ""] ? sp.sort! : "najnowsze";
@@ -102,22 +105,21 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
   const cronStale = !lastShop || Date.now() - Date.parse(lastShop.created_at) > 10 * 60_000;
 
   const ids = (orders ?? []).map((o) => o.id);
-  const [{ data: receiptJobs }, printer] = await Promise.all([
-    ids.length ? supabase.from("receipt_jobs").select("id, order_id, status, receipt_number, error, claimed_at, number").in("order_id", ids).neq("status", "cancelled") : Promise.resolve({ data: [] }),
+  const gids = [...new Set((orders ?? []).flatMap((o) => ((o.line_items ?? []) as LineItem[]).map((l) => l.shopify_variant_id).filter((x): x is string => !!x)))];
+  const none = Promise.resolve({ data: [] as never[] });
+  // Wszystko, co zależy tylko od listy zamówień – jednym rzutem, równolegle.
+  const [{ data: receiptJobs }, printer, { data: wtbRows }, { data: sales }, { data: shipments }, { data: vLinks }, fresh] = await Promise.all([
+    ids.length ? supabase.from("receipt_jobs").select("id, order_id, status, receipt_number, error, claimed_at, number").in("order_id", ids).neq("status", "cancelled") : none,
     fiscalPrinterReady(createAdminClient()),
+    ids.length ? supabase.from("wtb_items").select("order_id").in("order_id", ids).eq("status", "active") : none,
+    ids.length ? supabase.from("sales").select(`id, order_id, status, variant_id, shopify_line_id, shopify_line_index, unit:units(id, code, contract_id, owner_type, contract:contracts(${CONTRACT_LITE_FIELDS}))`).in("order_id", ids) : none,
+    ids.length ? supabase.from("shipments").select("order_id, service, tracking_number, tracking_url, state, state_description").in("order_id", ids).order("created_at", { ascending: false }) : none,
+    gids.length ? supabase.from("variant_store_links").select("variant_id, shopify_variant_id").in("shopify_variant_id", gids) : none,
+    newOrdersCount(),
   ]);
   const jobOf = new Map((receiptJobs ?? []).map((j) => [j.order_id as string, j as unknown as JobView]));
-  const { data: wtbRows } = ids.length ? await supabase.from("wtb_items").select("order_id").in("order_id", ids).eq("status", "active") : { data: [] };
   const wtbOrders = new Set((wtbRows ?? []).map((w) => w.order_id as string));
-  const [{ data: sales }, { data: shipments }] = ids.length
-    ? await Promise.all([
-        supabase.from("sales").select(`id, order_id, status, variant_id, shopify_line_id, shopify_line_index, unit:units(id, code, contract_id, owner_type, contract:contracts(${CONTRACT_LITE_FIELDS}))`).in("order_id", ids),
-        supabase.from("shipments").select("order_id, service, tracking_number, tracking_url, state, state_description").in("order_id", ids).order("created_at", { ascending: false }),
-      ])
-    : [{ data: [] }, { data: [] }];
   type ListSale = { id: string; status: string; variant_id: string | null; shopify_line_id: string | null; shopify_line_index: number | null; unit: { id: string; code: string; contract_id: string | null; owner_type: string; contract: ContractLite | null } | null };
-  const gids = [...new Set((orders ?? []).flatMap((o) => ((o.line_items ?? []) as LineItem[]).map((l) => l.shopify_variant_id).filter((x): x is string => !!x)))];
-  const { data: vLinks } = gids.length ? await supabase.from("variant_store_links").select("variant_id, shopify_variant_id").in("shopify_variant_id", gids) : { data: [] };
   const variantOf = new Map((vLinks ?? []).map((l) => [l.shopify_variant_id as string, l.variant_id as string]));
   const salesBy = new Map<string, ListSale[]>();
   for (const s of sales ?? []) salesBy.set(s.order_id as string, [...(salesBy.get(s.order_id as string) ?? []), s as unknown as ListSale]);
@@ -141,7 +143,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
           </>
         }
       />
-      <Tabs active="orders" />
+      <Tabs active="orders" fresh={fresh} />
       <Flash sp={sp} />
       {recentError && <div className="mb-4"><Notice tone="error">Odczyt zamówień z Shopify ({dateTime(recentError.created_at)}): {recentError.message}</Notice></div>}
       {cronStale && profile.role === "admin" && (
@@ -410,12 +412,18 @@ async function SaleLines({ sp, page }: { sp: Record<string, string | undefined>;
 /** Zamówienia wysłane / zakończone – brak sztuki z magazynu nie jest już problemem (także w JPK). */
 const FINISHED = new Set(["shipped", "delivered", "returned", "cancelled"]);
 
-async function Tabs({ active }: { active: "orders" | "lines" | "pos" | "faktury" | "jpk" }) {
+/** Liczba nowych zamówień (licznik przy zakładce „Zamówienia”). */
+async function newOrdersCount() {
+  const { count } = await createAdminClient().from("orders").select("id", { count: "exact", head: true }).eq("status", "new");
+  return count ?? 0;
+}
+
+async function Tabs({ active, fresh: known }: { active: "orders" | "lines" | "pos" | "faktury" | "jpk"; fresh?: number }) {
   const { profile } = await requireProfile();
   const cur = (on: boolean) => (on ? ("page" as const) : undefined);
   const sales = can(profile, "sprzedaz");
   const invoices = can(profile, "faktury");
-  const { count: fresh } = sales ? await createAdminClient().from("orders").select("id", { count: "exact", head: true }).eq("status", "new") : { count: 0 };
+  const fresh = !sales ? 0 : known ?? (await newOrdersCount());
   return (
     <div className="-mx-4 mb-5 overflow-x-auto px-4 sm:mx-0 sm:px-0">
       <nav className="segmented flex-nowrap whitespace-nowrap" aria-label="Sprzedaż">
