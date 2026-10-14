@@ -75,7 +75,8 @@ export function PosForm({ stores, printer, ptu, defaultPtu, ptuFor, printerOnlin
       const [products, own] = await Promise.all([searchCatalog(q, storeId, 20), searchOwnProducts(q)]);
       const units = products.length ? [] : await searchUnits(q, storeId);
       if (id !== searchId.current) return;
-      setHits({ q, products, own, units, extras: null });
+      // Wyniki ze Shopify mogły przyjść wcześniej – zostają.
+      setHits((h) => ({ q, products, own, units, extras: h && h.q === q ? h.extras : null }));
     });
     searchShopifyExtras(q, storeId).then((extras) => {
       if (id === searchId.current) setHits((h) => (h && h.q === q ? { ...h, extras } : { q, products: [], own: [], units: [], extras }));
