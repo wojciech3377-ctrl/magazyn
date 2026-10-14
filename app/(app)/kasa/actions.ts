@@ -10,6 +10,8 @@ import { errorMessage } from "@/lib/errors";
 import { parseProductTagCode } from "@/lib/price-tag-code";
 import { createParShippingOrder, readParShipping } from "@/lib/orders/par-order";
 import { draftFromPos, issueReceipt } from "@/lib/invoices/service";
+import { shopifyGraphql } from "@/lib/integrations/shopify";
+import { exclusionVat, isExcluded, loadExclusionRules } from "@/lib/services";
 
 export type PosUnit = {
   id: string;
@@ -63,18 +65,20 @@ export async function searchOwnProducts(q: string): Promise<OwnProduct[]> {
   return [...new Map(all.map((p) => [p.id, { ...p, price: p.price === null ? null : Number(p.price) }])).values()];
 }
 
-export type CatalogSize = { variantId: string; option: string; price: number | null; inStock: number; sku: string | null };
+/** inStock – sztuki na stanie razem, here – w lokalizacjach wybranego sklepu (na miejscu). */
+export type CatalogSize = { variantId: string; option: string; price: number | null; inStock: number; here: number; sku: string | null };
 export type CatalogHit = { productId: string; title: string; image: string | null; sku: string | null; sizes: CatalogSize[] };
 
 /**
  * Wyszukiwarka katalogu w Kasie (ręczne dodawanie): modele ze Shopify po nazwie (wszystkie słowa), SKU albo EAN,
  * z rozmiarami, ceną w wybranym sklepie i liczbą sztuk na stanie.
  */
-export async function searchCatalog(q: string, storeId: string): Promise<CatalogHit[]> {
+export async function searchCatalog(q: string, storeId: string, limit = 10): Promise<CatalogHit[]> {
   const { supabase } = await requireSection("kasa");
   const text = q.trim().replace(/[,()*%\\"']/g, " ").replace(/\s+/g, " ").trim();
   if (text.length < 2) return [];
-  let byTitle = supabase.from("products").select("id").order("updated_at", { ascending: false }).limit(10);
+  const max = Math.min(Math.max(limit, 1), 30);
+  let byTitle = supabase.from("products").select("id").order("updated_at", { ascending: false }).limit(max);
   for (const w of text.split(" ").slice(0, 6)) byTitle = byTitle.ilike("title", `%${w}%`);
   const [title, style, links, eans] = await Promise.all([
     byTitle,
@@ -88,7 +92,7 @@ export async function searchCatalog(q: string, storeId: string): Promise<Catalog
     ...(links.data ?? []).map((l) => (l.variant as unknown as { product_id: string } | null)?.product_id).filter((x): x is string => !!x),
     ...(style.data ?? []).map((p) => p.id as string),
     ...(title.data ?? []).map((p) => p.id as string),
-  ])].slice(0, 10);
+  ])].slice(0, max);
   if (!ids.length) return [];
   const { data: products } = await supabase.from("products")
     .select("id, title, image_url, style_sku, variants(id, option, links:variant_store_links(store_id, price, sku))")
@@ -96,10 +100,19 @@ export async function searchCatalog(q: string, storeId: string): Promise<Catalog
   type P = { id: string; title: string; image_url: string | null; style_sku: string | null; variants: { id: string; option: string; links: { store_id: string; price: number | null; sku: string | null }[] }[] };
   const list = (products ?? []) as unknown as P[];
   const variantIds = list.flatMap((p) => p.variants.map((v) => v.id));
+  // Sztuki na stanie: razem i na miejscu (lokalizacje wybranego sklepu).
   const counts = new Map<string, number>();
-  for (let i = 0; i < variantIds.length; i += 300) {
-    const { data } = await supabase.from("variant_stock_totals").select("variant_id, in_stock").in("variant_id", variantIds.slice(i, i + 300));
-    for (const r of data ?? []) counts.set(r.variant_id as string, Number(r.in_stock));
+  const here = new Map<string, number>();
+  for (let i = 0; i < variantIds.length; i += 150) {
+    for (let from = 0; ; from += 1000) {
+      const { data } = await supabase.from("units").select("variant_id, location:locations(store_id)").eq("status", "in_stock")
+        .in("variant_id", variantIds.slice(i, i + 150)).order("id").range(from, from + 999);
+      for (const r of (data ?? []) as unknown as { variant_id: string; location: { store_id: string } | null }[]) {
+        counts.set(r.variant_id, (counts.get(r.variant_id) ?? 0) + 1);
+        if (r.location?.store_id === storeId) here.set(r.variant_id, (here.get(r.variant_id) ?? 0) + 1);
+      }
+      if (!data || data.length < 1000) break;
+    }
   }
   const collator = new Intl.Collator("pl", { numeric: true });
   const order = new Map(ids.map((id, i) => [id, i]));
@@ -110,9 +123,63 @@ export async function searchCatalog(q: string, storeId: string): Promise<Catalog
       sizes: p.variants.map((v) => {
         const own = v.links.find((l) => l.store_id === storeId);
         const any = own?.price != null ? own : v.links.find((l) => l.price !== null);
-        return { variantId: v.id, option: v.option, price: any?.price != null ? Number(any.price) : null, inStock: counts.get(v.id) ?? 0, sku: own?.sku ?? v.links[0]?.sku ?? null };
+        return { variantId: v.id, option: v.option, price: any?.price != null ? Number(any.price) : null, inStock: counts.get(v.id) ?? 0, here: here.get(v.id) ?? 0, sku: own?.sku ?? v.links[0]?.sku ?? null };
       }).sort((x, y) => collator.compare(x.option, y.option)),
     }));
+}
+
+/** Produkty wykluczone z magazynu (np. sznurówki rope) – prosto ze Shopify wybranego sklepu, z wariantami do wyboru. */
+export type ExtraSize = { id: string; option: string; price: number | null; available: number | null };
+export type ExtraHit = { id: string; title: string; image: string | null; vat: "margin" | "23"; sizes: ExtraSize[] };
+
+const extraCache = new Map<string, { at: number; hits: ExtraHit[] }>();
+
+export async function searchShopifyExtras(q: string, storeId: string): Promise<ExtraHit[]> {
+  const { supabase } = await requireSection("kasa");
+  const text = q.trim().replace(/[^\p{L}\p{N} .-]/gu, " ").replace(/\s+/g, " ").trim().slice(0, 60);
+  if (text.length < 3) return [];
+  const key = `${storeId}|${text.toLowerCase()}`;
+  const hit = extraCache.get(key);
+  if (hit && Date.now() - hit.at < 60_000) return hit.hits;
+  const [{ data: store }, rules] = await Promise.all([
+    supabase.from("stores").select("code, shopify_domain").eq("id", storeId).maybeSingle(),
+    loadExclusionRules(supabase),
+  ]);
+  if (!store?.shopify_domain || !rules.length) return [];
+  const ex = {
+    skuPrefixes: rules.filter((r) => r.kind === "sku_prefix").map((r) => r.value.toUpperCase()),
+    titleContains: rules.filter((r) => r.kind === "title_contains").map((r) => r.value.toLowerCase()),
+  };
+  type R = { products: { nodes: { id: string; title: string; featuredMedia: { preview: { image: { url: string } | null } | null } | null;
+    variants: { nodes: { id: string; title: string; sku: string | null; price: string | null; inventoryQuantity: number | null; inventoryItem: { tracked: boolean } | null }[] } }[] } };
+  let data: R;
+  try {
+    data = await shopifyGraphql<R>(store.shopify_domain as string, store.code as string, `query($q: String!) {
+      products(first: 15, query: $q, sortKey: RELEVANCE) { nodes { id title featuredMedia { preview { image { url } } }
+        variants(first: 60) { nodes { id title sku price inventoryQuantity inventoryItem { tracked } } } } }
+    }`, { q: `status:active ${text.split(" ").map((w) => `${w}*`).join(" ")}` });
+  } catch {
+    return [];
+  }
+  const words = text.toLowerCase().split(" ");
+  const collator = new Intl.Collator("pl", { numeric: true });
+  const hits: ExtraHit[] = [];
+  for (const p of data.products.nodes) {
+    if (!words.every((w) => p.title.toLowerCase().includes(w) || p.variants.nodes.some((v) => (v.sku ?? "").toLowerCase().includes(w) || v.title.toLowerCase().includes(w)))) continue;
+    const vs = p.variants.nodes.filter((v) => isExcluded(ex, [v.sku], `${p.title} ${v.title}`));
+    if (!vs.length) continue;
+    hits.push({
+      id: p.id, title: p.title, image: p.featuredMedia?.preview?.image?.url ?? null,
+      vat: exclusionVat(rules, vs[0].sku, p.title),
+      sizes: vs.map((v) => ({
+        id: v.id, option: v.title === "Default Title" ? "" : v.title, price: v.price != null ? Number(v.price) : null,
+        available: v.inventoryItem?.tracked === false ? null : v.inventoryQuantity ?? 0,
+      })).sort((a, b) => collator.compare(a.option, b.option)),
+    });
+  }
+  extraCache.set(key, { at: Date.now(), hits });
+  if (extraCache.size > 200) extraCache.delete(extraCache.keys().next().value!);
+  return hits;
 }
 
 export type ScanChoice = { variantId: string; title: string; option: string; inStock: number; price: number | null };

@@ -3,7 +3,7 @@
 import { useActionState, useEffect, useRef, useState, useTransition } from "react";
 import { SearchInput } from "@/components/SearchInput";
 import { FISCAL_NAME_MAX, receiptName } from "@/lib/fiscal/name";
-import { finishPosOrder, pickUnitForVariant, scanUnit, searchCatalog, searchOwnProducts, searchUnits, type CatalogHit, type CatalogSize, type OwnProduct, type PosUnit, type ScanChoice, type ScannedUnit } from "./actions";
+import { finishPosOrder, pickUnitForVariant, scanUnit, searchCatalog, searchOwnProducts, searchShopifyExtras, searchUnits, type CatalogHit, type CatalogSize, type ExtraHit, type ExtraSize, type OwnProduct, type PosUnit, type ScanChoice, type ScannedUnit } from "./actions";
 
 type UnitLine = PosUnit & { kind: "unit"; key: string; priceInput: string; ptu: string; label: string };
 type CustomLine = { kind: "custom"; key: string; name: string; ptu: string; qtyInput: string; priceInput: string; product_id: string | null; save: boolean; note: string };
@@ -34,7 +34,9 @@ export function PosForm({ stores, printer, ptu, defaultPtu, ptuFor, printerOnlin
   const [lines, setLines] = useState<Line[]>([]);
   const [scan, setScan] = useState("");
   const [message, setMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
-  const [hits, setHits] = useState<{ units: PosUnit[]; own: OwnProduct[]; q: string } | null>(null);
+  type Hits = { q: string; products: CatalogHit[]; extras: ExtraHit[] | null; own: OwnProduct[]; units: PosUnit[] };
+  const [hits, setHits] = useState<Hits | null>(null);
+  const searchId = useRef(0);
   const [payment, setPayment] = useState("card");
   const [choices, setChoices] = useState<ScanChoice[] | null>(null);
   const [scanned, setScanned] = useState<ScannedUnit | null>(null);
@@ -61,12 +63,24 @@ export function PosForm({ stores, printer, ptu, defaultPtu, ptuFor, printerOnlin
   useEffect(() => {
     const q = scan.trim();
     if (q.length < 3 || !/[a-ząćęłńóśźż]\s|[a-ząćęłńóśźż]{3}/i.test(q)) { setHits(null); return; }
-    const t = setTimeout(() => start(async () => {
-      const [units, own] = await Promise.all([searchUnits(q, storeId), searchOwnProducts(q)]);
-      setHits({ units, own, q });
-    }), 350);
+    const t = setTimeout(() => searchByName(q), 350);
     return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scan, storeId]);
+
+  /** Wyszukiwanie po nazwie: modele z rozmiarami (katalog), własne produkty, a obok – produkty spoza magazynu ze Shopify (np. rope). */
+  function searchByName(q: string) {
+    const id = ++searchId.current;
+    start(async () => {
+      const [products, own] = await Promise.all([searchCatalog(q, storeId, 20), searchOwnProducts(q)]);
+      const units = products.length ? [] : await searchUnits(q, storeId);
+      if (id !== searchId.current) return;
+      setHits({ q, products, own, units, extras: null });
+    });
+    searchShopifyExtras(q, storeId).then((extras) => {
+      if (id === searchId.current) setHits((h) => (h && h.q === q ? { ...h, extras } : { q, products: [], own: [], units: [], extras }));
+    }).catch(() => {});
+  }
 
   const unitIds = lines.filter((l): l is UnitLine => l.kind === "unit").map((l) => l.id);
 
@@ -76,7 +90,20 @@ export function PosForm({ stores, printer, ptu, defaultPtu, ptuFor, printerOnlin
     setMessage({ tone: "ok", text: `Dodano ${u.code} · ${u.title} ${u.option}` });
     setScan("");
     setHits(null);
+    searchId.current++;
     setCatalogQ("");
+  }
+
+  /** Produkt spoza magazynu ze Shopify (np. sznurówki rope): pozycja z ceną ze sklepu i stawką z reguły wykluczenia. */
+  function addExtra(p: ExtraHit, sz: ExtraSize) {
+    setLines((prev) => [...prev, {
+      kind: "custom", key: crypto.randomUUID(), name: receiptName(p.title, sz.option || ""), ptu: p.vat === "23" ? ptuFor.vat23 : ptuFor.margin,
+      qtyInput: "1", priceInput: sz.price !== null ? String(sz.price) : "", product_id: null, save: false, note: "ze Shopify · poza magazynem",
+    }]);
+    setMessage({ tone: "ok", text: `Dodano ${p.title}${sz.option ? ` ${sz.option}` : ""}` });
+    setScan("");
+    setHits(null);
+    searchId.current++;
   }
 
   /** Rozmiar z katalogu: jest na stanie → najstarsza sztuka z magazynu; nie ma → pozycja spoza magazynu z ceną z katalogu. */
@@ -135,12 +162,9 @@ export function PosForm({ stores, printer, ptu, defaultPtu, ptuFor, printerOnlin
           ? { tone: "ok", text: r.scanned.unit ? `Zeskanowano ${r.scanned.code} – wybierz rozmiar (zeskanowany jest zaznaczony).` : `Sztuka ${r.scanned.code} jest już sprzedana albo w koszyku – wybierz rozmiar z magazynu.` }
           : { tone: "ok", text: "Wybierz rozmiar." });
       } else {
-        // Nie kod – szukamy po nazwie (sztuki na stanie i własne produkty).
-        const [units, own] = await Promise.all([searchUnits(code, storeId), searchOwnProducts(code)]);
-        if (units.length === 1 && !own.length) addUnit(units[0]);
-        else if (own.length === 1 && !units.length) addOwn(own[0]);
-        else if (units.length || own.length) { setHits({ units, own, q: code }); setMessage(null); }
-        else setMessage({ tone: "error", text: `Nie znaleziono „${code.trim()}” – ani kodu, ani nazwy. Możesz dodać pozycję ręcznie poniżej.` });
+        // Nie kod – szukamy po nazwie: modele z rozmiarami, własne produkty i produkty spoza magazynu ze Shopify.
+        setMessage(null);
+        searchByName(code.trim());
       }
       scanRef.current?.focus();
     });
@@ -213,31 +237,91 @@ export function PosForm({ stores, printer, ptu, defaultPtu, ptuFor, printerOnlin
               </div>
             </div>
           )}
-          {hits && (hits.units.length > 0 || hits.own.length > 0) && (
-            <ul className="max-h-80 divide-y divide-line overflow-y-auto rounded-xl border border-line">
+          {hits && (
+            <div className="max-h-[32rem] space-y-2 overflow-y-auto rounded-xl border border-line bg-slate-50/60 p-2">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-xs text-muted">
+                <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded-sm border border-emerald-400 bg-emerald-100" /> na miejscu</span>
+                <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded-sm border border-amber-300 bg-amber-50" /> w innym sklepie</span>
+                <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded-sm border border-line bg-white" /> brak (dodasz jako pozycję z ceną)</span>
+                <button type="button" className="ml-auto hover:text-ink" onClick={() => { setHits(null); searchId.current++; }}>zamknij ✕</button>
+              </div>
               {hits.own.map((p) => (
-                <li key={p.id} className="flex items-center gap-3 px-3 py-2">
+                <div key={p.id} className="flex items-center gap-3 rounded-lg border border-line bg-white px-3 py-2">
                   <span className="min-w-0 flex-1">
                     <span className="block font-medium leading-snug">{p.name}</span>
                     <span className="text-xs text-muted">własny produkt · PTU {ptuText(p.ptu)}{p.track_stock ? ` · stan ${p.stock}` : " · bez stanu"}</span>
                   </span>
                   <span className="tabular-nums">{p.price !== null ? fmt(p.price) : "–"}</span>
                   <button type="button" className="btn-secondary px-2.5 py-1 text-xs" onClick={() => addOwn(p)}>Dodaj</button>
-                </li>
+                </div>
               ))}
+              {hits.products.map((p) => {
+                const here = p.sizes.reduce((n, x) => n + x.here, 0);
+                const all = p.sizes.reduce((n, x) => n + x.inStock, 0);
+                return (
+                  <div key={p.productId} className="rounded-lg border border-line bg-white p-2.5">
+                    <div className="mb-2 flex items-center gap-2.5">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      {p.image ? <img src={`${p.image}${p.image.includes("?") ? "&" : "?"}width=96`} alt="" className="h-11 w-11 shrink-0 rounded-md border border-line bg-white object-contain" /> : <span className="h-11 w-11 shrink-0 rounded-md bg-slate-100" />}
+                      <span className="min-w-0">
+                        <span className="block font-medium leading-snug">{p.title}</span>
+                        <span className="text-xs text-muted">{p.sku ?? "bez SKU"} · na miejscu {here} szt.{all > here ? ` · w innych ${all - here}` : ""}</span>
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-[repeat(auto-fill,minmax(5.25rem,1fr))] gap-1.5">
+                      {p.sizes.map((sz) => (
+                        <button type="button" key={sz.variantId} onClick={() => pickCatalog(p, sz)} title={sz.sku ?? undefined}
+                          className={`rounded-lg border px-2 py-1.5 text-center text-xs transition-colors ${sz.here > 0 ? "border-emerald-400 bg-emerald-100 text-emerald-950 hover:border-emerald-600" : sz.inStock > 0 ? "border-amber-300 bg-amber-50 hover:border-amber-500" : "border-line bg-white text-slate-400 hover:border-accent"}`}>
+                          <b className="block text-sm">{sz.option}</b>
+                          <span className="block tabular-nums">{sz.here > 0 ? `${sz.here} szt.` : sz.inStock > 0 ? `inny sklep ${sz.inStock}` : "brak"}</span>
+                          {sz.price !== null && <span className="block tabular-nums opacity-80">{fmt(sz.price)}</span>}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
               {hits.units.map((u) => (
-                <li key={u.id} className="flex items-center gap-3 px-3 py-2">
+                <div key={u.id} className="flex items-center gap-3 rounded-lg border border-line bg-white px-3 py-2">
                   <span className="min-w-0 flex-1">
                     <span className="block font-medium leading-snug">{u.title} · {u.option}</span>
                     <span className="text-xs text-muted">{u.code}{u.identifier ? ` · ${u.identifier}` : ""} · {u.location}{u.owner ? ` · komis ${u.owner}` : ""}</span>
                   </span>
                   <span className="tabular-nums">{u.price !== null ? fmt(u.price) : "–"}</span>
                   <button type="button" className="btn-secondary px-2.5 py-1 text-xs" onClick={() => addUnit(u)} disabled={unitIds.includes(u.id)}>Dodaj</button>
-                </li>
+                </div>
               ))}
-            </ul>
+              {hits.extras === null && <p className="px-1 text-xs text-muted">Szukam też w Shopify (produkty spoza magazynu, np. rope)…</p>}
+              {hits.extras?.map((p) => (
+                <div key={p.id} className="rounded-lg border border-line bg-white p-2.5">
+                  <div className="mb-2 flex items-center gap-2.5">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    {p.image ? <img src={`${p.image}${p.image.includes("?") ? "&" : "?"}width=96`} alt="" className="h-11 w-11 shrink-0 rounded-md border border-line bg-white object-contain" /> : <span className="h-11 w-11 shrink-0 rounded-md bg-slate-100" />}
+                    <span className="min-w-0">
+                      <span className="block font-medium leading-snug">{p.title}</span>
+                      <span className="text-xs text-muted">ze Shopify · poza magazynem · {p.vat === "23" ? "VAT 23%" : "VAT marża"}</span>
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-[repeat(auto-fill,minmax(5.25rem,1fr))] gap-1.5">
+                    {p.sizes.map((sz) => {
+                      const on = sz.available === null || sz.available > 0;
+                      return (
+                        <button type="button" key={sz.id} onClick={() => addExtra(p, sz)}
+                          className={`rounded-lg border px-2 py-1.5 text-center text-xs transition-colors ${on ? "border-emerald-400 bg-emerald-100 text-emerald-950 hover:border-emerald-600" : "border-line bg-white text-slate-400 hover:border-accent"}`}>
+                          <b className="block text-sm">{sz.option || "Dodaj"}</b>
+                          <span className="block tabular-nums">{sz.available === null ? "bez stanu" : sz.available > 0 ? `${sz.available} szt.` : "brak"}</span>
+                          {sz.price !== null && <span className="block tabular-nums opacity-80">{fmt(sz.price)}</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+              {!busy && hits.extras !== null && !hits.products.length && !hits.own.length && !hits.units.length && !hits.extras.length && (
+                <p className="px-1 py-2 text-sm text-muted">Nie znaleziono „{hits.q}”. Możesz dodać pozycję ręcznie poniżej.</p>
+              )}
+            </div>
           )}
-          {hits && !hits.units.length && !hits.own.length && !busy && <p className="text-sm text-muted">Brak sztuk na stanie ani własnych produktów dla „{hits.q}”.</p>}
 
           <div className="rounded-xl border border-dashed border-line">
             <button type="button" className="flex w-full items-center justify-between px-3 py-2.5 text-left text-sm font-medium text-ink" onClick={() => setManual((m) => ({ ...m, open: !m.open }))} aria-expanded={manual.open}>
@@ -287,9 +371,9 @@ export function PosForm({ stores, printer, ptu, defaultPtu, ptuFor, printerOnlin
                           <div className="flex flex-wrap gap-1.5">
                             {p.sizes.map((sz) => (
                               <button type="button" key={sz.variantId} onClick={() => pickCatalog(p, sz)} title={sz.sku ?? undefined}
-                                className={`rounded-lg border px-2 py-1 text-left text-xs transition-colors ${sz.inStock > 0 ? "border-emerald-300 bg-emerald-50 hover:border-emerald-500" : "border-line hover:border-accent"}`}>
+                                className={`rounded-lg border px-2 py-1 text-left text-xs transition-colors ${sz.here > 0 ? "border-emerald-400 bg-emerald-100 hover:border-emerald-600" : sz.inStock > 0 ? "border-amber-300 bg-amber-50 hover:border-amber-500" : "border-line hover:border-accent"}`}>
                                 <b className="text-sm">{sz.option}</b>
-                                <span className="block tabular-nums text-muted">{sz.price !== null ? fmt(sz.price) : "bez ceny"} · {sz.inStock > 0 ? `${sz.inStock} szt.` : "brak"}</span>
+                                <span className="block tabular-nums text-muted">{sz.price !== null ? fmt(sz.price) : "bez ceny"} · {sz.here > 0 ? `${sz.here} szt.` : sz.inStock > 0 ? `inny sklep ${sz.inStock}` : "brak"}</span>
                               </button>
                             ))}
                           </div>
