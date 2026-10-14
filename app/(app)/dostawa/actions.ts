@@ -6,12 +6,15 @@ import { fillContractNumber } from "@/lib/contracts/docnumber";
 import { findVariantIds } from "@/lib/queries/units";
 import { adjustStock } from "@/lib/stock";
 import { parseAmount, uploadedFile } from "@/lib/contracts/upload";
+import { reusedProducts } from "@/lib/queries/reused";
 
 export type VariantHit = {
   productId: string;
   title: string;
   styleSku: string | null;
   image: string | null;
+  /** Tag „reused” w Shopify (używany). */
+  used?: boolean;
   variants: { id: string; option: string; inStock: number; baseLinked: boolean; baseSku: string | null }[];
 };
 
@@ -39,7 +42,9 @@ export async function searchVariants(q: string, storeId: string): Promise<Varian
     byProduct.set(p.id, hit);
   }
   const collator = new Intl.Collator("pl", { numeric: true });
-  return [...byProduct.values()].slice(0, 20).map((h) => ({ ...h, variants: h.variants.sort((a, b) => collator.compare(a.option, b.option)) }));
+  const hits = [...byProduct.values()].slice(0, 20);
+  const used = await reusedProducts(supabase, hits.map((h) => h.productId));
+  return hits.map((h) => ({ ...h, used: used(h.productId, storeId || null), variants: h.variants.sort((a, b) => collator.compare(a.option, b.option)) }));
 }
 
 type Line = { variantId: string; quantity: number; price: string; payout: string; identifiers: string };

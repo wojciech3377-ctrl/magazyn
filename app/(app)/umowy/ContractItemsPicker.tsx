@@ -12,6 +12,14 @@ type Picked =
 
 const STATUS: Record<string, string> = { in_stock: "na stanie", reserved: "rezerwacja", in_transit: "w drodze" };
 
+/** Miniatura zdjęcia produktu (Shopify CDN w małym rozmiarze). */
+function Photo({ src }: { src: string | null }) {
+  // eslint-disable-next-line @next/next/no-img-element
+  return src ? <img src={`${src}${src.includes("?") ? "&" : "?"}width=120`} alt="" loading="lazy" className="h-12 w-12 shrink-0 rounded-md border border-line bg-white object-contain" />
+    : <span className="h-12 w-12 shrink-0 rounded-md border border-line bg-slate-50" />;
+}
+const UsedTag = () => <span className="ml-1.5 inline-block rounded bg-amber-100 px-1.5 py-px align-middle text-[10px] font-semibold uppercase tracking-wide text-amber-800">używany</span>;
+
 /**
  * Rzeczy na umowie: (1) z katalogu sklepu – model i rozmiar, gdy sztuki jeszcze nie ma w magazynie,
  * (2) rzeczy w sklepie bez umowy – konkretne sztuki (kod / IMEI). Pola ukryte: `units` (kody) i `catalog_items`.
@@ -68,7 +76,13 @@ export function ContractItemsPicker({ defaultCodes }: { defaultCodes: string[] }
           <div className="mt-2 max-h-72 space-y-2 overflow-y-auto">
             {cat.map((h) => (
               <div key={h.productId} className="rounded-lg border border-line p-2">
-                <div className="mb-1 truncate text-sm font-medium">{h.title} <span className="font-normal text-muted">{h.styleSku ?? ""}</span></div>
+                <div className="mb-1.5 flex items-center gap-2.5">
+                  <Photo src={h.image} />
+                  <div className="min-w-0 text-sm font-medium">
+                    <span className="line-clamp-2">{h.title}{h.used && <UsedTag />}</span>
+                    {h.styleSku && <span className="block truncate text-xs font-normal text-muted">{h.styleSku}</span>}
+                  </div>
+                </div>
                 <div className="flex flex-wrap gap-1">
                   {h.variants.map((v) => (
                     <button type="button" key={v.id} onClick={() => add({ kind: "variant", key: `v:${v.id}:${Date.now()}`, variantId: v.id, label: `${h.title} ${v.option}` })}
@@ -95,8 +109,9 @@ export function ContractItemsPicker({ defaultCodes }: { defaultCodes: string[] }
                   <li key={u.id}>
                     <button type="button" disabled={on} onClick={() => add({ kind: "unit", key: `u:${u.code}`, code: u.code, label: `${u.code} · ${u.title} ${u.option}` })}
                       className="flex w-full items-center gap-3 px-3 py-2 text-left text-sm hover:bg-slate-50 disabled:opacity-50">
+                      <Photo src={u.image} />
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate font-medium">{u.title} · {u.option}</span>
+                        <span className="block font-medium leading-snug">{u.title} · {u.option}{u.used && <UsedTag />}</span>
                         <span className="text-xs text-muted"><span className="font-mono">{u.code}</span>{u.identifier ? ` · ${u.identifier}` : ""} · {STATUS[u.status] ?? u.status}{u.store ? ` · ${u.store}` : ""}</span>
                       </span>
                       {on ? <Icon name="check" className="h-4 w-4 text-ok" /> : <Icon name="plus" className="h-4 w-4 text-accent" />}

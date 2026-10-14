@@ -7,6 +7,7 @@ import { requireAdmin, requireSection } from "@/lib/auth";
 import { parseAmount, uploadedFile } from "@/lib/contracts/upload";
 import { fillContractNumber } from "@/lib/contracts/docnumber";
 import { errorMessage } from "@/lib/errors";
+import { reusedProducts } from "@/lib/queries/reused";
 
 function codes(text: string) {
   return text.split(/[\s,;]+/).map((s) => s.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "")).filter(Boolean);
@@ -399,13 +400,13 @@ export async function decideConsignorInvoice(formData: FormData) {
   redirect(`/umowy/${id}?ok=${encodeURIComponent((accept ? "Faktura zatwierdzona." : "Faktura odrzucona – komisant może wgrać nową.") + mailNote)}`);
 }
 
-export type NoContractUnit = { id: string; code: string; identifier: string | null; title: string; option: string; status: string; store: string | null; image: string | null };
+export type NoContractUnit = { id: string; code: string; identifier: string | null; title: string; option: string; status: string; store: string | null; image: string | null; used: boolean };
 
 /** Rzeczy w sklepie bez umowy (na stanie, zarezerwowane, w drodze) – do wyboru przy nowej umowie. */
 export async function searchUnitsWithoutContract(q: string): Promise<NoContractUnit[]> {
   const { supabase } = await requireSection("umowy", "dostawa");
   const text = q.trim().replace(/[,()*%\\]/g, " ").trim();
-  let query = supabase.from("units_list").select("id, code, identifier, title, option, status, store_name, image_url")
+  let query = supabase.from("units_list").select("id, code, identifier, title, option, status, store_name, image_url, product_id, store_id")
     .is("contract_id", null).in("status", ["in_stock", "reserved", "in_transit"]).order("received_at", { ascending: false }).limit(30);
   if (text.length >= 2) {
     for (const w of text.split(/\s+/).slice(0, 4)) {
@@ -413,8 +414,10 @@ export async function searchUnitsWithoutContract(q: string): Promise<NoContractU
     }
   }
   const { data } = await query;
+  const used = await reusedProducts(supabase, (data ?? []).map((u) => u.product_id as string));
   return (data ?? []).map((u) => ({
     id: u.id as string, code: u.code as string, identifier: (u.identifier as string | null) ?? null, title: u.title as string, option: u.option as string,
     status: u.status as string, store: (u.store_name as string | null) ?? null, image: (u.image_url as string | null) ?? null,
+    used: used(u.product_id as string, u.store_id as string | null),
   }));
 }
