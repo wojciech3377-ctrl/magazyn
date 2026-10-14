@@ -8,6 +8,7 @@ import { requireAdmin, requireSection } from "@/lib/auth";
 import { adjustStock, type StockChange } from "@/lib/stock";
 import { parseAmount } from "@/lib/contracts/upload";
 import { errorMessage } from "@/lib/errors";
+import { inheritContractPrice, priceMessage } from "@/lib/contracts/inherit-price";
 
 /** Statusy liczone w stanie magazynu (Shopify). */
 const COUNTED = ["in_stock", "reserved"];
@@ -61,8 +62,10 @@ export async function bulkAction(formData: FormData) {
     const { error: e } = await supabase.from("units").update({ contract_id: contractId }).in("id", ids);
     if (e) back(returnTo, e.message, "error");
     await supabase.from("unit_events").insert(ids.map((id) => ({ unit_id: id, type: "contract", data: { contract_id: contractId } })));
+    // Kwota zakupu z umowy (albo opis, dlaczego się różni).
+    const price = contractId ? await inheritContractPrice(supabase, contractId, ids) : null;
     revalidatePath("/magazyn");
-    back(returnTo, contractId ? `Przypięto umowę do ${ids.length} szt.` : `Odpięto umowę od ${ids.length} szt.`);
+    back(returnTo, [contractId ? `Przypięto umowę do ${ids.length} szt.` : `Odpięto umowę od ${ids.length} szt.`, price ? priceMessage(price) : ""].filter(Boolean).join(" "), price?.problems.length ? "error" : "ok");
   }
 
   if (action === "receive") {
@@ -153,6 +156,13 @@ export async function updateUnit(formData: FormData) {
   const changed = Object.fromEntries(Object.entries(patch).filter(([k, v]) => String(before?.[k] ?? "") !== String(v ?? "")));
   if (Object.keys(changed).length) {
     await supabase.from("unit_events").insert({ unit_id: id, type: changed.contract_id !== undefined ? "contract" : "edited", data: changed });
+  }
+  // Umowa przypięta albo zmieniona kwota przy umowie: kwota zakupu z umowy (albo opis różnicy).
+  if (patch.contract_id && ["contract_id", "purchase_price", "payout_amount", "owner_type"].some((k) => changed[k] !== undefined)) {
+    const price = await inheritContractPrice(supabase, patch.contract_id as string, [id]);
+    const pm = priceMessage(price);
+    revalidatePath(path);
+    if (pm) back(path, `Zapisano. ${pm}`, price.problems.length ? "error" : "ok");
   }
   revalidatePath(path);
   back(path, "Zapisano.");

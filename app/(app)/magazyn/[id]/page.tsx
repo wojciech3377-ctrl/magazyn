@@ -10,6 +10,7 @@ import { CONTRACT_TYPE, dateOnly, dateTime, EVENT_TYPE, money, PURCHASE_FORM, SA
 import { Field, Notice, PageHeader, Pill, StatusBadge } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
 import { changeStatus, deleteUnit, updateUnit } from "../actions";
+import { expectedPrices } from "@/lib/contracts/inherit-price";
 
 const NEXT_STATUS: Record<string, { to: string; label: string; danger?: boolean }[]> = {
   in_transit: [{ to: "in_stock", label: "Przyjmij na stan" }],
@@ -40,6 +41,11 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
     supabase.from("consignors").select("id, name").order("name"),
     u.contract_id ? supabase.from("contracts").select("*").eq("id", u.contract_id).single() : Promise.resolve({ data: null }),
   ]);
+  // Kwota z umowy dla tej sztuki – porównanie z kwotą zakupu w magazynie.
+  const { data: mates } = u.contract_id ? await supabase.from("units").select("id, variant_id").eq("contract_id", u.contract_id) : { data: null };
+  const fromContract = contract && mates && (!contract.currency || contract.currency === "PLN") ? expectedPrices(contract, mates as { id: string; variant_id: string }[]).expected.get(u.id) : undefined;
+  const ownPrice = u.owner_type === "consignment" ? u.payout_amount : u.purchase_price;
+  const priceDiff = fromContract !== undefined && ownPrice !== null && ownPrice !== undefined && Math.abs(Number(ownPrice) - fromContract) >= 0.005;
 
   const images = await productImages(createAdminClient(), u.variant.product.id, u.location.store_id, u.variant.product.image_url).catch(() => []);
   let fileUrl: string | null = null;
@@ -167,6 +173,13 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
               <div className="space-y-2 text-sm">
                 <div><Link className="font-medium text-accent hover:underline" href={`/umowy/${contract.id}`}>{contract.counterparty}</Link></div>
                 <div className="text-muted">{CONTRACT_TYPE[contract.type]} · {dateOnly(contract.contract_date)}</div>
+                {profile.can_see_prices && fromContract !== undefined && <div>Kwota w umowie dla tej sztuki: <b className="tabular-nums">{money(fromContract)}</b></div>}
+                {profile.can_see_prices && priceDiff && (
+                  <p className="rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-bad">
+                    Kwoty się różnią: {u.owner_type === "consignment" ? "kwota komisanta" : "cena zakupu"} w magazynie to <b>{money(Number(ownPrice))}</b>, a w umowie <b>{money(fromContract!)}</b>.
+                    Sprawdź, która jest dobra, i popraw ją w edycji sztuki niżej albo w umowie.
+                  </p>
+                )}
                 {fileUrl ? <a className="btn-secondary w-full" href={fileUrl} target="_blank" rel="noreferrer">Otwórz plik umowy</a> : <Pill tone="amber">bez pliku</Pill>}
               </div>
             ) : (

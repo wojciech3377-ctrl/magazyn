@@ -8,6 +8,7 @@ import { parseAmount, uploadedFile } from "@/lib/contracts/upload";
 import { fillContractNumber } from "@/lib/contracts/docnumber";
 import { errorMessage } from "@/lib/errors";
 import { reusedProducts } from "@/lib/queries/reused";
+import { inheritContractPrice, priceMessage, type PriceResult } from "@/lib/contracts/inherit-price";
 
 function codes(text: string) {
   return text.split(/[\s,;]+/).map((s) => s.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "")).filter(Boolean);
@@ -15,7 +16,8 @@ function codes(text: string) {
 
 async function attachByCodes(supabase: Awaited<ReturnType<typeof requireSection>>["supabase"], contractId: string, text: string) {
   const list = codes(text);
-  if (!list.length) return { attached: 0, missing: [] as string[] };
+  const noPrice: PriceResult = { updated: [], problems: [], notes: [] };
+  if (!list.length) return { attached: 0, missing: [] as string[], price: noPrice };
   const { data: units } = await supabase.from("units").select("id, code, identifier").or(
     `code.in.(${list.join(",")}),identifier.in.(${list.join(",")})`,
   );
@@ -25,13 +27,16 @@ async function attachByCodes(supabase: Awaited<ReturnType<typeof requireSection>
     await supabase.from("unit_events").insert(found.map((u) => ({ unit_id: u.id, type: "contract", data: { contract_id: contractId } })));
   }
   const hit = new Set(found.flatMap((u) => [u.code, (u.identifier ?? "").toUpperCase()]));
-  return { attached: found.length, missing: list.filter((c) => !hit.has(c)) };
+  // Kwota zakupu z umowy (albo opis, dlaczego się różni).
+  const price = found.length ? await inheritContractPrice(supabase, contractId, found.map((u) => u.id as string)) : noPrice;
+  return { attached: found.length, missing: list.filter((c) => !hit.has(c)), price };
 }
 
 export async function createContract(_: unknown, formData: FormData): Promise<{ error?: string }> {
   const { supabase } = await requireSection("umowy", "dostawa");
   let id: string;
   let note = "";
+  let okNote = "";
   try {
     const counterparty = String(formData.get("counterparty") ?? "").trim();
     if (!counterparty) return { error: "Podaj, z kim jest umowa." };
@@ -72,7 +77,9 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
       if (attachErr) note = `?blad=${encodeURIComponent(`Umowa zapisana, ale nie przypięta do sprzedaży: ${attachErr.message}`)}`;
     }
     const r = await attachByCodes(supabase, id, String(formData.get("units") ?? ""));
-    if (r.missing.length) note = `?blad=${encodeURIComponent(`Nie znaleziono sztuk: ${r.missing.join(", ")}`)}`;
+    const pm = priceMessage(r.price);
+    if (r.missing.length || r.price.problems.length) note = `?blad=${encodeURIComponent([r.missing.length ? `Nie znaleziono sztuk: ${r.missing.join(", ")}.` : "Umowa zapisana i przypięta.", pm].filter(Boolean).join(" "))}`;
+    else if (pm) okNote = pm;
   } catch (e) {
     return { error: e instanceof Error ? e.message : String((e as { message?: string }).message ?? e) };
   }
@@ -80,9 +87,9 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
   revalidatePath("/magazyn");
   const returnTo = String(formData.get("returnTo") ?? "");
   if (returnTo.startsWith("/") && !returnTo.startsWith("//") && !note) {
-    redirect(`${returnTo}${returnTo.includes("?") ? "&" : "?"}ok=${encodeURIComponent("Umowa zapisana i przypięta.")}`);
+    redirect(`${returnTo}${returnTo.includes("?") ? "&" : "?"}ok=${encodeURIComponent(["Umowa zapisana i przypięta.", okNote].filter(Boolean).join(" "))}`);
   }
-  redirect(`/umowy/${id}${note}`);
+  redirect(`/umowy/${id}${note || (okNote ? `?ok=${encodeURIComponent(okNote)}` : "")}`);
 }
 
 export async function attachUnits(formData: FormData) {
@@ -90,8 +97,9 @@ export async function attachUnits(formData: FormData) {
   const id = String(formData.get("id"));
   const r = await attachByCodes(supabase, id, String(formData.get("units") ?? ""));
   revalidatePath(`/umowy/${id}`);
-  const msg = r.missing.length ? `blad=${encodeURIComponent(`Przypięto ${r.attached}. Nie znaleziono: ${r.missing.join(", ")}`)}` : `ok=${encodeURIComponent(`Przypięto ${r.attached} szt.`)}`;
-  redirect(`/umowy/${id}?${msg}`);
+  const pm = priceMessage(r.price);
+  const text = [`Przypięto ${r.attached} szt.`, r.missing.length ? `Nie znaleziono: ${r.missing.join(", ")}.` : "", pm].filter(Boolean).join(" ");
+  redirect(`/umowy/${id}?${r.missing.length || r.price.problems.length ? "blad" : "ok"}=${encodeURIComponent(text)}`);
 }
 
 /** Odpięcie umowy od rzeczy. Gdy przy umowie nie zostaje żadna rzecz, wraca do niewykorzystanych umów. */
@@ -322,17 +330,18 @@ export async function assignContractToUnit(formData: FormData) {
   const { data: c } = await supabase.from("contracts").select("id, amount, status").eq("id", contractId).maybeSingle();
   if (!c || ["cancelled", "rejected", "sent"].includes(c.status as string)) redirect(`${back}?blad=${encodeURIComponent("Ta umowa jest anulowana, czeka na podpis albo nie istnieje.")}`);
   const { count: already } = await supabase.from("units").select("id", { count: "exact", head: true }).eq("contract_id", contractId);
-  const patch: Record<string, unknown> = { contract_id: contractId };
+  void already;
   const { data: u } = await supabase.from("units").select("id, code, purchase_price, owner_type, status").eq("id", unitId).maybeSingle();
   if (!u || u.owner_type !== "own" || !["in_stock", "reserved", "in_transit", "sold", "shipped"].includes(u.status as string)) redirect(`${back}?blad=${encodeURIComponent("Tej sztuki nie można powiązać z umową (komis, wycofana albo oddana).")}`);
-  // Pierwsza rzecz do umowy: cena zakupu = kwota umowy (jeśli sztuka jej nie ma).
-  if (!already && u!.purchase_price === null && c!.amount !== null && u!.owner_type === "own") patch.purchase_price = c!.amount;
-  const { data: updated, error } = await supabase.from("units").update(patch).eq("id", unitId).is("contract_id", null).select("id");
+  const { data: updated, error } = await supabase.from("units").update({ contract_id: contractId }).eq("id", unitId).is("contract_id", null).select("id");
   if (error || !updated?.length) redirect(`${back}?blad=${encodeURIComponent(error?.message ?? "Ta sztuka ma już umowę (1 umowa na przedmiot).")}`);
   await supabase.from("unit_events").insert({ unit_id: unitId, type: "contract", data: { contract_id: contractId, note: "umowa przypisana z listy umów bez rzeczy" } });
+  // Kwota zakupu z umowy (albo opis, dlaczego się różni).
+  const price = await inheritContractPrice(supabase, contractId, [unitId]);
   revalidatePath("/umowy");
   revalidatePath("/magazyn");
-  redirect(`/umowy/${contractId}?ok=${encodeURIComponent(`Umowa przypisana do sztuki ${u!.code}.`)}`);
+  const text = [`Umowa przypisana do sztuki ${u!.code}.`, priceMessage(price)].filter(Boolean).join(" ");
+  redirect(`/umowy/${contractId}?${price.problems.length ? "blad" : "ok"}=${encodeURIComponent(text)}`);
 }
 
 /** Umowa bez rzeczy → sprzedana pozycja zamówienia (linia sprzedaży powstaje w razie potrzeby). */
@@ -356,6 +365,12 @@ export async function assignContractToPiece(formData: FormData) {
     if (e) return fail(e.message);
     if (!upd?.length) return fail("Ten przedmiot ma już umowę (1 umowa na przedmiot).");
     await supabase.from("unit_events").insert({ unit_id: unit.id, type: "contract", data: { contract_id: contractId, sale_id: saleId } });
+    const price = await inheritContractPrice(supabase, contractId, [unit.id]);
+    if (price.problems.length || price.updated.length || price.notes.length) {
+      revalidatePath("/umowy");
+      revalidatePath("/sprzedaz");
+      redirect(`/umowy/${contractId}?${price.problems.length ? "blad" : "ok"}=${encodeURIComponent(["Umowa przypisana do sprzedanego przedmiotu.", priceMessage(price)].join(" "))}`);
+    }
   } else {
     const { error: e } = await supabase.rpc("attach_sale_unit", { p_sale_id: saleId, p_contract_id: contractId, p_purchase_price: c.amount ?? null, p_variant_id: null });
     if (e) return fail(e.message);

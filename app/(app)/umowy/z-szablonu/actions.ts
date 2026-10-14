@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { requireSection } from "@/lib/auth";
 import { getCompany } from "@/lib/contracts/settings";
 import { contractTotal } from "@/lib/contracts/purchase";
+import { inheritContractPrice, priceMessage } from "@/lib/contracts/inherit-price";
 
 type Line = { unit_id?: string; variant_id?: string; title: string; option: string; identifier?: string | null; qty: number; price: string };
 
@@ -53,6 +54,9 @@ export async function createLinkContract(_: unknown, formData: FormData): Promis
   const unitIds = items.map((i) => i.unit_id).filter(Boolean) as string[];
   // Nie nadpisujemy umowy, którą sztuka już ma (np. wgrany skan).
   if (unitIds.length) await supabase.from("units").update({ contract_id: c.id }).in("id", unitIds).is("contract_id", null);
+  // Kwoty zakupu sztuk z pozycji umowy (albo opis, dlaczego się różnią).
+  const price = unitIds.length ? await inheritContractPrice(supabase, c.id, unitIds) : null;
+  const pm = price ? priceMessage(price) : "";
 
-  redirect(`/umowy/${c.id}?ok=${encodeURIComponent("Umowa gotowa – wyślij sprzedającemu link do podpisu.")}`);
+  redirect(`/umowy/${c.id}?${price?.problems.length ? "blad" : "ok"}=${encodeURIComponent(["Umowa gotowa – wyślij sprzedającemu link do podpisu.", pm].filter(Boolean).join(" "))}`);
 }
