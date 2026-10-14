@@ -5,8 +5,9 @@ import { Notice, PageHeader } from "@/components/ui";
 import { SelectAll } from "@/components/SelectAll";
 import { WtbAdd } from "./WtbAdd";
 import { editWtbGroup, updateWtb } from "./actions";
-import { GroupCheck, WtbTile, WtbCopyList, WtbEditDialog } from "./WtbControls";
+import { GroupCheck, WtbTile, WtbCopyList, WtbEditDialog, WtbPhotoButton } from "./WtbControls";
 import { groupWtb } from "@/lib/wtb-group";
+import { isWtbPhoto, wtbDisplayUrls } from "@/lib/wtb-photo";
 
 const TABS = [
   { key: "", label: "Szukamy", status: "active" },
@@ -25,9 +26,10 @@ export default async function WtbPage({ searchParams }: { searchParams: Promise<
   const back = tab.key ? `/wtb?widok=${tab.key}` : "/wtb";
   const active = tab.status === "active";
   const groups = groupWtb(items ?? []);
+  const shown = await wtbDisplayUrls(groups.map((g) => g.image_url), 300);
   // Wersja podglądu grafiki – zmienia się po każdej zmianie listy (nazwa, rozmiary, pozycje).
   let h = 0;
-  for (const ch of (items ?? []).map((i) => `${i.id}${i.title}${i.size}${i.sku}`).join("|")) h = (h * 31 + ch.charCodeAt(0)) | 0;
+  for (const ch of (items ?? []).map((i) => `${i.id}${i.title}${i.size}${i.sku}${i.image_url}`).join("|")) h = (h * 31 + ch.charCodeAt(0)) | 0;
   const version = `${items?.length ?? 0}-${(h >>> 0).toString(36)}`;
 
   return (
@@ -97,7 +99,7 @@ export default async function WtbPage({ searchParams }: { searchParams: Promise<
                   </div>
                   <div className="my-2 flex h-32 items-center justify-center">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    {g.image_url ? <img src={`${g.image_url}${g.image_url.includes("?") ? "&" : "?"}width=300`} alt="" className="max-h-32 object-contain" loading="lazy" /> : <span className="text-xs text-muted">brak zdjęcia</span>}
+                    {g.image_url && shown.get(g.image_url) ? <img src={shown.get(g.image_url)} alt="" className="max-h-32 object-contain" loading="lazy" /> : <span className="text-xs text-muted">brak zdjęcia</span>}
                   </div>
                   <div className="line-clamp-2 text-sm font-medium">{g.title}</div>
                   {g.sku && <div className="truncate font-mono text-xs text-muted">{g.sku}</div>}
@@ -112,7 +114,12 @@ export default async function WtbPage({ searchParams }: { searchParams: Promise<
                   {notes.map((it) => (
                     <div key={it.id} className="mt-1 text-xs text-muted">{it.order_id ? <Link className="underline" href={`/sprzedaz/${it.order_id}`}>{it.note}</Link> : it.note}</div>
                   ))}
-                  {active && <div className="mt-2 border-t border-line pt-1"><WtbEditDialog formId={`wtb-edit-${g.items[0].id}`} title={g.title} sku={g.sku} sizes={g.items.map((i) => i.size ?? "").filter(Boolean)} /></div>}
+                  {active && (
+                    <div className="mt-2 flex flex-col items-start gap-0.5 border-t border-line pt-1">
+                      <WtbEditDialog formId={`wtb-edit-${g.items[0].id}`} title={g.title} sku={g.sku} sizes={g.items.map((i) => i.size ?? "").filter(Boolean)} />
+                      <WtbPhotoButton ids={g.ids} custom={isWtbPhoto(g.image_url)} label={g.title} />
+                    </div>
+                  )}
                 </WtbTile>
               );
             })}

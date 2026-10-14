@@ -16,7 +16,7 @@ function contentSecurityPolicy(nonce: string, https: boolean) {
     "default-src 'self'",
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${dev ? " 'unsafe-eval'" : ""}`,
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob: https:",
+    `img-src 'self' data: blob: https:${supabase.startsWith("http:") ? ` ${supabase}` : ""}`,
     "font-src 'self' data:",
     `connect-src 'self'${supabase.startsWith("http") ? ` ${supabase}` : ""}${dev ? " ws: http://localhost:*" : ""}`,
     "media-src 'self' blob:",

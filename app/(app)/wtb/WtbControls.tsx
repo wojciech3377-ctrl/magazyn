@@ -1,6 +1,9 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { toJpeg } from "@/lib/image-jpeg";
+import { setWtbPhoto } from "./actions";
 
 /**
  * Kafelek modelu: kliknięcie w dowolne miejsce kafelka zaznacza (albo odznacza) wszystkie jego rozmiary.
@@ -90,5 +93,45 @@ export function WtbCopyList({ lines }: { lines: string[] }) {
       </div>
       <textarea readOnly value={text} rows={Math.min(12, Math.max(3, lines.length))} className="input font-mono text-xs leading-relaxed" aria-label="Lista WTB: nazwa - SKU - rozmiar" onFocus={(e) => e.currentTarget.select()} />
     </section>
+  );
+}
+
+/** Zdjęcie karty modelu: wgranie własnego (aparat / galeria / dysk) albo powrót do zdjęcia z katalogu. */
+export function WtbPhotoButton({ ids, custom, label }: { ids: string[]; custom: boolean; label: string }) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const send = (fill: (fd: FormData) => Promise<void> | void) =>
+    start(async () => {
+      setError(null);
+      try {
+        const fd = new FormData();
+        ids.forEach((id) => fd.append("ids", id));
+        await fill(fd);
+        const r = await setWtbPhoto(fd);
+        if (r.error) setError(r.error);
+        else router.refresh();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Nie udało się zapisać zdjęcia.");
+      }
+    });
+  return (
+    <span className="inline-flex flex-wrap items-center gap-x-2">
+      <label className={`cursor-pointer text-xs text-accent hover:underline ${pending ? "pointer-events-none opacity-60" : ""}`}>
+        {pending ? "Zapisuję zdjęcie…" : custom ? "Zmień zdjęcie" : "Dodaj zdjęcie"}
+        <input type="file" accept="image/*" className="sr-only" aria-label={`Zdjęcie: ${label}`} disabled={pending}
+          onChange={(e) => {
+            const f = e.currentTarget.files?.[0];
+            e.currentTarget.value = "";
+            if (f) send(async (fd) => { fd.set("photo", new File([await toJpeg(f)], "zdjecie.jpg", { type: "image/jpeg" })); });
+          }} />
+      </label>
+      {custom && !pending && (
+        <button type="button" className="text-xs text-muted hover:underline" onClick={() => { if (confirm("Usunąć własne zdjęcie tego modelu?")) send((fd) => { fd.set("remove", "1"); }); }}>
+          usuń zdjęcie
+        </button>
+      )}
+      {error && <span className="block w-full text-xs text-bad">{error}</span>}
+    </span>
   );
 }

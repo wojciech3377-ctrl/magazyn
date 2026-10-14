@@ -2,6 +2,7 @@ import "server-only";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { ImageResponse } from "next/og";
+import { isWtbPhoto, wtbPhotoData } from "@/lib/wtb-photo";
 
 /**
  * Grafika „SNEAKERS DEPOT WTB”: nagłówek i siatka butów, które chcemy kupić. Do 16 modeli 1080×1350 (Instagram),
@@ -26,9 +27,10 @@ async function fonts() {
   return fontCache;
 }
 
-/** Zdjęcie produktu jako data URL (PNG/JPEG – bez WebP, którego generator nie obsługuje). Tylko z CDN Shopify. */
+/** Zdjęcie produktu jako data URL (PNG/JPEG – bez WebP, którego generator nie obsługuje). Z CDN Shopify albo własne zdjęcie WTB. */
 export async function imageData(url: string | null, width = 1200) {
   if (!url) return null;
+  if (isWtbPhoto(url)) return wtbPhotoData(url);
   try {
     const u = new URL(url);
     if (u.hostname !== "cdn.shopify.com" && !u.hostname.endsWith(".shopify.com")) return null;

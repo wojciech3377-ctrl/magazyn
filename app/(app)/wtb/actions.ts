@@ -6,11 +6,18 @@ import { requireSection } from "@/lib/auth";
 import { errorMessage } from "@/lib/errors";
 import type { LineItem } from "@/lib/sync/shop-orders";
 import { parseSizes } from "@/lib/wtb-group";
+import { dropUnusedWtbPhotos, storeWtbPhoto } from "@/lib/wtb-photo";
 
 export type WtbAddState = { ok?: string; error?: string } | null;
 export type CatalogResult = { productId: string; title: string; sku: string | null; image: string | null; variants: { id: string; option: string }[] };
 
 const collator = new Intl.Collator("pl", { numeric: true });
+
+/** Zdjęcie z formularza (pole „photo”) zapisane w koszu – null, gdy nie wybrano. */
+async function photoFrom(fd: FormData) {
+  const f = fd.get("photo");
+  return f instanceof File && f.size ? storeWtbPhoto(f) : null;
+}
 
 /** Wyszukiwarka modeli z katalogu (nazwa albo SKU). */
 export async function searchWtbCatalog(q: string): Promise<CatalogResult[]> {
@@ -121,12 +128,27 @@ export async function addFromCatalog(_: WtbAddState, fd: FormData): Promise<WtbA
   const already = new Set((had ?? []).map((h) => h.variant_id as string | null));
   const variants = ((p.variants ?? []) as { id: string; option: string }[]).filter((v) => variantIds.includes(v.id) && !already.has(v.id));
   if (variantIds.length && !variants.length) return { ok: "Te rozmiary już są na liście WTB." };
+  let photo: string | null;
+  try {
+    photo = await photoFrom(fd);
+  } catch (e) {
+    return { error: errorMessage(e) };
+  }
   const rows = (variants.length ? variants : [null]).map((v) => ({
-    title: p.title, size: v?.option ?? null, sku: p.style_sku, image_url: p.image_url, product_id: p.id, variant_id: v?.id ?? null,
+    title: p.title, size: v?.option ?? null, sku: p.style_sku, image_url: photo ?? p.image_url, product_id: p.id, variant_id: v?.id ?? null,
     source: "catalog", note, created_by: profile.id,
   }));
   const { error } = await supabase.from("wtb_items").insert(rows);
-  if (error) return { error: errorMessage(error) };
+  if (error) {
+    await dropUnusedWtbPhotos([photo]);
+    return { error: errorMessage(error) };
+  }
+  // Własne zdjęcie dotyczy całej karty modelu – także rozmiarów dodanych wcześniej.
+  if (photo) {
+    const { data: old } = await supabase.from("wtb_items").select("image_url").eq("product_id", p.id).eq("status", "active").neq("image_url", photo);
+    await supabase.from("wtb_items").update({ image_url: photo }).eq("product_id", p.id).eq("status", "active");
+    await dropUnusedWtbPhotos((old ?? []).map((o) => o.image_url as string | null));
+  }
   revalidatePath("/wtb");
   return { ok: rows.length === 1 ? "Dodano do WTB." : `Dodano ${rows.length} pozycji do WTB.` };
 }
@@ -139,9 +161,18 @@ export async function addManual(_: WtbAddState, fd: FormData): Promise<WtbAddSta
   const sizes = parseSizes(String(fd.get("sizes") ?? ""));
   const sku = String(fd.get("sku") ?? "").trim().slice(0, 60) || null;
   const note = String(fd.get("note") ?? "").trim() || null;
-  const rows = (sizes.length ? sizes : [null]).map((size) => ({ title, size, sku, note, source: "manual", created_by: profile.id }));
+  let photo: string | null;
+  try {
+    photo = await photoFrom(fd);
+  } catch (e) {
+    return { error: errorMessage(e) };
+  }
+  const rows = (sizes.length ? sizes : [null]).map((size) => ({ title, size, sku, note, image_url: photo, source: "manual", created_by: profile.id }));
   const { error } = await supabase.from("wtb_items").insert(rows);
-  if (error) return { error: errorMessage(error) };
+  if (error) {
+    await dropUnusedWtbPhotos([photo]);
+    return { error: errorMessage(error) };
+  }
   revalidatePath("/wtb");
   return { ok: rows.length === 1 ? "Dodano do WTB." : `Dodano ${rows.length} pozycji do WTB.` };
 }
@@ -214,4 +245,29 @@ export async function editWtbGroup(fd: FormData) {
   }
   revalidatePath("/wtb");
   redirect(`${back}${back.includes("?") ? "&" : "?"}${error ? "blad" : "ok"}=${encodeURIComponent(error ? errorMessage(error) : "Zapisano zmiany modelu.")}`);
+}
+
+/** Własne zdjęcie karty modelu (wszystkie jej rozmiary) albo powrót do zdjęcia z katalogu (remove=1). */
+export async function setWtbPhoto(fd: FormData): Promise<{ ok?: string; error?: string }> {
+  const { supabase } = await requireSection("wtb");
+  const ids = fd.getAll("ids").map(String).filter((x) => /^[0-9a-f-]{36}$/i.test(x)).slice(0, 100);
+  const { data: rows } = ids.length ? await supabase.from("wtb_items").select("id, image_url, product_id").in("id", ids) : { data: [] };
+  if (!rows?.length) return { error: "Nie ma takiej pozycji." };
+  let next: string | null = null;
+  try {
+    if (fd.get("remove") === "1") {
+      const productId = rows.find((r) => r.product_id)?.product_id as string | undefined;
+      if (productId) next = ((await supabase.from("products").select("image_url").eq("id", productId).maybeSingle()).data?.image_url as string | null) ?? null;
+    } else {
+      next = await photoFrom(fd);
+      if (!next) return { error: "Wybierz zdjęcie." };
+    }
+  } catch (e) {
+    return { error: errorMessage(e) };
+  }
+  const { error } = await supabase.from("wtb_items").update({ image_url: next }).in("id", rows.map((r) => r.id as string));
+  await dropUnusedWtbPhotos(error ? [next] : rows.map((r) => r.image_url as string | null));
+  if (error) return { error: errorMessage(error) };
+  revalidatePath("/wtb");
+  return { ok: next ? "Zapisano zdjęcie." : "Usunięto zdjęcie." };
 }

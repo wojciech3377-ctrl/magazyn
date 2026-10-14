@@ -1,7 +1,8 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import { SearchInput } from "@/components/SearchInput";
+import { withJpegPhoto } from "@/lib/image-jpeg";
 import { addFromCatalog, addManual, searchWtbCatalog, type CatalogResult, type WtbAddState } from "./actions";
 
 function thumb(url: string | null, w = 80) {
@@ -34,7 +35,12 @@ function FromCatalog() {
   const [picked, setPicked] = useState<CatalogResult | null>(null);
   const [sizes, setSizes] = useState<string[]>([]);
   const [state, action, pending] = useActionState<WtbAddState, FormData>(async (prev, fd) => {
-    const r = await addFromCatalog(prev, fd);
+    let r: WtbAddState;
+    try {
+      r = await addFromCatalog(prev, await withJpegPhoto(fd));
+    } catch (e) {
+      return { error: e instanceof Error ? e.message : "Nie udało się dodać." };
+    }
     if (r?.ok) {
       setPicked(null);
       setSizes([]);
@@ -107,6 +113,7 @@ function FromCatalog() {
         </div>
       </div>
       <input className="input max-w-xl" name="note" placeholder="Notatka (opcjonalnie, np. maks. cena) – nie trafia na grafikę" />
+      <PhotoField hint="Własne zdjęcie (opcjonalnie) – zamiast zdjęcia z katalogu" />
       {state?.error && <p className="text-sm text-bad">{state.error}</p>}
       <button className="btn" disabled={pending || (!sizes.length && picked.variants.length > 0)}>
         {pending ? "Dodaję…" : sizes.length > 1 ? `Dodaj ${sizes.length} rozmiary` : "Dodaj do WTB"}
@@ -116,12 +123,22 @@ function FromCatalog() {
 }
 
 function Manual() {
-  const [state, action, pending] = useActionState<WtbAddState, FormData>(addManual, null);
+  const [key, setKey] = useState(0);
+  const [state, action, pending] = useActionState<WtbAddState, FormData>(async (prev, fd) => {
+    try {
+      const r = await addManual(prev, await withJpegPhoto(fd));
+      if (r?.ok) setKey((k) => k + 1);
+      return r;
+    } catch (e) {
+      return { error: e instanceof Error ? e.message : "Nie udało się dodać." };
+    }
+  }, null);
   return (
-    <form action={action} className="grid gap-3 md:grid-cols-[2fr_1fr_1fr]">
+    <form key={key} action={action} className="grid gap-3 md:grid-cols-[2fr_1fr_1fr]">
       <div><label className="label" htmlFor="w-title">Model</label><input id="w-title" className="input" name="title" placeholder="np. Nike SB Dunk Low Travis Scott" required /></div>
       <div><label className="label" htmlFor="w-sizes">Rozmiary</label><input id="w-sizes" className="input" name="sizes" placeholder="np. 42, 42.5, 43" /></div>
       <div><label className="label" htmlFor="w-sku">SKU</label><input id="w-sku" className="input font-mono" name="sku" placeholder="np. CT5053-001" /></div>
+      <div className="md:col-span-3"><PhotoField hint="Zdjęcie (opcjonalnie) – z telefonu albo z dysku, trafia na grafikę" /></div>
       <div className="md:col-span-2"><input className="input" name="note" placeholder="Notatka (opcjonalnie) – nie trafia na grafikę" aria-label="Notatka" /></div>
       <div className="flex items-center gap-3">
         <button className="btn" disabled={pending}>{pending ? "Dodaję…" : "Dodaj do WTB"}</button>
@@ -129,5 +146,34 @@ function Manual() {
         {state?.error && <span className="text-sm text-bad">{state.error}</span>}
       </div>
     </form>
+  );
+}
+
+/** Wybór zdjęcia z podglądem (na telefonie: aparat albo galeria). Zmniejszane do JPEG przy wysyłce. */
+function PhotoField({ hint }: { hint: string }) {
+  const [preview, setPreview] = useState<string | null>(null);
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
+  // Formularz czyści pola po wysłaniu – podgląd też.
+  useEffect(() => {
+    const form = ref.current?.form;
+    const clear = () => setPreview(null);
+    form?.addEventListener("reset", clear);
+    return () => form?.removeEventListener("reset", clear);
+  }, []);
+  return (
+    <div className="flex items-center gap-3">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      {preview ? <img src={preview} alt="Wybrane zdjęcie" className="h-14 w-14 rounded border border-line object-contain" /> : <span className="flex h-14 w-14 items-center justify-center rounded border border-dashed border-line text-xl text-muted">📷</span>}
+      <div className="text-sm">
+        <label className="btn-secondary h-8 cursor-pointer px-3 text-xs">
+          {preview ? "Zmień zdjęcie" : "Dodaj zdjęcie"}
+          <input ref={ref} type="file" name="photo" accept="image/*" className="sr-only"
+            onChange={(e) => { const f = e.currentTarget.files?.[0]; setPreview(f ? URL.createObjectURL(f) : null); }} />
+        </label>
+        {preview && <button type="button" className="ml-2 text-xs text-muted underline" onClick={() => { if (ref.current) ref.current.value = ""; setPreview(null); }}>usuń</button>}
+        <div className="mt-1 text-xs text-muted">{hint}</div>
+      </div>
+    </div>
   );
 }
