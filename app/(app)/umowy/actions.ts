@@ -54,7 +54,9 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
       catalogItems = [];
     }
     const docNumber = String(formData.get("doc_number") ?? "").trim().slice(0, 60) || null;
+    const perItem = formData.get("amount_per_item") === "1";
     const { data, error } = await supabase.from("contracts").insert({
+      ...(perItem ? { amount_per_item: true } : {}),
       type,
       counterparty,
       doc_number: docNumber,
@@ -67,6 +69,7 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
       file_path: file?.path ?? null,
       file_name: file?.name ?? null,
     }).select("id").single();
+    if (error && /amount_per_item/.test(error.message)) throw new Error("Aby zapisać „kwota za każdą rzecz”, uruchom w Supabase (SQL Editor) plik 0055_contract_amount_per_item.sql.");
     if (error) throw error;
     id = data.id;
     // Numer nie wpisany → odczyt z pliku PDF (klucz serwera – plik w prywatnym magazynie).
@@ -318,12 +321,31 @@ export async function updateContractMeta(formData: FormData) {
   const { supabase } = await requireSection("umowy", "dostawa");
   const id = String(formData.get("id"));
   const currency = String(formData.get("currency") ?? "");
-  const { error } = await supabase.from("contracts").update({
+  const patch: Record<string, unknown> = {
     doc_number: String(formData.get("doc_number") ?? "").trim().slice(0, 60) || null,
     ...(currency ? { currency: ["PLN", "EUR"].includes(currency) ? currency : null } : {}),
-  }).eq("id", id);
+  };
+  // Kwota i „za każdą rzecz” – tylko gdy pola są w formularzu (osoba widzi ceny).
+  if (formData.has("amount")) {
+    try {
+      patch.amount = parseAmount(formData.get("amount"));
+    } catch (e) {
+      redirect(`/umowy/${id}?blad=${encodeURIComponent(errorMessage(e))}`);
+    }
+    patch.amount_per_item = formData.get("amount_per_item") === "1";
+  }
+  let error: { message: string } | null = (await supabase.from("contracts").update(patch).eq("id", id)).error;
+  if (error && /amount_per_item/.test(error.message)) {
+    delete patch.amount_per_item;
+    error = (await supabase.from("contracts").update(patch).eq("id", id)).error;
+    if (!error) error = { message: "Zapisano bez „kwota za każdą rzecz” – uruchom w Supabase SQL 0055_contract_amount_per_item.sql." };
+  }
+  // Kwoty sztuk na umowie według nowej kwoty (puste uzupełnione, różnice opisane).
+  const price = !error && formData.has("amount") ? await inheritContractPrice(supabase, id) : null;
   revalidatePath(`/umowy/${id}`);
-  redirect(`/umowy/${id}?${error ? "blad" : "ok"}=${encodeURIComponent(error ? error.message : "Zapisano.")}`);
+  revalidatePath("/magazyn");
+  const text = error ? error.message : ["Zapisano.", price ? priceMessage(price) : ""].filter(Boolean).join(" ");
+  redirect(`/umowy/${id}?${error || price?.problems.length ? "blad" : "ok"}=${encodeURIComponent(text)}`);
 }
 
 /** Umowa bez rzeczy → sztuka z magazynu (albo sprzedana sztuka) bez umowy. */

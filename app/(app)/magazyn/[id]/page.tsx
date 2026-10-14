@@ -43,7 +43,9 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
   ]);
   // Kwota z umowy dla tej sztuki – porównanie z kwotą zakupu w magazynie.
   const { data: mates } = u.contract_id ? await supabase.from("units").select("id, variant_id").eq("contract_id", u.contract_id) : { data: null };
-  const fromContract = contract && mates && (!contract.currency || contract.currency === "PLN") ? expectedPrices(contract, mates as { id: string; variant_id: string }[]).expected.get(u.id) : undefined;
+  const cur = contract?.currency && contract.currency !== "PLN" ? contract.currency as string : null;
+  const inCur = (n: number) => (cur ? `${n.toFixed(2).replace(".", ",")} ${cur}` : money(n));
+  const fromContract = contract && mates ? expectedPrices(contract, mates as { id: string; variant_id: string }[]).expected.get(u.id) : undefined;
   const ownPrice = u.owner_type === "consignment" ? u.payout_amount : u.purchase_price;
   const priceDiff = fromContract !== undefined && ownPrice !== null && ownPrice !== undefined && Math.abs(Number(ownPrice) - fromContract) >= 0.005;
 
@@ -173,10 +175,10 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
               <div className="space-y-2 text-sm">
                 <div><Link className="font-medium text-accent hover:underline" href={`/umowy/${contract.id}`}>{contract.counterparty}</Link></div>
                 <div className="text-muted">{CONTRACT_TYPE[contract.type]} · {dateOnly(contract.contract_date)}</div>
-                {profile.can_see_prices && fromContract !== undefined && <div>Kwota w umowie dla tej sztuki: <b className="tabular-nums">{money(fromContract)}</b></div>}
+                {profile.can_see_prices && fromContract !== undefined && <div>Kwota w umowie dla tej sztuki: <b className="tabular-nums">{inCur(fromContract)}</b></div>}
                 {profile.can_see_prices && priceDiff && (
                   <p className="rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-bad">
-                    Kwoty się różnią: {u.owner_type === "consignment" ? "kwota komisanta" : "cena zakupu"} w magazynie to <b>{money(Number(ownPrice))}</b>, a w umowie <b>{money(fromContract!)}</b>.
+                    Kwoty się różnią: {u.owner_type === "consignment" ? "kwota komisanta" : "cena zakupu"} w magazynie to <b>{inCur(Number(ownPrice))}</b>, a w umowie <b>{inCur(fromContract!)}</b>.
                     Sprawdź, która jest dobra, i popraw ją w edycji sztuki niżej albo w umowie.
                   </p>
                 )}

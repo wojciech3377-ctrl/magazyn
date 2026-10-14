@@ -10,7 +10,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  */
 export type PriceResult = { updated: string[]; problems: string[]; notes: string[] };
 
-type C = { id: string; amount: number | string | null; items: { unit_id?: string | null; variant_id?: string | null; price?: number | string; qty?: number }[] | null; currency: string | null; number: number | null; doc_number: string | null; template: string | null; type: string | null };
+type C = { id: string; amount_per_item?: boolean | null; amount: number | string | null; items: { unit_id?: string | null; variant_id?: string | null; price?: number | string; qty?: number }[] | null; currency: string | null; number: number | null; doc_number: string | null; template: string | null; type: string | null };
 type U = { id: string; code: string; variant_id: string; owner_type: string; purchase_price: number | string | null; payout_amount: number | string | null };
 
 const fmtFor = (currency: string | null) => (n: number) => `${n.toFixed(2).replace(".", ",")} ${!currency || currency === "PLN" ? "zł" : currency === "EUR" ? "EUR" : currency}`;
@@ -20,7 +20,7 @@ const same = (a: number, b: number) => Math.abs(a - b) < 0.005;
 export async function inheritContractPrice(db: SupabaseClient, contractId: string, unitIds?: string[]): Promise<PriceResult> {
   const out: PriceResult = { updated: [], problems: [], notes: [] };
   const [{ data: c }, { data: list }] = await Promise.all([
-    db.from("contracts").select("id, amount, items, currency, number, doc_number, template, type").eq("id", contractId).maybeSingle(),
+    db.from("contracts").select("*").eq("id", contractId).maybeSingle(),
     db.from("units").select("id, code, variant_id, owner_type, purchase_price, payout_amount").eq("contract_id", contractId),
   ]);
   const ct = c as C | null;
@@ -37,7 +37,8 @@ export async function inheritContractPrice(db: SupabaseClient, contractId: strin
   const check = new Set(unitIds?.length ? unitIds : units.map((u) => u.id));
 
   const { expected, items, amount } = expectedPrices(ct, units);
-  if (invoice && !items.length && units.length === 1 && amount !== null && current(units[0]) === null && check.has(units[0].id)) {
+  const perItem = !!ct.amount_per_item;
+  if (!perItem && invoice && !items.length && units.length === 1 && amount !== null && current(units[0]) === null && check.has(units[0].id)) {
     out.notes.push(`Faktura na ${zl(amount)} – wpisz kwotę zakupu ${units[0].code} (faktura zwykle obejmuje kilka rzeczy, więc cała kwota nie jest przepisywana).`);
   }
   for (const u of units) {
@@ -54,7 +55,7 @@ export async function inheritContractPrice(db: SupabaseClient, contractId: strin
   }
 
   // 3. Kilka rzeczy, kwota umowy bez cen pozycji: suma musi się zgadzać.
-  if (!items.length && units.length > 1 && amount !== null) {
+  if (!perItem && !items.length && units.length > 1 && amount !== null) {
     // Ta sama pełna kwota umowy w kilku sztukach – prawie na pewno skopiowana, a nie cena tej rzeczy.
     const full = units.filter((u) => current(u) !== null && same(current(u)!, amount));
     const missing = units.filter((u) => current(u) === null);
@@ -81,7 +82,7 @@ export async function inheritContractPrice(db: SupabaseClient, contractId: strin
 }
 
 /** Kwota z umowy dla każdej sztuki (bez zapisu): pozycja tej sztuki, pozycja tego rozmiaru, a przy jednej rzeczy – kwota umowy. */
-export function expectedPrices(ct: Pick<C, "amount" | "items"> & { type?: string | null }, units: Pick<U, "id" | "variant_id">[]) {
+export function expectedPrices(ct: Pick<C, "amount" | "items" | "amount_per_item"> & { type?: string | null }, units: Pick<U, "id" | "variant_id">[]) {
   // Pozycje bez ceny (0 – np. rzeczy z katalogu dodane do skanu umowy) nic nie mówią o kwocie.
   const items = (ct.items ?? []).filter((i) => (num(i.price) ?? 0) > 0);
   const used = new Set<number>();
@@ -96,6 +97,8 @@ export function expectedPrices(ct: Pick<C, "amount" | "items"> & { type?: string
     if (i >= 0) { used.add(i); expected.set(u.id, num(items[i].price)!); }
   }
   const amount = num(ct.amount);
+  // „Kwota za każdą rzecz”: każda sztuka ma tę kwotę.
+  if (!items.length && amount !== null && ct.amount_per_item) for (const u of units) if (!expected.has(u.id)) expected.set(u.id, amount);
   // Jedna rzecz na umowie: cała kwota. Faktura – nie (zwykle obejmuje kilka rzeczy, a rzeczy dopina się po kolei).
   if (!items.length && units.length === 1 && amount !== null && ct.type !== "invoice") expected.set(units[0].id, amount);
   return { expected, items, amount };

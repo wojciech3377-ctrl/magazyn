@@ -92,6 +92,18 @@ export default async function ContractPage({ params, searchParams }: { params: P
                 </select>
               </div>
             )}
+            {!c.template && profile.can_see_prices && (
+              <div>
+                <label className="label" htmlFor="amount">Kwota</label>
+                <input id="amount" className="input w-32 tabular-nums" name="amount" inputMode="decimal" defaultValue={c.amount ?? ""} />
+              </div>
+            )}
+            {!c.template && profile.can_see_prices && (
+              <label className="flex max-w-xs items-start gap-2 pb-1 text-xs text-muted">
+                <input type="checkbox" name="amount_per_item" value="1" defaultChecked={!!c.amount_per_item} className="mt-0.5" />
+                <span>Kwota za <b>każdą rzecz</b> – każda przypięta rzecz dostaje tę kwotę zakupu</span>
+              </label>
+            )}
             <SubmitButton className="btn-secondary">Zapisz</SubmitButton>
           </form>
           {!c.template && <section className="card p-4">
