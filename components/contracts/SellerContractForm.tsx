@@ -6,6 +6,7 @@ import { SignaturePad } from "@/components/SignaturePad";
 import { purchaseBlocks, type Company, type ContractItem } from "@/lib/contracts/purchase";
 import { COUNTRIES, CURRENCIES, type Lang } from "@/lib/contracts/options";
 import type { CatalogHit } from "@/app/umowa/actions";
+import { DateField } from "@/components/DateField";
 
 type Action = (state: { error?: string } | null, formData: FormData) => Promise<{ error?: string }>;
 
@@ -170,7 +171,7 @@ export function SellerContractForm({
           <section className="card grid grid-cols-2 gap-3 p-4">
             <div>
               <label className="label" htmlFor="contract_date">{T.date}</label>
-              <input className="input" id="contract_date" name="contract_date" type="date" value={contractDate} onChange={(e) => setContractDate(e.target.value)} required />
+              <DateField id="contract_date" name="contract_date" value={contractDate} onChange={setContractDate} required />
             </div>
             <div>
               <label className="label" htmlFor="country">{T.country}</label>

@@ -246,7 +246,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
         <input type="hidden" name="returnTo" value={returnTo} />
         <input type="hidden" name="wroc" value={returnTo} />
         <Pagination page={page} total={count} perPage={PER_PAGE} params={filterParams} top />
-        <div className="card overflow-x-auto xl:overflow-visible">
+        <div id="magazyn-tabela" className="card overflow-x-auto">
           <table className="table mtable [&_td]:px-2 [&_th]:px-2" style={{ "--m-cols": "1.5rem minmax(0,1fr) auto", "--m-areas": "'chk prod prod' '. size price' '. place place' '. code buy' '. owner owner' '. act act'" } as React.CSSProperties}>
             <thead>
               <tr>
@@ -352,7 +352,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
           </table>
         </div>
 
-        <BulkBar>
+        <BulkBar scrollFor="magazyn-tabela">
           <div className="flex w-full items-end gap-2 md:w-auto">
             <select className="input min-w-0 flex-1 md:w-56 md:flex-none" name="location_id" defaultValue="">
               <option value="">Przenieś do…</option>

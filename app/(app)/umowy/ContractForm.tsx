@@ -5,6 +5,7 @@ import { createContract } from "./actions";
 import { ContractFileInput } from "@/components/ContractFileInput";
 import { VariantPick } from "@/components/VariantPick";
 import { ContractItemsPicker } from "./ContractItemsPicker";
+import { DateField } from "@/components/DateField";
 
 export function ContractForm({ consignors, defaultUnits, canSeePrices, returnTo = "", saleId = null, saleLabel = null, pickVariantStore = null }: { consignors: { id: string; name: string }[]; defaultUnits: string; canSeePrices: boolean; returnTo?: string; saleId?: string | null; saleLabel?: string | null; pickVariantStore?: string | null }) {
   const [state, action, pending] = useActionState(createContract, null);
@@ -26,7 +27,7 @@ export function ContractForm({ consignors, defaultUnits, canSeePrices, returnTo 
       </div>
       <div>
         <label className="label" htmlFor="contract_date">Data</label>
-        <input className="input" type="date" id="contract_date" name="contract_date" defaultValue={new Date().toISOString().slice(0, 10)} />
+        <DateField id="contract_date" name="contract_date" defaultValue={new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Warsaw" })} />
       </div>
       <div>
         <label className="label" htmlFor="currency">Waluta</label>

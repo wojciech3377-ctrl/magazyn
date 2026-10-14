@@ -2,13 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "@/components/icons";
+import { HScrollBar } from "@/components/HScrollBar";
 
 /**
  * Akcje dla zaznaczonych wierszy listy (pola `ids` w tym samym formularzu).
  * Komputer: pasek przyklejony do dołu listy. Telefon: pojawia się dopiero po zaznaczeniu – „N zaznaczone · Akcje”,
  * akcje rozwijają się w panelu nad dolnym menu.
  */
-export function BulkBar({ children, name = "ids" }: { children: React.ReactNode; name?: string }) {
+export function BulkBar({ children, name = "ids", scrollFor }: { children: React.ReactNode; name?: string; /** id przewijanej tabeli – pasek przewijania w bok nad akcjami (komputer). */ scrollFor?: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const [count, setCount] = useState(0);
   const [open, setOpen] = useState(false);
@@ -24,7 +25,8 @@ export function BulkBar({ children, name = "ids" }: { children: React.ReactNode;
   useEffect(() => { if (!count) setOpen(false); }, [count]);
 
   return (
-    <div ref={ref} className={`z-20 mt-3 rounded-xl border border-line bg-white/95 shadow-(--shadow-pop) backdrop-blur max-md:fixed max-md:inset-x-2 max-md:bottom-[calc(4.6rem+env(safe-area-inset-bottom))] md:sticky md:bottom-0 md:shadow-none ${count ? "" : "max-md:hidden"}`}>
+    <div ref={ref} className={`z-20 mt-3 rounded-xl border border-line bg-white/95 shadow-(--shadow-pop) backdrop-blur max-md:fixed max-md:inset-x-2 max-md:bottom-[calc(4.6rem+env(safe-area-inset-bottom))] md:sticky md:bottom-[calc(4.6rem+env(safe-area-inset-bottom))] md:shadow-none lg:bottom-0 ${count ? "" : "max-md:hidden"}`}>
+      {scrollFor && <HScrollBar target={scrollFor} className="mx-auto h-4 rounded-t-xl border-b border-line max-md:hidden" />}
       <div className="flex items-center gap-3 px-3 py-2.5 md:hidden">
         <span className="flex h-7 min-w-7 items-center justify-center rounded-full bg-accent px-2 text-sm font-semibold text-white">{count}</span>
         <span className="text-sm font-medium">zaznaczone</span>

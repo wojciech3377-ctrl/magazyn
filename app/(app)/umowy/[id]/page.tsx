@@ -166,8 +166,8 @@ export default async function ContractPage({ params, searchParams }: { params: P
             ) : <p className="text-sm text-muted">Brak pliku.</p>}
             <form action={replaceFile} className="space-y-2">
               <input type="hidden" name="id" value={c.id} />
-              <ContractFileInput label="Nowy plik" />
-              <SubmitButton className="btn-secondary w-full" pendingText="Wgrywam…">{c.file_path ? "Zastąp plik" : "Wgraj plik"}</SubmitButton>
+              <ContractFileInput label={c.file_path ? "Zastąp plik – wybierz nowy" : "Dodaj plik umowy"} autoSave />
+              <p className="text-xs text-muted">Plik zapisze się w umowie od razu po wybraniu.</p>
             </form>
           </section>}
           {profile.role === "admin" && (

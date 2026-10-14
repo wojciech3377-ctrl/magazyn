@@ -4,6 +4,7 @@ import { useActionState, useEffect, useMemo, useRef, useState, useTransition } f
 import { SearchInput } from "@/components/SearchInput";
 import { createDelivery, searchVariants, type VariantHit } from "./actions";
 import { ContractFileInput } from "@/components/ContractFileInput";
+import { DateField } from "@/components/DateField";
 
 type Option = { id: string; name: string };
 type Loc = Option & { store_id: string; base_warehouse_id: string | null };
@@ -233,7 +234,7 @@ export function DeliveryForm({
               </select>
               <input className="input" name="counterparty" placeholder="Od kogo (imię i nazwisko / firma)" aria-label="Od kogo" />
               <div className="grid grid-cols-2 gap-2">
-                <input className="input" type="date" name="contract_date" defaultValue={new Date().toISOString().slice(0, 10)} aria-label="Data umowy" />
+                <DateField name="contract_date" defaultValue={new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Warsaw" })} aria-label="Data umowy" />
                 {canSeePrices && <input className="input" name="contract_amount" inputMode="decimal" placeholder="Kwota zł" aria-label="Kwota" />}
               </div>
               <ContractFileInput />

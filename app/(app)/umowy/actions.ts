@@ -122,7 +122,9 @@ export async function replaceFile(formData: FormData) {
     const file = uploadedFile(formData);
     if (!file) msg = "blad=" + encodeURIComponent("Wybierz plik.");
     else {
-      await supabase.from("contracts").update({ file_path: file.path, file_name: file.name, doc_number: null }).eq("id", id);
+      const { data: saved, error } = await supabase.from("contracts").update({ file_path: file.path, file_name: file.name, doc_number: null }).eq("id", id).select("id");
+      if (error) throw error;
+      if (!saved?.length) throw new Error("Nie udało się zapisać pliku w tej umowie (brak uprawnień albo umowa została usunięta).");
       await fillContractNumber(supabase, id);
     }
   } catch (e) {

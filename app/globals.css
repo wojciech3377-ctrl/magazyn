@@ -126,3 +126,6 @@ html { -webkit-tap-highlight-color: transparent; }
 @media (pointer: coarse) and (min-width: 1024px) {
   .app-main { margin-left: 5rem !important; }
 }
+
+/* Pasek przewijania tabeli w bok (Magazyn) – wyraźny, łatwy do złapania myszką. */
+.hscroll { scrollbar-width: auto; scrollbar-color: #94a3b8 #f1f5f9; }

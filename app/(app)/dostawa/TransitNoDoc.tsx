@@ -5,6 +5,7 @@ import { useState } from "react";
 import { ContractFileInput } from "@/components/ContractFileInput";
 import { SubmitButton } from "@/components/SubmitButton";
 import { transitContract, transitInvoice } from "./transit-doc-actions";
+import { DateField } from "@/components/DateField";
 
 export type TransitUnit = { id: string; code: string; title: string; option: string; location: string; price: number | null };
 
@@ -51,7 +52,7 @@ export function TransitNoDoc({ units, prices }: { units: TransitUnit[]; prices: 
           <input type="hidden" name="units" value={payload} />
           <div className="sm:col-span-2"><ContractFileInput label="Plik faktury (PDF lub zdjęcie)" /></div>
           <div><label className="label" htmlFor="doc_number">Numer faktury</label><input id="doc_number" name="doc_number" className="input" required /></div>
-          <div><label className="label" htmlFor="doc_date">Data faktury</label><input id="doc_date" name="doc_date" type="date" className="input" /></div>
+          <div><label className="label" htmlFor="doc_date">Data faktury</label><DateField id="doc_date" name="doc_date" /></div>
           <div className="sm:col-span-2"><label className="label" htmlFor="counterparty">Sprzedawca</label><input id="counterparty" name="counterparty" className="input" placeholder="np. firma, od której kupujesz" /></div>
           <div className="sm:col-span-2"><SubmitButton pendingText="Zapisuję…">Zapisz fakturę dla {picked.length} szt.</SubmitButton></div>
         </form>
