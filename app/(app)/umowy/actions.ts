@@ -73,8 +73,13 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
     if (!docNumber) await fillContractNumber(createAdminClient(), id);
     const saleId = String(formData.get("sale_id") ?? "");
     if (saleId) {
-      const { error: attachErr } = await supabase.rpc("attach_sale_unit", { p_sale_id: saleId, p_contract_id: id, p_purchase_price: parseAmount(formData.get("amount")), p_variant_id: String(formData.get("variant_id") ?? "") || null });
+      // Kwota zakupu sztuki – z umowy, według tej samej reguły co przy przypinaniu (faktura: nie cała kwota).
+      const { data: newUnit, error: attachErr } = await supabase.rpc("attach_sale_unit", { p_sale_id: saleId, p_contract_id: id, p_purchase_price: null, p_variant_id: String(formData.get("variant_id") ?? "") || null });
       if (attachErr) note = `?blad=${encodeURIComponent(`Umowa zapisana, ale nie przypięta do sprzedaży: ${attachErr.message}`)}`;
+      else if (newUnit) {
+        const pm = priceMessage(await inheritContractPrice(supabase, id, [newUnit as string]));
+        if (pm) okNote = pm;
+      }
     }
     const r = await attachByCodes(supabase, id, String(formData.get("units") ?? ""));
     const pm = priceMessage(r.price);
@@ -372,8 +377,14 @@ export async function assignContractToPiece(formData: FormData) {
       redirect(`/umowy/${contractId}?${price.problems.length ? "blad" : "ok"}=${encodeURIComponent(["Umowa przypisana do sprzedanego przedmiotu.", priceMessage(price)].join(" "))}`);
     }
   } else {
-    const { error: e } = await supabase.rpc("attach_sale_unit", { p_sale_id: saleId, p_contract_id: contractId, p_purchase_price: c.amount ?? null, p_variant_id: null });
+    const { data: newUnit, error: e } = await supabase.rpc("attach_sale_unit", { p_sale_id: saleId, p_contract_id: contractId, p_purchase_price: null, p_variant_id: null });
     if (e) return fail(e.message);
+    const price = newUnit ? await inheritContractPrice(supabase, contractId, [newUnit as string]) : null;
+    if (price && (price.problems.length || price.updated.length || price.notes.length)) {
+      revalidatePath("/umowy");
+      revalidatePath("/sprzedaz");
+      redirect(`/umowy/${contractId}?${price.problems.length ? "blad" : "ok"}=${encodeURIComponent(["Umowa przypisana do sprzedanego przedmiotu.", priceMessage(price)].join(" "))}`);
+    }
   }
   revalidatePath("/umowy");
   revalidatePath("/sprzedaz");

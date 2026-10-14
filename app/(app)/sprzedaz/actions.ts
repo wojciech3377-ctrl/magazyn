@@ -8,6 +8,7 @@ import { syncFurgonetkaShipments, syncShopifyOrders } from "@/lib/sync/shop-orde
 import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/furgonetka";
 import { errorMessage } from "@/lib/errors";
 import { parsePieceRef } from "@/lib/orders/pieces";
+import { inheritContractPrice, priceMessage } from "@/lib/contracts/inherit-price";
 
 /** Zamiana sztuki przy pakowaniu: skan kodu sztuki, IMEI albo numeru seryjnego. */
 export async function swapUnit(_: unknown, formData: FormData): Promise<{ ok?: string; error?: string }> {
@@ -96,11 +97,14 @@ export async function attachExistingContract(formData: FormData) {
     if (!unit) {
       const variant = String(formData.get("variant_id") ?? "") || null;
       if (!sale.variant_id && !variant) return fail("Wybierz produkt i rozmiar z katalogu – sprzedaż nie jest z nim powiązana.");
-      const { error } = await supabase.rpc("attach_sale_unit", { p_sale_id: saleId, p_contract_id: contractId, p_purchase_price: c.amount ?? null, p_variant_id: variant });
+      const { data: newUnit, error } = await supabase.rpc("attach_sale_unit", { p_sale_id: saleId, p_contract_id: contractId, p_purchase_price: null, p_variant_id: variant });
       if (error) return fail(error.message);
+      // Kwota zakupu z umowy według wspólnej reguły (faktura na kilka rzeczy – nie cała kwota każdej).
+      const price = newUnit ? await inheritContractPrice(supabase, contractId, [newUnit as string]) : null;
       revalidatePath("/sprzedaz");
       revalidatePath("/umowy");
-      redirect(`${back}${back.includes("?") ? "&" : "?"}ok=${encodeURIComponent(`Umowa ${c.number ? `nr ${c.number} ` : ""}przypisana do sprzedaży.`)}`);
+      const text = [`Umowa ${c.number ? `nr ${c.number} ` : ""}przypisana do sprzedaży.`, price ? priceMessage(price) : ""].filter(Boolean).join(" ");
+      redirect(`${back}${back.includes("?") ? "&" : "?"}${price?.problems.length ? "blad" : "ok"}=${encodeURIComponent(text)}`);
     }
   } else {
     const { data: u } = await supabase.from("units").select("id, contract_id, owner_type, purchase_price, status").eq("id", unitParam).maybeSingle();
@@ -108,15 +112,15 @@ export async function attachExistingContract(formData: FormData) {
   }
   if (!unit || ["removed", "consignor_returned"].includes(unit.status)) return fail("Nie ma takiej sztuki.");
   if (unit.contract_id) return fail("Ta rzecz ma już umowę (1 umowa na przedmiot).");
-  const patch: Record<string, unknown> = { contract_id: contractId };
-  if (unit.owner_type === "own" && unit.purchase_price === null && c.amount !== null) patch.purchase_price = c.amount;
-  const { data: upd, error } = await supabase.from("units").update(patch).eq("id", unit.id).is("contract_id", null).select("id");
+  const { data: upd, error } = await supabase.from("units").update({ contract_id: contractId }).eq("id", unit.id).is("contract_id", null).select("id");
   if (error) return fail(error.message);
   if (!upd?.length) return fail("Ta rzecz ma już umowę (1 umowa na przedmiot).");
   await supabase.from("unit_events").insert({ unit_id: unit.id, type: "contract", data: { contract_id: contractId, sale_id: saleId || null, note: "gotowa umowa dołączona do sprzedaży" } });
+  const price = await inheritContractPrice(supabase, contractId, [unit.id]);
   revalidatePath("/sprzedaz");
   revalidatePath("/umowy");
-  redirect(`${back}${back.includes("?") ? "&" : "?"}ok=${encodeURIComponent(`Umowa ${c.number ? `nr ${c.number} ` : ""}przypisana.`)}`);
+  const text = [`Umowa ${c.number ? `nr ${c.number} ` : ""}przypisana.`, priceMessage(price)].filter(Boolean).join(" ");
+  redirect(`${back}${back.includes("?") ? "&" : "?"}${price.problems.length ? "blad" : "ok"}=${encodeURIComponent(text)}`);
 }
 
 /**
