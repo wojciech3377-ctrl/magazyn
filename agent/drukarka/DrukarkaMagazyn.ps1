@@ -5,7 +5,7 @@
 param([switch]$Raz)  # -Raz: jedno sprawdzenie kolejki i koniec (do testów)
 
 $ErrorActionPreference = 'Stop'
-$Wersja = '0.3.1'
+$Wersja = '0.3.2'
 $Folder = Split-Path -Parent $MyInvocation.MyCommand.Path
 $PlikUstawien = Join-Path $Folder 'config.json'
 $PlikDziennika = Join-Path $Folder 'dziennik.txt'
@@ -277,20 +277,30 @@ $Platnosci = @{ card = @('Karta', 2); transfer = @('Przelew', 7); mobile = @('BL
 # Doba fiskalna paragonu = ostatni raport dobowy + 1 (gdyby się nie udało – sam ostatni raport).
 function Numer-Wydruku([int]$paragon) {
   $linie = @()
-  $raport = $(try { [ElzabSterownik]::OstatniRaport() } catch { $null })
-  foreach ($doba in @(($raport + 1), $raport)) {
-    if ($null -eq $doba -or $doba -le 0) { continue }
-    try { $linie = [ElzabSterownik]::Wizualizacja([int]$doba, $paragon); if ($linie.Count) { break } } catch { Zapisz-Dziennik "  treść paragonu (doba $doba): $(Tresc-Bledu $_)" }
+  $bledy = @()
+  $raport = $(try { [ElzabSterownik]::OstatniRaport() } catch { $bledy += "numer raportu dobowego: $(Tresc-Bledu $_)"; $null })
+  # Kopia elektroniczna zapisuje się chwilę po wydruku – kilka prób co 1,5 s; doba bieżąca to zwykle „ostatni raport + 1”.
+  $doby = @(); if ($null -ne $raport) { $doby += ($raport + 1), $raport }; $doby += 0
+  for ($proba = 0; $proba -lt 3 -and -not $linie.Count; $proba++) {
+    if ($proba) { Start-Sleep -Milliseconds 1500 }
+    foreach ($doba in $doby) {
+      if ($doba -lt 0) { continue }
+      try { $linie = @([ElzabSterownik]::Wizualizacja([int]$doba, $paragon)); if ($linie.Count) { break } else { $bledy += "doba ${doba}: pusta treść" } }
+      catch { $bledy += "doba ${doba}: $(Tresc-Bledu $_)" }
+    }
   }
   $numer = $null
-  # Od końca paragonu: linia z 9-cyfrowym numerem (stopka z numerem wydruku), z pominięciem NIP / telefonu.
+  # Numer wydruku: „#000001451”, „Nr wydr. 1451” albo samodzielne 9 cyfr – od końca paragonu, bez NIP / telefonu.
   for ($i = $linie.Count - 1; $i -ge 0 -and -not $numer; $i--) {
     $l = [string]$linie[$i]
+    $m = [regex]::Match($l, '(?i)(?:#\s*|nr\.?\s*wydr\w*\.?\s*:?\s*|wydruk\w*\s*(?:nr\.?)?\s*:?\s*)(\d{1,9})(?!\d)')
+    if ($m.Success) { $numer = $m.Groups[1].Value.PadLeft(9, '0'); break }
     if ($l -match '(?i)nip|tel') { continue }
     $m = [regex]::Match($l, '(?<![\d,.])(\d{9})(?![\d,.])')
     if ($m.Success) { $numer = $m.Groups[1].Value }
   }
-  return [pscustomobject]@{ Numer = $numer; Linie = $linie }
+  $opis = if ($linie.Count) { $linie -join "`n" } else { "(nie odczytano treści paragonu nr $paragon w dobie; raport dobowy: $raport)`n" + ($bledy -join "`n") }
+  return [pscustomobject]@{ Numer = $numer; Linie = $linie; Opis = $opis }
 }
 
 # ELZAB (np. Zeta Online): paragon przez bibliotekę ElzabDR.dll. Zwraca numer wydruku z drukarki (jak na papierze)
@@ -314,7 +324,7 @@ function Drukuj-Elzab($zadanie) {
     $otwarty = $false
     $numer = [ElzabSterownik]::OstatniNumer()
     $wydruk = Numer-Wydruku $numer
-    return [pscustomobject]@{ Numer = $(if ($wydruk.Numer) { $wydruk.Numer } else { "$numer" }); Doba = "$numer"; Tresc = ($wydruk.Linie -join "`n"); ZWydruku = [bool]$wydruk.Numer }
+    return [pscustomobject]@{ Numer = $(if ($wydruk.Numer) { $wydruk.Numer } else { "$numer" }); Doba = "$numer"; Tresc = $wydruk.Opis; ZWydruku = [bool]$wydruk.Numer }
   } catch {
     $blad = Tresc-Bledu $_
     # Zabezpieczenie przed podwójnym paragonem: jeśli mimo błędu (np. zerwane połączenie przy zamknięciu)
@@ -323,8 +333,8 @@ function Drukuj-Elzab($zadanie) {
       $po = $(try { [ElzabSterownik]::OstatniNumer() } catch { $null })
       if ($null -ne $po -and $po -gt $przed) {
         Zapisz-Dziennik "  błąd po zamknięciu ($blad), ale drukarka ma nowy paragon nr $po"
-        $wydruk = $(try { Numer-Wydruku $po } catch { [pscustomobject]@{ Numer = $null; Linie = @() } })
-        return [pscustomobject]@{ Numer = $(if ($wydruk.Numer) { $wydruk.Numer } else { "$po" }); Doba = "$po"; Tresc = ($wydruk.Linie -join "`n"); ZWydruku = [bool]$wydruk.Numer }
+        $wydruk = $(try { Numer-Wydruku $po } catch { [pscustomobject]@{ Numer = $null; Linie = @(); Opis = "$(Tresc-Bledu $_)" } })
+        return [pscustomobject]@{ Numer = $(if ($wydruk.Numer) { $wydruk.Numer } else { "$po" }); Doba = "$po"; Tresc = $wydruk.Opis; ZWydruku = [bool]$wydruk.Numer }
       }
     }
     if ($otwarty) { [ElzabSterownik]::Anuluj() }

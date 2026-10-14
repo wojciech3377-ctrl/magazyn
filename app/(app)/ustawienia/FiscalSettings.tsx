@@ -8,7 +8,7 @@ import { AddPrinterForm, RegenerateKeyForm } from "./PrinterKeyForms";
 import { deletePrinter, fixReceiptNumber, saveFiscalSettings, testPrinter, togglePrinter } from "./fiscal-actions";
 
 /** Wersja programu „Drukarka Magazyn” w agent/drukarka (0.3.0: numer wydruku z treści paragonu). */
-const AGENT_VERSION = "0.3.1";
+const AGENT_VERSION = "0.3.2";
 
 type Printer = { id: string; name: string; active: boolean; last_seen_at: string | null; last_status: Record<string, string> | null; created_at: string };
 type Job = { id: string; number: number; source: string; status: string; total: number; receipt_number: string | null; error: string | null; created_at: string; pos_order_id: string | null; order_id: string | null; printer: { name: string } | null };
@@ -24,6 +24,11 @@ export async function FiscalSettings() {
   if (printersRes.error) return <Notice tone="error">Uruchom migrację 0036 w Supabase (SQL Editor) – wtedy pojawi się tu drukarka fiskalna.</Notice>;
   const printers = (printersRes.data ?? []) as Printer[];
   const jobs = (jobsRes.data ?? []) as unknown as Job[];
+  // Odczyt z drukarki (program 0.3+, migracja 0047): numer w dobie i treść paragonu albo powód, dla którego jej nie odczytano.
+  const { data: reads } = jobs.length
+    ? await db.from("receipt_jobs").select("id, daily_no, printout_text").in("id", jobs.map((j) => j.id)).then((r) => r, () => ({ data: null }))
+    : { data: null };
+  const readOf = new Map(((reads ?? []) as { id: string; daily_no: string | null; printout_text: string | null }[]).map((r) => [r.id, r]));
   const online = (p: Printer) => !!p.last_seen_at && Date.now() - new Date(p.last_seen_at).getTime() < 3 * 60_000;
 
   return (
@@ -126,6 +131,19 @@ export async function FiscalSettings() {
                         </form>
                       ) : j.receipt_number && <span className="ml-1 font-mono text-xs">{j.receipt_number}</span>}
                       {j.error && <span className="block max-w-md text-xs text-bad">{j.error}</span>}
+                      {(() => {
+                        const r = readOf.get(j.id);
+                        if (!r || (!r.daily_no && !r.printout_text)) return null;
+                        const failed = !!r.printout_text?.startsWith("(nie odczytano");
+                        return (
+                          <details className="mt-1 max-w-md text-xs">
+                            <summary className={`cursor-pointer ${failed ? "text-warn" : "text-muted"}`}>
+                              {r.daily_no ? `w dobie nr ${r.daily_no} · ` : ""}{failed ? "nie odczytano numeru wydruku – szczegóły" : "odczyt z drukarki"}
+                            </summary>
+                            <pre className="mt-1 max-h-60 overflow-auto whitespace-pre-wrap rounded bg-slate-50 p-2 font-mono text-[11px] leading-snug">{r.printout_text ?? "–"}</pre>
+                          </details>
+                        );
+                      })()}
                     </td>
                     <td className="text-sm text-muted">{j.printer?.name ?? "–"}</td>
                   </tr>
