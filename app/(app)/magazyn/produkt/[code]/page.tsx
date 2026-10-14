@@ -35,6 +35,7 @@ export default async function ProductStockPage({ params }: { params: Promise<{ c
   return (
     <>
       <PageHeader
+        back="/magazyn/produkty"
         title={p.title as string}
         sub={<><span className="font-mono">{productTagCode(p.tag_no as number)}</span>{p.style_sku ? ` · ${p.style_sku}` : ""} · {available.length ? `dostępne rozmiary: ${available.map((s) => s.option).join(", ")}` : "brak na stanie"}</>}
         actions={<><Link className="btn-secondary" href={`/magazyn/produkty?q=${encodeURIComponent((p.style_sku as string | null) ?? (p.title as string))}`}>Metka produktu</Link><Link className="btn-secondary" href="/magazyn">Magazyn</Link></>}

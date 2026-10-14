@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { markNavigation } from "@/components/BackLink";
 import { useEffect, useState } from "react";
 import { signOut } from "@/app/login/actions";
 import { Icon, type IconName } from "@/components/icons";
@@ -46,8 +47,20 @@ const TAB_BAR = ["/magazyn", "/kasa", "/sprzedaz", "/dostawa", "/wtb", "/katalog
 /** Menu boczne (komputer), wysuwane menu i dolny pasek (telefon). Tylko działy, do których osoba ma dostęp. */
 export function Nav({ badges = {}, user, allowed }: { badges?: Record<string, Badge[]>; user: string; allowed: string[] }) {
   const path = usePathname();
+  const search = useSearchParams();
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   useEffect(() => setOpen(false), [path]);
+  useEffect(() => markNavigation(), [path, search]);
+  // Kliknięcie działu, w którym już jesteś: wraca do jego głównej strony (bez wyszukiwania i filtrów) i na górę listy.
+  const goHome = (href: string) => (e: React.MouseEvent) => {
+    if (path !== href && !path.startsWith(href + "/")) return;
+    e.preventDefault();
+    setOpen(false);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    if (path === href && !search.size) router.refresh();
+    else router.push(href);
+  };
   const groups = GROUPS.map((g) => ({ ...g, links: g.links.filter((l) => allowed.includes(l.href)) })).filter((g) => g.links.length);
   const all = groups.flatMap((g) => g.links);
   const current = all.find((l) => path === l.href || path.startsWith(l.href + "/"));
@@ -57,7 +70,7 @@ export function Nav({ badges = {}, user, allowed }: { badges?: Record<string, Ba
 
   const menu = (
     <div className="flex h-full flex-col">
-      <Link href="/magazyn" className="flex items-center gap-2.5 px-5 pb-5 pt-5">
+      <Link href="/magazyn" onClick={goHome("/magazyn")} className="flex items-center gap-2.5 px-5 pb-5 pt-5">
         <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-accent to-indigo-500 text-white shadow-sm"><Icon name="box" className="h-4.5 w-4.5" /></span>
         <span className="brand-text leading-tight">
           <span className="block text-[15px] font-semibold tracking-tight">Magazyn</span>
@@ -76,6 +89,7 @@ export function Nav({ badges = {}, user, allowed }: { badges?: Record<string, Ba
                   <li key={l.href}>
                     <Link
                       href={l.href}
+                      onClick={goHome(l.href)}
                       aria-current={active ? "page" : undefined}
                       title={l.label}
                       className={`nav-link group relative flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors ${active ? "bg-accent-soft text-accent" : "text-slate-600 hover:bg-slate-100 hover:text-ink"}`}
@@ -123,7 +137,7 @@ export function Nav({ badges = {}, user, allowed }: { badges?: Record<string, Ba
             const n = (badges[l.href] ?? []).reduce((s, b) => s + b.n, 0);
             return (
               <li key={l.href} className="flex-1">
-                <Link href={l.href} aria-current={active ? "page" : undefined} className={`relative flex flex-col items-center gap-0.5 pb-1.5 pt-2 text-[11px] font-medium ${active ? "text-accent" : "text-slate-500"}`}>
+                <Link href={l.href} onClick={goHome(l.href)} aria-current={active ? "page" : undefined} className={`relative flex flex-col items-center gap-0.5 pb-1.5 pt-2 text-[11px] font-medium ${active ? "text-accent" : "text-slate-500"}`}>
                   <Icon name={l.icon} className="h-[22px] w-[22px]" />
                   {l.label === "Przyjęcie dostawy" ? "Dostawa" : l.label}
                   {n > 0 && <span className="absolute left-1/2 top-1 ml-2 min-w-4 rounded-full bg-red-500 px-1 text-center text-[10px] font-semibold leading-4 text-white">{n}</span>}

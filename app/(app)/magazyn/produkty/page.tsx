@@ -11,6 +11,19 @@ import { ProductTagsForm, type ProductRow } from "./ProductTagsForm";
 
 export const metadata = { title: "Stan produktu + metka" };
 
+const MAX_ROWS = 3000;
+
+/** Wszystkie wiersze zapytania, po 1000 (limit Supabase na jedno zapytanie). */
+async function allPages<T>(page: (from: number, to: number) => PromiseLike<{ data: T[] | null }>, max = 100_000) {
+  const out: T[] = [];
+  for (let from = 0; from < max; from += 1000) {
+    const { data } = await page(from, from + 999);
+    out.push(...(data ?? []));
+    if (!data || data.length < 1000) break;
+  }
+  return out;
+}
+
 /**
  * Metki produktów z katalogu: jeden produkt = jedna metka (bez rozmiaru), z kodem PR…, po którego zeskanowaniu
  * aplikacja pokazuje stan produktu i dostępne rozmiary. Wyszukiwanie, zaznacz wszystko, wydruk metek.
@@ -26,42 +39,56 @@ export default async function ProductTagsPage({ searchParams }: { searchParams: 
   const q = (sp.q ?? "").trim().replace(/[,()*%\\]/g, " ").trim().slice(0, 80);
   const tylkoNaStanie = sp.wszystkie !== "1";
 
-  // Produkty: wyszukane (nazwa, SKU, EAN) albo – bez wyszukiwania – te, które mają sztuki na stanie w sklepie.
+  // Produkty: wyszukane (nazwa, SKU, EAN) albo – bez wyszukiwania – te, które mają sztuki na stanie.
+  // Supabase oddaje najwyżej 1000 wierszy naraz, więc stany i listy czytamy stronami.
   let productIds: string[] = [];
   if (q.length >= 2) {
-    const vids = await findVariantIds(supabase, q);
-    const { data } = vids.length ? await supabase.from("variants").select("product_id").in("id", vids.slice(0, 500)) : { data: [] };
-    productIds = [...new Set((data ?? []).map((v) => v.product_id as string))];
+    let byTitle = supabase.from("products").select("id").limit(1000);
+    for (const w of q.split(/\s+/).filter(Boolean).slice(0, 5)) byTitle = byTitle.ilike("title", `%${w}%`);
+    const [{ data: titled }, vids] = await Promise.all([byTitle, findVariantIds(supabase, q)]);
+    const ids = new Set((titled ?? []).map((p) => p.id as string));
+    for (let i = 0; i < vids.length && i < 2000; i += 300) {
+      const { data } = await supabase.from("variants").select("product_id").in("id", vids.slice(i, i + 300));
+      for (const v of data ?? []) ids.add(v.product_id as string);
+    }
+    productIds = [...ids];
   }
-  const { data: stock } = await supabase.from("units").select("variant:variants(product_id), location:locations(store_id)")
-    .eq("status", "in_stock").limit(20000);
+  type StockRow = { variant: { product_id: string } | null; location: { store_id: string } | null };
+  const stock = await allPages<StockRow>((from, to) =>
+    supabase.from("units").select("variant:variants(product_id), location:locations(store_id)").eq("status", "in_stock").order("id").range(from, to) as unknown as PromiseLike<{ data: StockRow[] | null }>);
   const inStore = new Map<string, number>();
   const anywhere = new Map<string, number>();
-  for (const u of (stock ?? []) as unknown as { variant: { product_id: string }; location: { store_id: string } }[]) {
+  for (const u of stock) {
+    if (!u.variant) continue;
     anywhere.set(u.variant.product_id, (anywhere.get(u.variant.product_id) ?? 0) + 1);
-    if (u.location.store_id === storeId) inStore.set(u.variant.product_id, (inStore.get(u.variant.product_id) ?? 0) + 1);
+    if (u.location?.store_id === storeId) inStore.set(u.variant.product_id, (inStore.get(u.variant.product_id) ?? 0) + 1);
   }
-  if (q.length < 2 && tylkoNaStanie) productIds = [...inStore.keys()];
-  else if (q.length < 2) {
-    // Wszystkie produkty sklepu (bez wyszukiwania – pierwsze 300 alfabetycznie).
-    const { data } = await supabase.from("product_store_links").select("product_id, product:products(title)").eq("store_id", storeId).limit(5000);
-    productIds = ((data ?? []) as unknown as { product_id: string; product: { title: string } | null }[])
-      .sort((a, b) => (a.product?.title ?? "").localeCompare(b.product?.title ?? "", "pl")).slice(0, 300).map((r) => r.product_id);
-  }
-  else if (tylkoNaStanie) productIds = productIds.filter((id) => (anywhere.get(id) ?? 0) > 0);
+  // Produkty sklepu (do „brak w tym sklepie” i listy bez sztuk na stanie).
+  type LinkRow = { product_id: string };
+  const linkedIds = new Set((await allPages<LinkRow>((from, to) =>
+    supabase.from("product_store_links").select("product_id").eq("store_id", storeId).order("product_id").range(from, to) as unknown as PromiseLike<{ data: LinkRow[] | null }>)).map((l) => l.product_id));
+  let capped = false;
+  if (q.length < 2 && tylkoNaStanie) {
+    // Na stanie: sztuki w lokalizacjach tego sklepu albo produkt tego sklepu ze sztukami gdziekolwiek.
+    productIds = [...anywhere.keys()].filter((id) => inStore.has(id) || linkedIds.has(id));
+  } else if (q.length < 2) {
+    productIds = [...new Set([...linkedIds, ...anywhere.keys()])];
+    capped = productIds.length > MAX_ROWS;
+  } else if (tylkoNaStanie) productIds = productIds.filter((id) => (anywhere.get(id) ?? 0) > 0);
 
   const rows: ProductRow[] = [];
-  for (let i = 0; i < productIds.length && i < 2000; i += 200) {
+  for (let i = 0; i < productIds.length; i += 200) {
     const part = productIds.slice(i, i + 200);
-    const { data } = await supabase.from("products").select("*, links:product_store_links(store_id)").in("id", part);
-    for (const p of (data ?? []) as { id: string; title: string; style_sku: string | null; image_url: string | null; tag_no?: number | null; links: { store_id: string }[] }[]) {
+    const { data } = await supabase.from("products").select("*").in("id", part);
+    for (const p of (data ?? []) as { id: string; title: string; style_sku: string | null; image_url: string | null; tag_no?: number | null }[]) {
       rows.push({
         id: p.id, title: p.title, sku: p.style_sku, image: p.image_url, code: p.tag_no ? productTagCode(p.tag_no) : null,
-        inStore: inStore.get(p.id) ?? 0, total: anywhere.get(p.id) ?? 0, linked: p.links.some((l) => l.store_id === storeId),
+        inStore: inStore.get(p.id) ?? 0, total: anywhere.get(p.id) ?? 0, linked: linkedIds.has(p.id),
       });
     }
   }
   rows.sort((a, b) => a.title.localeCompare(b.title, "pl"));
+  if (rows.length > MAX_ROWS) rows.length = MAX_ROWS;
   const qs = (patch: Record<string, string | undefined>) => {
     const p = new URLSearchParams(Object.entries({ q: sp.q, sklep: storeId, wszystkie: sp.wszystkie, ...patch }).filter((e): e is [string, string] => !!e[1]));
     return `/magazyn/produkty?${p}`;
@@ -89,7 +116,10 @@ export default async function ProductTagsPage({ searchParams }: { searchParams: 
       {!rows.length ? (
         <p className="card p-8 text-center text-sm text-muted">{q.length >= 2 ? `Nie znaleziono „${q}”.` : "Brak produktów ze sztukami na stanie w tym sklepie."} <Link className="text-accent hover:underline" href={qs({ wszystkie: "1" })}>Pokaż wszystkie</Link></p>
       ) : (
+        <>
+        {capped && <p className="mb-3 text-sm text-muted">Pokazano pierwsze {MAX_ROWS} produktów alfabetycznie – wpisz nazwę albo SKU, żeby zawęzić listę.</p>}
         <ProductTagsForm rows={rows} storeId={storeId} storeName={storeList.find((s) => s.id === storeId)?.name ?? ""} thumbs={Object.fromEntries(rows.map((r) => [r.id, r.image ? <Thumb src={r.image} alt="" /> : null]))} />
+        </>
       )}
     </>
   );

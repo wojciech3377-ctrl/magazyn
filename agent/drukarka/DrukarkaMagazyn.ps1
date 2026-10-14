@@ -5,7 +5,7 @@
 param([switch]$Raz)  # -Raz: jedno sprawdzenie kolejki i koniec (do testów)
 
 $ErrorActionPreference = 'Stop'
-$Wersja = '0.3.0'
+$Wersja = '0.3.1'
 $Folder = Split-Path -Parent $MyInvocation.MyCommand.Path
 $PlikUstawien = Join-Path $Folder 'config.json'
 $PlikDziennika = Join-Path $Folder 'dziennik.txt'
@@ -148,22 +148,75 @@ function Zaladuj-Elzab {
   $Elzab.Gotowy = $true
 }
 
-# Szybkie sprawdzenie, czy drukarka w ogóle odpowiada w sieci (czytelniejszy komunikat niż błąd biblioteki).
-function Sprawdz-Siec {
+# Adres IP z ustawień: bez spacji, przecinki zamienione na kropki („192,168,1,50” → „192.168.1.50”). $null, gdy to nie jest adres IPv4.
+function Popraw-Ip([string]$tekst) {
+  $ip = ($tekst -replace '\s', '' -replace ',', '.').Trim('.')
+  if ($ip -match '^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$' -and -not ($Matches[1..4] | Where-Object { [int]$_ -gt 255 })) { return $ip }
+  return $null
+}
+
+# Szukanie drukarki w sieci lokalnej: urządzenia z otwartym portem drukarki (np. 1001) w sieci tego komputera (x.x.x.1–254).
+function Znajdz-Drukarke([int]$port) {
+  $sieci = @()
+  foreach ($k in [Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
+    if ($k.OperationalStatus -ne 'Up' -or $k.NetworkInterfaceType -eq 'Loopback') { continue }
+    foreach ($a in $k.GetIPProperties().UnicastAddresses) {
+      if ($a.Address.AddressFamily -ne 'InterNetwork') { continue }
+      $b = $a.Address.GetAddressBytes()
+      if ($b[0] -eq 169 -and $b[1] -eq 254) { continue }
+      $sieci += "{0}.{1}.{2}" -f $b[0], $b[1], $b[2]
+    }
+  }
+  $proby = @()
+  foreach ($siec in ($sieci | Select-Object -Unique)) {
+    foreach ($n in 1..254) {
+      $klient = New-Object Net.Sockets.TcpClient
+      try { $proby += [pscustomobject]@{ Ip = "$siec.$n"; Klient = $klient; Wynik = $klient.BeginConnect("$siec.$n", $port, $null, $null) } } catch { $klient.Close() }
+    }
+  }
+  Start-Sleep -Milliseconds 2500
+  $znalezione = @()
+  foreach ($p in $proby) {
+    try { if ($p.Wynik.IsCompleted) { $p.Klient.EndConnect($p.Wynik); if ($p.Klient.Connected) { $znalezione += $p.Ip } } } catch {} finally { $p.Klient.Close() }
+  }
+  return ,$znalezione
+}
+
+function Odpowiada([string]$ip, [int]$port) {
   $klient = New-Object Net.Sockets.TcpClient
   try {
-    $proba = $klient.BeginConnect($Ust.drukarka.ip, [int]$Ust.drukarka.port, $null, $null)
-    if (-not $proba.AsyncWaitHandle.WaitOne(4000)) { throw "Drukarka nie odpowiada pod $($Ust.drukarka.ip):$($Ust.drukarka.port) – sprawdź, czy jest włączona, Wi-Fi / kabel sieciowy i adres IP." }
+    $proba = $klient.BeginConnect($ip, $port, $null, $null)
+    if (-not $proba.AsyncWaitHandle.WaitOne(4000)) { return $false }
     $klient.EndConnect($proba)
-  } finally { $klient.Close() }
+    return $true
+  } catch { return $false } finally { $klient.Close() }
+}
+
+# Adres drukarki w sieci. Gdy w ustawieniach jest zły adres albo drukarka zmieniła adres (DHCP), program szuka jej w sieci
+# i – jeśli znajdzie dokładnie jedną – zapisuje nowy adres w config.json.
+function Adres-Drukarki {
+  $port = if ($Ust.drukarka.port) { [int]$Ust.drukarka.port } else { 1001 }
+  $wpisany = [string]$Ust.drukarka.ip
+  $ip = Popraw-Ip $wpisany
+  if ($ip -and (Odpowiada $ip $port)) { return $ip, $port }
+  $znalezione = Znajdz-Drukarke $port
+  if ($znalezione.Count -eq 1) {
+    $Ust.drukarka.ip = $znalezione[0]
+    $Ust | ConvertTo-Json -Depth 4 | Set-Content -Path $PlikUstawien -Encoding UTF8
+    Zapisz-Dziennik "  Drukarka znaleziona w sieci pod adresem $($znalezione[0]):$port (było: '$wpisany') – zapisano w ustawieniach."
+    return $znalezione[0], $port
+  }
+  $powod = if (-not $ip) { "W ustawieniach programu jest zły adres IP drukarki: '$wpisany'." } else { "Drukarka nie odpowiada pod $($ip):$port." }
+  if ($znalezione.Count -gt 1) { throw "$powod W sieci jest kilka urządzeń z portem $($port): $($znalezione -join ', '). Uruchom Zainstaluj.bat ponownie i wybierz adres drukarki." }
+  throw "$powod Nie znaleziono drukarki w sieci – sprawdź, czy jest włączona i podłączona do tej samej sieci (Wi-Fi 2,4 GHz / kabel), a adres IP z wydruku Menu -> Raporty -> Stan modułu wpisz, uruchamiając ponownie Zainstaluj.bat."
 }
 
 function Polacz-Elzab {
   Zaladuj-Elzab
   $czas = if ($Ust.drukarka.timeout) { [int]$Ust.drukarka.timeout } else { 10 }
   if ($Ust.drukarka.polaczenie -eq 'tcp') {
-    Sprawdz-Siec
-    [ElzabSterownik]::PolaczTcp([string]$Ust.drukarka.ip, [int]$Ust.drukarka.port, $czas)
+    $ip, $port = Adres-Drukarki
+    [ElzabSterownik]::PolaczTcp($ip, $port, $czas)
   } else {
     $nr = [int](([string]$Ust.drukarka.com) -replace '\D', '')
     if ($nr -le 0) { throw "Zły port COM w config.json: '$($Ust.drukarka.com)'" }

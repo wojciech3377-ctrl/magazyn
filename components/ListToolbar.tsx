@@ -48,7 +48,7 @@ export function ListToolbar({
       {sort && dirParam && dir && <input type="hidden" name={dirParam} value={dir} />}
 
       <div className="flex flex-wrap items-center gap-2">
-        <SearchInput name="q" defaultValue={q} placeholder={placeholder} aria-label="Szukaj" wrapperClassName="min-w-0 flex-[1_1_100%] sm:flex-[1_1_18rem]" />
+        <SearchInput key={q ?? ""} name="q" defaultValue={q} placeholder={placeholder} aria-label="Szukaj" wrapperClassName="min-w-0 flex-[1_1_100%] sm:flex-[1_1_18rem]" />
         <div className="flex flex-1 gap-2 sm:flex-none">
           {hasFilters && (
             <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open}

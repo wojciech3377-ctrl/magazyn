@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { UNIT_STATUS, UNIT_STATUS_TONE } from "@/lib/labels";
+import { BackLink } from "@/components/BackLink";
 
 export function StatusBadge({ status }: { status: string }) {
   return (
@@ -25,10 +26,11 @@ export function Pill({ children, tone = "slate" }: { children: React.ReactNode; 
   );
 }
 
-export function PageHeader({ title, sub, actions }: { title: string; sub?: React.ReactNode; actions?: React.ReactNode }) {
+export function PageHeader({ title, sub, actions, back }: { title: string; sub?: React.ReactNode; actions?: React.ReactNode; back?: string }) {
   return (
     <div className="mb-5 flex flex-col gap-3 sm:mb-6 sm:gap-4 xl:flex-row xl:items-end xl:justify-between">
       <div className="min-w-0">
+        {back && <BackLink href={back} />}
         <h1 className="h1">{title}</h1>
         {sub && <p className="mt-1 max-w-3xl text-[13px] leading-relaxed text-muted sm:mt-1.5 sm:text-sm">{sub}</p>}
       </div>

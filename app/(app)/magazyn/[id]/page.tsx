@@ -51,6 +51,7 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
   return (
     <>
       <PageHeader
+        back="/magazyn"
         title={`${u.variant.product.title} · ${u.variant.option}`}
         sub={<span className="font-mono">{u.code}{u.identifier ? ` · ${u.identifier}` : ""}</span>}
         actions={
