@@ -3,7 +3,7 @@
 import { useActionState, useEffect, useRef, useState, useTransition } from "react";
 import { SearchInput } from "@/components/SearchInput";
 import { FISCAL_NAME_MAX, receiptName } from "@/lib/fiscal/name";
-import { finishPosOrder, pickUnitForVariant, scanUnit, searchCatalog, searchOwnProducts, searchUnits, type CatalogHit, type CatalogSize, type OwnProduct, type PosUnit, type ScanChoice } from "./actions";
+import { finishPosOrder, pickUnitForVariant, scanUnit, searchCatalog, searchOwnProducts, searchUnits, type CatalogHit, type CatalogSize, type OwnProduct, type PosUnit, type ScanChoice, type ScannedUnit } from "./actions";
 
 type UnitLine = PosUnit & { kind: "unit"; key: string; priceInput: string; ptu: string; label: string };
 type CustomLine = { kind: "custom"; key: string; name: string; ptu: string; qtyInput: string; priceInput: string; product_id: string | null; save: boolean; note: string };
@@ -37,6 +37,7 @@ export function PosForm({ stores, printer, ptu, defaultPtu, ptuFor, printerOnlin
   const [hits, setHits] = useState<{ units: PosUnit[]; own: OwnProduct[]; q: string } | null>(null);
   const [payment, setPayment] = useState("card");
   const [choices, setChoices] = useState<ScanChoice[] | null>(null);
+  const [scanned, setScanned] = useState<ScannedUnit | null>(null);
   const [busy, start] = useTransition();
   const [manual, setManual] = useState({ open: false, name: "", price: "", qty: "1", ptu: defaultPtu, save: false });
   const scanRef = useRef<HTMLInputElement>(null);
@@ -124,11 +125,15 @@ export function PosForm({ stores, printer, ptu, defaultPtu, ptuFor, printerOnlin
     start(async () => {
       const r = await scanUnit(code, storeId, unitIds);
       setChoices(null);
+      setScanned(null);
       if (r.unit) addUnit(r.unit);
       else if (r.choices) {
         setChoices(r.choices);
+        setScanned(r.scanned ?? null);
         setScan("");
-        setMessage({ tone: "ok", text: "To SKU modelu – wybierz rozmiar." });
+        setMessage(r.scanned
+          ? { tone: "ok", text: r.scanned.unit ? `Zeskanowano ${r.scanned.code} – wybierz rozmiar (zeskanowany jest zaznaczony).` : `Sztuka ${r.scanned.code} jest już sprzedana albo w koszyku – wybierz rozmiar z magazynu.` }
+          : { tone: "ok", text: "Wybierz rozmiar." });
       } else {
         // Nie kod – szukamy po nazwie (sztuki na stanie i własne produkty).
         const [units, own] = await Promise.all([searchUnits(code, storeId), searchOwnProducts(code)]);
@@ -142,9 +147,16 @@ export function PosForm({ stores, printer, ptu, defaultPtu, ptuFor, printerOnlin
   }
 
   function pick(ch: ScanChoice) {
+    if (scanned?.unit && ch.variantId === scanned.variantId && !unitIds.includes(scanned.unit.id)) {
+      addUnit(scanned.unit);
+      setChoices(null);
+      setScanned(null);
+      scanRef.current?.focus();
+      return;
+    }
     start(async () => {
       const r = await pickUnitForVariant(ch.variantId, storeId, unitIds);
-      if (r.unit) { addUnit(r.unit); setChoices(null); } else setMessage({ tone: "error", text: r.error ?? "Brak sztuki." });
+      if (r.unit) { addUnit(r.unit); setChoices(null); setScanned(null); } else setMessage({ tone: "error", text: r.error ?? "Brak sztuki." });
       scanRef.current?.focus();
     });
   }
@@ -182,14 +194,22 @@ export function PosForm({ stores, printer, ptu, defaultPtu, ptuFor, printerOnlin
           {message && <p className={`text-sm ${message.tone === "ok" ? "text-ok" : "text-bad"}`}>{message.text}</p>}
           {choices && (
             <div className="rounded-xl border border-line p-3">
-              <div className="mb-2 text-sm font-medium">{choices[0]?.title}</div>
-              <div className="flex flex-wrap gap-1.5">
-                {choices.map((ch) => (
-                  <button type="button" key={ch.variantId} disabled={ch.inStock === 0} onClick={() => pick(ch)}
-                    className="rounded-lg border border-line px-2.5 py-1.5 text-sm hover:border-accent disabled:opacity-40">
-                    <b>{ch.option}</b> <span className="text-xs text-muted">{ch.inStock} szt.</span>
-                  </button>
-                ))}
+              <div className="mb-2 flex items-start gap-2">
+                <div className="flex-1 text-sm font-medium">{choices[0]?.title}</div>
+                <button type="button" className="text-xs text-muted hover:text-ink" onClick={() => { setChoices(null); setScanned(null); scanRef.current?.focus(); }}>Zamknij ✕</button>
+              </div>
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(5.5rem,1fr))] gap-1.5">
+                {choices.map((ch) => {
+                  const isScanned = scanned?.variantId === ch.variantId;
+                  return (
+                    <button type="button" key={ch.variantId} disabled={ch.inStock === 0} onClick={() => pick(ch)}
+                      className={`flex flex-col items-center rounded-lg border px-2 py-2 text-sm hover:border-accent disabled:opacity-35 ${isScanned ? "border-accent bg-accent-soft ring-2 ring-accent/40" : "border-line"}`}>
+                      <b className="text-base">{ch.option}</b>
+                      <span className="text-xs tabular-nums text-muted">{ch.inStock ? `${ch.inStock} szt.` : "brak"}{ch.price !== null ? ` · ${fmt(ch.price)}` : ""}</span>
+                      {isScanned && <span className="text-[10px] font-semibold uppercase tracking-wide text-accent">zeskanowany</span>}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}

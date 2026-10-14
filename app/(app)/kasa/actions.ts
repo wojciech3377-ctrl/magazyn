@@ -31,7 +31,7 @@ const SELECT = `id, code, identifier, status, owner_type, purchase_form, receive
   variant:variants(option, links:variant_store_links(store_id, price), product:products(title, image_url))`;
 
 type Row = {
-  id: string; code: string; identifier: string | null; status: string; owner_type: string; purchase_form: string;
+  id: string; code: string; identifier: string | null; status: string; owner_type: string; purchase_form: string; variant_id: string;
   consignor: { name: string } | null;
   location: { name: string; store_id: string };
   variant: { option: string; links: { store_id: string; price: number | null }[]; product: { title: string; image_url: string | null } };
@@ -115,7 +115,9 @@ export async function searchCatalog(q: string, storeId: string): Promise<Catalog
     }));
 }
 
-export type ScanChoice = { variantId: string; title: string; option: string; inStock: number };
+export type ScanChoice = { variantId: string; title: string; option: string; inStock: number; price: number | null };
+/** Zeskanowana sztuka (kod z etykiety) przy wyborze rozmiaru: ten rozmiar jest wyróżniony, a jego wybór dodaje dokładnie tę sztukę. */
+export type ScannedUnit = { variantId: string; code: string; unit: PosUnit | null };
 
 /** Najstarsza wolna sztuka rozmiaru: najpierw własne, potem komis; najpierw z lokalizacji sklepu. */
 export async function pickUnitForVariant(variantId: string, storeId: string, exclude: string[] = []): Promise<{ unit?: PosUnit; error?: string }> {
@@ -136,7 +138,7 @@ export async function pickUnitForVariant(variantId: string, storeId: string, exc
  * Skan albo wpisany kod: kod sztuki z etykiety (S000123), IMEI / numer seryjny,
  * SKU rozmiaru, EAN albo SKU modelu ze Shopify (wtedy wybór rozmiaru).
  */
-export async function scanUnit(code: string, storeId: string, exclude: string[] = []): Promise<{ unit?: PosUnit; choices?: ScanChoice[]; error?: string }> {
+export async function scanUnit(code: string, storeId: string, exclude: string[] = []): Promise<{ unit?: PosUnit; choices?: ScanChoice[]; scanned?: ScannedUnit; error?: string }> {
   const { supabase } = await requireSection("kasa");
   const raw = code.trim();
   const c = raw.toUpperCase().replace(/[^A-Z0-9_./-]/g, "");
@@ -150,13 +152,26 @@ export async function scanUnit(code: string, storeId: string, exclude: string[] 
     const { data: vs } = await supabase.from("variants").select("id").eq("product_id", prod.id);
     const ids = (vs ?? []).map((v) => v.id as string);
     if (ids.length === 1) return pickUnitForVariant(ids[0], storeId, exclude);
-    return variantChoices(supabase, ids);
+    return variantChoices(supabase, ids, storeId);
   }
 
   // 1. Konkretna sztuka: kod z etykiety albo IMEI.
   const { data } = await supabase.from("units").select(SELECT).or(`code.eq.${c},identifier.eq.${c}`).limit(5);
   const rows = (data ?? []) as unknown as Row[];
   const available = rows.find((r) => r.status === "in_stock" && !exclude.includes(r.id));
+  // Kod z etykiety magazynowej (nie IMEI): model z kilkoma rozmiarami → wybór rozmiaru, zeskanowany rozmiar wyróżniony.
+  const byCode = rows.find((r) => r.code.toUpperCase() === c);
+  if (byCode) {
+    const { data: v } = await supabase.from("variants").select("product_id").eq("id", byCode.variant_id).maybeSingle();
+    const { data: vs } = v ? await supabase.from("variants").select("id").eq("product_id", v.product_id) : { data: [] };
+    const ids = (vs ?? []).map((x) => x.id as string);
+    if (ids.length > 1) {
+      const scannedFree = byCode.status === "in_stock" && !exclude.includes(byCode.id) ? toPos(byCode, storeId) : null;
+      const r = await variantChoices(supabase, ids, storeId);
+      if (r.error) return { error: scannedFree ? r.error : `Sztuka ${byCode.code} nie jest na stanie albo jest już w koszyku, a innych rozmiarów tego modelu też nie ma.` };
+      return { ...r, scanned: { variantId: byCode.variant_id, code: byCode.code, unit: scannedFree } };
+    }
+  }
   if (available) return { unit: toPos(available, storeId) };
   if (rows.length) return { error: `Sztuka ${rows[0].code} nie jest na stanie albo jest już w koszyku.` };
 
@@ -170,16 +185,20 @@ export async function scanUnit(code: string, storeId: string, exclude: string[] 
   if (variantIds.length === 1) return pickUnitForVariant(variantIds[0], storeId, exclude);
 
   // Kilka rozmiarów (SKU modelu ze Shopify) – pokazujemy rozmiary z sztukami na stanie.
-  return variantChoices(supabase, variantIds);
+  return variantChoices(supabase, variantIds, storeId);
 }
 
-async function variantChoices(supabase: Awaited<ReturnType<typeof requireSection>>["supabase"], variantIds: string[]): Promise<{ choices?: ScanChoice[]; error?: string }> {
-  const { data: variants } = await supabase.from("variants").select("id, option, product:products(title)").in("id", variantIds.slice(0, 100));
+async function variantChoices(supabase: Awaited<ReturnType<typeof requireSection>>["supabase"], variantIds: string[], storeId: string): Promise<{ choices?: ScanChoice[]; error?: string }> {
+  const { data: variants } = await supabase.from("variants").select("id, option, product:products(title), links:variant_store_links(store_id, price)").in("id", variantIds.slice(0, 100));
   const { data: stock } = await supabase.from("variant_stock_totals").select("variant_id, in_stock").in("variant_id", variantIds.slice(0, 100));
   const counts = new Map((stock ?? []).map((s) => [s.variant_id as string, Number(s.in_stock)]));
   const collator = new Intl.Collator("pl", { numeric: true });
   const choices = (variants ?? [])
-    .map((v) => ({ variantId: v.id as string, title: (v.product as unknown as { title: string }).title, option: v.option as string, inStock: counts.get(v.id as string) ?? 0 }))
+    .map((v) => {
+      const links = (v.links ?? []) as { store_id: string; price: number | null }[];
+      const link = links.find((l) => l.store_id === storeId && l.price != null) ?? links.find((l) => l.price != null);
+      return { variantId: v.id as string, title: (v.product as unknown as { title: string }).title, option: v.option as string, inStock: counts.get(v.id as string) ?? 0, price: link?.price != null ? Number(link.price) : null };
+    })
     .sort((x, y) => collator.compare(x.option, y.option));
   if (!choices.some((ch) => ch.inStock > 0)) return { error: "Żadnego rozmiaru tego modelu nie ma na stanie." };
   return { choices };
