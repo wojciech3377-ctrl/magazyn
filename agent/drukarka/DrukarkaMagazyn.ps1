@@ -5,7 +5,7 @@
 param([switch]$Raz)  # -Raz: jedno sprawdzenie kolejki i koniec (do testów)
 
 $ErrorActionPreference = 'Stop'
-$Wersja = '0.3.2'
+$Wersja = '0.3.3'
 $Folder = Split-Path -Parent $MyInvocation.MyCommand.Path
 $PlikUstawien = Join-Path $Folder 'config.json'
 $PlikDziennika = Join-Path $Folder 'dziennik.txt'
@@ -290,13 +290,18 @@ function Numer-Wydruku([int]$paragon) {
     }
   }
   $numer = $null
-  # Numer wydruku: „#000001451”, „Nr wydr. 1451” albo samodzielne 9 cyfr – od końca paragonu, bez NIP / telefonu.
+  # Numer jak na wydruku. ELZAB: w nagłówku „nr dok.000001453”; inne drukarki: „Nr wydr. 1453”.
+  # „#01/KIEROWNIK” w stopce to numer kasy i kasjer – pomijany.
+  $tekst = $linie -join "`n"
+  foreach ($wzor in @('(?i)nr\s*dok\w*\.?\s*:?\s*(\d{1,9})(?!\d)', '(?i)nr\.?\s*wydr\w*\.?\s*:?\s*(\d{1,9})(?!\d)')) {
+    $m = [regex]::Match($tekst, $wzor)
+    if ($m.Success -and [int64]$m.Groups[1].Value -gt 0) { $numer = $m.Groups[1].Value.PadLeft(9, '0'); break }
+  }
+  # Ostatecznie: samodzielne 9 cyfr (bez NIP / telefonu).
   for ($i = $linie.Count - 1; $i -ge 0 -and -not $numer; $i--) {
     $l = [string]$linie[$i]
-    $m = [regex]::Match($l, '(?i)(?:#\s*|nr\.?\s*wydr\w*\.?\s*:?\s*|wydruk\w*\s*(?:nr\.?)?\s*:?\s*)(\d{1,9})(?!\d)')
-    if ($m.Success) { $numer = $m.Groups[1].Value.PadLeft(9, '0'); break }
     if ($l -match '(?i)nip|tel') { continue }
-    $m = [regex]::Match($l, '(?<![\d,.])(\d{9})(?![\d,.])')
+    $m = [regex]::Match($l, '(?<![\d,])(\d{9})(?![\d,.])')
     if ($m.Success) { $numer = $m.Groups[1].Value }
   }
   $opis = if ($linie.Count) { $linie -join "`n" } else { "(nie odczytano treści paragonu nr $paragon w dobie; raport dobowy: $raport)`n" + ($bledy -join "`n") }

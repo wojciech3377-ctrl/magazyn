@@ -1,5 +1,6 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { printerFromRequest } from "@/lib/fiscal/jobs";
+import { printoutNumber } from "@/lib/fiscal/printout";
 
 export const dynamic = "force-dynamic";
 
@@ -19,7 +20,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const ok = body.ok === true;
   // Numer jak na wydruku z drukarki: 9 cyfr z zerami z przodu (np. 1441 → 000001441).
   const raw = String(body.number ?? "").trim().slice(0, 60);
-  const number = /^\d{1,8}$/.test(raw) ? raw.padStart(9, "0") : raw;
+  // Numer z treści paragonu („nr dok.000001453”) ma pierwszeństwo – działa też ze starszym programem na komputerze.
+  const number = printoutNumber(body.text) ?? (/^\d{1,8}$/.test(raw) ? raw.padStart(9, "0") : raw);
   if (ok && !number) return Response.json({ error: "Brak numeru paragonu." }, { status: 400 });
   const { data, error } = await db.rpc("finish_receipt_job", { p_printer: printer.id, p_id: id, p_ok: ok, p_number: number || null, p_error: ok ? null : String(body.error ?? "błąd drukarki") });
   if (error) return Response.json({ error: error.message }, { status: 409 });

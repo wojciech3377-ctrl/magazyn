@@ -8,7 +8,7 @@ import { AddPrinterForm, RegenerateKeyForm } from "./PrinterKeyForms";
 import { deletePrinter, fixReceiptNumber, saveFiscalSettings, testPrinter, togglePrinter } from "./fiscal-actions";
 
 /** Wersja programu „Drukarka Magazyn” w agent/drukarka (0.3.0: numer wydruku z treści paragonu). */
-const AGENT_VERSION = "0.3.2";
+const AGENT_VERSION = "0.3.3";
 
 type Printer = { id: string; name: string; active: boolean; last_seen_at: string | null; last_status: Record<string, string> | null; created_at: string };
 type Job = { id: string; number: number; source: string; status: string; total: number; receipt_number: string | null; error: string | null; created_at: string; pos_order_id: string | null; order_id: string | null; printer: { name: string } | null };
