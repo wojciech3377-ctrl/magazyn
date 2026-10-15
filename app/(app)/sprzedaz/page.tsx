@@ -235,7 +235,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
                     <ul className="space-y-0.5 text-sm max-md:rounded-lg max-md:bg-slate-50 max-md:px-2.5 max-md:py-2">
                       {lines.map((l) => (
                         <li key={l.id} className="flex items-baseline gap-2">
-                          <span className="line-clamp-1">{l.title} · <b>{l.variant_title ?? "–"}</b>{l.quantity > 1 ? ` ×${l.quantity}` : ""}</span>
+                          <span className="min-w-0 break-words">{l.title} · <b>{l.variant_title ?? "–"}</b>{l.quantity > 1 ? ` ×${l.quantity}` : ""}</span>
                           <WtbButton orderId={o.id} line={l.i} compact />
                         </li>
                       ))}
@@ -299,7 +299,7 @@ function OrderPreview({ o, lines, pay, tracking }: { o: PreviewOrder; lines: (Li
         {lines.map((l) => (
           <li key={l.id} className="flex items-center gap-2">
             {l.image ? <img src={`${l.image}${l.image.includes("?") ? "&" : "?"}width=80`} alt="" className="h-10 w-10 flex-none rounded border border-line object-contain" /> : <span className="h-10 w-10 flex-none rounded bg-panel" />}
-            <span className="min-w-0 flex-1"><span className="line-clamp-1">{l.title}</span><span className="text-xs text-muted">{l.variant_title ?? "–"}{l.sku ? ` · ${l.sku}` : ""}</span></span>
+            <span className="min-w-0 flex-1"><span className="block break-words">{l.title}</span><span className="text-xs text-muted">{l.variant_title ?? "–"}{l.sku ? ` · ${l.sku}` : ""}</span></span>
             <span className="whitespace-nowrap tabular-nums">{l.quantity > 1 ? `${l.quantity} × ` : ""}{money(l.price)}</span>
           </li>
         ))}
@@ -480,6 +480,13 @@ async function PosList({ page, q, sp }: { page: number; q: string; sp: Record<st
     query = query.or([`code.ilike.%${text}%`, `customer.ilike.%${text}%`, ...(orderIds.length ? [`id.in.(${orderIds.slice(0, 150).join(",")})`] : [])].join(","));
   }
   const { data, count } = await query;
+  // Numery wydrukowanych paragonów fiskalnych (z drukarki).
+  const posIds = (data ?? []).map((o) => o.id as string);
+  const { data: rcpts } = posIds.length
+    ? await supabase.from("receipts").select("pos_order_id, number, issued_at").in("pos_order_id", posIds).eq("source", "printer").order("issued_at")
+    : { data: [] };
+  const receiptOf = new Map<string, string[]>();
+  for (const r of rcpts ?? []) if (r.pos_order_id && r.number) receiptOf.set(r.pos_order_id as string, [...(receiptOf.get(r.pos_order_id as string) ?? []), r.number as string]);
   type PosItem = { price: number; status: string; name: string | null; quantity: number | null; unit: { id: string; code: string; identifier: string | null; owner_type: string; contract_id: string | null; variant: { option: string; product: { title: string } } | null } | null };
   return (
     <>
@@ -526,12 +533,16 @@ async function PosList({ page, q, sp }: { page: number; q: string; sp: Record<st
             {data?.map((o) => (
               <tr key={o.id}>
                 <td className="whitespace-nowrap text-muted max-md:text-xs" style={{ gridArea: "date" }}>{dateTime(o.created_at)}</td>
-                <td style={{ gridArea: "num" }}><Link className="font-medium text-accent hover:underline" href={`/kasa/${o.id}`}>{o.code}</Link>{o.customer && <span className="block text-xs text-muted">{o.customer}</span>}</td>
+                <td style={{ gridArea: "num" }}>
+                  <Link className="font-medium text-accent hover:underline" href={`/kasa/${o.id}`}>{o.code}</Link>
+                  {receiptOf.get(o.id)?.map((n) => <span key={n} className="block whitespace-nowrap text-xs" title="Numer paragonu fiskalnego z drukarki">paragon <b className="font-mono">{n}</b></span>)}
+                  {o.customer && <span className="block text-xs text-muted">{o.customer}</span>}
+                </td>
                 <td className="min-w-64 max-w-96" style={{ gridArea: "items" }}>
                   <ul className="space-y-0.5 text-sm">
                     {((o.items ?? []) as unknown as PosItem[]).map((i, k) => (
                       <li key={k}>
-                        <span className="line-clamp-1">{i.unit?.variant ? <>{i.unit.variant.product.title} · <b>{i.unit.variant.option}</b></> : i.name ? <>{i.name}{Number(i.quantity ?? 1) !== 1 ? ` × ${Number(i.quantity)}` : ""} <span className="text-xs text-muted">(spoza magazynu)</span></> : "–"} <span className="font-mono text-xs text-muted">{i.unit?.code}</span></span>
+                        <span className="break-words">{i.unit?.variant ? <>{i.unit.variant.product.title} · <b>{i.unit.variant.option}</b></> : i.name ? <>{i.name}{Number(i.quantity ?? 1) !== 1 ? ` × ${Number(i.quantity)}` : ""} <span className="text-xs text-muted">(spoza magazynu)</span></> : "–"} <span className="font-mono text-xs text-muted">{i.unit?.code}</span></span>
                         {i.unit?.owner_type === "consignment" && !i.unit.contract_id && i.status !== "returned" && <span className="block"><ConsignorWaiting /></span>}
                       </li>
                     ))}

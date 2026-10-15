@@ -3,9 +3,11 @@ export type ReceiptLine = { name: string; qty: number; price: number; rate: numb
 const LETTER: Record<string, string> = { "23": "A", "8": "B", "5": "C", "0": "D" };
 const f2 = (n: number) => n.toFixed(2);
 
-export function ReceiptView({ company, date, number, lines, transaction, title = "PARAGON FISKALNY" }: {
+export function ReceiptView({ company, date, number, lines, transaction, title = "PARAGON FISKALNY", payment }: {
   company: { name: string; street?: string | null; city?: string | null; nip?: string | null };
   date: string; number: string | null; lines: ReceiptLine[]; transaction?: string | null; title?: string;
+  /** Forma płatności, np. „karta” – pod sumą, jak na wydruku. */
+  payment?: string | null;
 }) {
   const letter = (r: number | null) => (r === null ? "D" : LETTER[String(r)] ?? "E");
   const groups = new Map<string, { rate: number; gross: number }>();
@@ -50,6 +52,12 @@ export function ReceiptView({ company, date, number, lines, transaction, title =
       })}
       <div className="mt-2 flex items-end justify-between"><span className="text-2xl font-bold">Suma PLN</span><span className="text-2xl font-bold">{f2(total)}</span></div>
       <div className="text-[9px] text-slate-500">Sum</div>
+      {payment && (
+        <>
+          <div className="mt-2 flex justify-between text-sm font-medium"><span>Płatność: {payment}</span><span>{f2(total)}</span></div>
+          <div className="text-[9px] text-slate-500">Payment</div>
+        </>
+      )}
       {transaction && <div className="mt-3 flex justify-between text-xs"><span>Numer transakcji<span className="block text-[9px] text-slate-500">Transaction number</span></span><span>{transaction}</span></div>}
     </div>
   );

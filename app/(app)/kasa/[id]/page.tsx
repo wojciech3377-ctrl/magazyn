@@ -93,6 +93,7 @@ export default async function PosOrderPage({ params, searchParams }: { params: P
           number={receipt?.number ?? o.code}
           transaction={receipt?.base_receipt_id ? String(receipt.base_receipt_id) : o.code}
           title={receipt ? "PARAGON FISKALNY" : "PODGLĄD (paragon jeszcze nie wydrukowany)"}
+          payment={PAYMENT[o.payment_method] ?? o.payment_method}
           lines={((receipt?.items as { name: string; price_brutto: number; tax_rate: number; quantity?: number }[] | null) ?? []).length
             ? (receipt!.items as { name: string; price_brutto: number; tax_rate: number; quantity?: number }[]).map((r) => ({ name: r.name, qty: Number(r.quantity ?? 1), price: Number(r.price_brutto), rate: Number(r.tax_rate) }))
             : (items ?? []).filter((i) => i.status !== "returned").map((i) => {

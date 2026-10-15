@@ -56,6 +56,16 @@ async function storefrontLowest(domain: string, handle: string, variantGid: stri
   }
 }
 
+/**
+ * Rozmiar na metce: rzeczy bez rozmiaru („One size”, „Default Title” ze Shopify, „uniwersalny”) – „N/A”.
+ * Jeden prawdziwy rozmiar (np. używana para 43 jako osobny produkt) zostaje.
+ */
+function sizeLabel(option: string) {
+  const o = (option ?? "").trim();
+  if (!o || /^(default title|os|o\/s|n\/?a|-|–|brak)$/i.test(o) || /one\s*-?\s*size|onesize|uniwersaln|universal|jeden rozmiar/i.test(o)) return "N/A";
+  return o;
+}
+
 async function pool<T, R>(items: T[], size: number, fn: (x: T) => Promise<R>) {
   const out: R[] = new Array(items.length);
   let i = 0;
@@ -239,7 +249,7 @@ async function buildTags(db: SupabaseClient, list: TagSource[], withPrices = tru
       return r.value ?? Number(l.price);
     });
     return {
-      unitId: u.id, code: u.code, identifier: u.identifier, title: u.variant.product.title, option: u.variant.option, sku: u.code, skuIsBase: false,
+      unitId: u.id, code: u.code, identifier: u.identifier, title: u.variant.product.title, option: sizeLabel(u.variant.option), sku: u.code, skuIsBase: false,
       price, compareAt, promo: promoRows.length > 0, lowest30: range(lows), lowestSource, storeName: u.location.store.name,
       omnibusFields: o?.found ?? [], historyComplete: complete,
       used: isReused((plinks ?? []).filter((p) => p.product_id === u.variant.product_id) as { store_id: string; tags?: string[] | null }[], storeId),
