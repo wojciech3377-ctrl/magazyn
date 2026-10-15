@@ -88,7 +88,7 @@ const L = {
 } as const;
 
 export function SellerContractForm({
-  action, mode, company, number, date, paymentDays, items: fixedItems, buyerSignature, searchCatalog: searchAll, stores,
+  action, mode, company, number, date, paymentDays, items: fixedItems, buyerSignature, searchCatalog: searchAll, stores, fixedCurrency,
 }: {
   action: Action;
   mode: "fixed" | "free";
@@ -101,6 +101,8 @@ export function SellerContractForm({
   searchCatalog?: (q: string, storeId?: string) => Promise<CatalogHit[]>;
   /** Ogólny link: klient wybiera sklep – wyszukiwarka pokazuje tylko jego produkty (+ wpisanie ręczne). */
   stores?: { id: string; name: string }[];
+  /** Waluta ustalona przez sklep (umowa z linku) – sprzedający jej nie zmienia. */
+  fixedCurrency?: string | null;
 }) {
   const [state, formAction, pending] = useActionState(action, null);
   const [storeId, setStoreId] = useState(stores?.length === 1 ? stores[0].id : "");
@@ -111,7 +113,7 @@ export function SellerContractForm({
   const [country, setCountry] = useState("PL");
   const [contractDate, setContractDate] = useState(date);
   const [payment, setPayment] = useState<"" | "transfer" | "cash">("");
-  const [currency, setCurrency] = useState("");
+  const [currency, setCurrency] = useState(fixedCurrency ?? "");
   const [items, setItems] = useState<FreeItem[]>(mode === "free" ? [newItem(!!searchCatalog)] : []);
   const [signature, setSignature] = useState("");
   const [consent, setConsent] = useState(false);
@@ -237,7 +239,9 @@ export function SellerContractForm({
             <div>
               <div className="label">{T.currency}</div>
               <div className="grid grid-cols-2 gap-2">
-                {CURRENCIES.map((c) => <span key={c.code}>{choice(c.code, currency, setCurrency, c.code, "currency")}</span>)}
+                {fixedCurrency
+                  ? <><input type="hidden" name="currency" value={fixedCurrency} /><span className="input bg-panel">{fixedCurrency}</span></>
+                  : CURRENCIES.map((c) => <span key={c.code}>{choice(c.code, currency, setCurrency, c.code, "currency")}</span>)}
               </div>
             </div>
           </section>

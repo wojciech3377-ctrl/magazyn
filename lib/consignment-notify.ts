@@ -1,4 +1,5 @@
 import "server-only";
+import { allPages } from "@/lib/supabase/paging";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { mailConfigured, sendMail } from "@/lib/mail";
 import { getCompany } from "@/lib/contracts/settings";
@@ -45,9 +46,11 @@ export async function notifyConsignorSales(db: SupabaseClient) {
   // 1. Nowe sprzedaże.
   const since = new Date(Date.now() - 30 * 86400_000).toISOString();
   const { data, error } = await db.from("units")
-    .select("id, code, identifier, consignor_id, payout_amount, contract_id, sold_at, variant:variants(option, product:products(title))")
+    // Tylko komisanci z e-mailem (inaczej 100 sztuk komisantów bez e-maila blokowałoby resztę na zawsze).
+    .select("id, code, identifier, consignor_id, payout_amount, contract_id, sold_at, purchase_form, variant:variants(option, product:products(title)), consignor:consignors!inner(email)")
     .eq("owner_type", "consignment").in("status", ["sold", "shipped"]).is("consignor_notified_at", null)
-    .gte("sold_at", since).not("consignor_id", "is", null).limit(100);
+    .gte("sold_at", since).not("consignor_id", "is", null).not("consignor.email", "is", null).neq("consignor.email", "")
+    .order("sold_at", { ascending: true }).limit(100);
   if (error) throw error;
   const units = (data ?? []) as unknown as SoldUnit[];
   const consignorIds = [...new Set(units.map((u) => u.consignor_id))];
@@ -62,7 +65,9 @@ export async function notifyConsignorSales(db: SupabaseClient) {
     const price = u.payout_amount === null ? null : Number(u.payout_amount);
     let contractId: string | null = null;
     try {
-      if (!u.contract_id && price !== null && price > 0) {
+      // Komisant – podatnik VAT (forma „faktura 23%”) rozlicza się fakturą, nie umową kupna.
+      const vatSeller = (u as { purchase_form?: string }).purchase_form === "vat_23";
+      if (!u.contract_id && price !== null && price > 0 && !vatSeller) {
         // Umowa do podpisu z tą jedną rzeczą (jak „wypełnij umowę” w panelu komisanta).
         const token = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
         const items = [{ unit_id: u.id, title: u.variant?.product.title ?? u.code, option: u.variant?.option ?? "–", identifier: u.identifier, qty: 1, price: Math.round(price * 100) / 100 }];
@@ -78,13 +83,14 @@ export async function notifyConsignorSales(db: SupabaseClient) {
         const { data: bound } = await db.from("units").update({ contract_id: contractId }).eq("id", u.id).is("contract_id", null).select("id");
         if (!bound?.length) { await db.from("contracts").delete().eq("id", contractId); contractId = null; }
         else {
-          await db.from("unit_events").insert({ unit_id: u.id, type: "contract", data: { contract_id: contractId, note: "umowa do podpisu wysłana komisantowi po sprzedaży" } });
           const link = `${base}/podpis/${token}`;
           await sendMail(c.email, `Sprzedaliśmy Twoją rzecz – podpisz umowę (${company.name})`, layout(company.name,
             `<p style="margin:0 0 12px">sprzedaliśmy Twoją rzecz z komisu:</p>
              <p style="margin:0 0 12px"><b>${esc(nameOf(u))}</b> – ${pln(price)}</p>
              <p style="margin:0 0 14px">Aby rozliczyć sprzedaż, <b>wypełnij i podpisz umowę</b> – dane rzeczy i kwota są już wpisane.</p>`,
             { href: link, label: "Wypełnij i podpisz umowę" }));
+          // Zdarzenie dopiero po wysłaniu (przy błędzie umowa jest cofana).
+          await db.from("unit_events").insert({ unit_id: u.id, type: "contract", data: { contract_id: contractId, note: "umowa do podpisu wysłana komisantowi po sprzedaży" } });
           sent++;
           continue;
         }
@@ -92,7 +98,7 @@ export async function notifyConsignorSales(db: SupabaseClient) {
       // Rzecz ma już dokument albo nie ma ustalonej kwoty – tylko informacja.
       await sendMail(c.email, `Sprzedaliśmy Twoją rzecz z komisu – ${company.name}`, layout(company.name,
         `<p style="margin:0 0 12px">sprzedaliśmy Twoją rzecz z komisu: <b>${esc(nameOf(u))}</b>${price ? ` – ${pln(price)}` : ""}.</p>
-         <p style="margin:0 0 14px">${price ? "Szczegóły i kwotę do wypłaty zobaczysz w panelu komisanta." : "Skontaktujemy się w sprawie kwoty do wypłaty."}</p>`,
+         <p style="margin:0 0 14px">${vatSeller && !u.contract_id ? "Do rozliczenia potrzebujemy Twojej faktury – wgrasz ją w panelu komisanta (Sprzedane → Dołącz umowę / fakturę)." : price ? "Szczegóły i kwotę do wypłaty zobaczysz w panelu komisanta." : "Skontaktujemy się w sprawie kwoty do wypłaty."}</p>`,
         c.user_id ? { href: `${base}/komis?zakladka=sprzedane`, label: "Otwórz panel" } : undefined));
       sent++;
     } catch (e) {
@@ -113,7 +119,18 @@ export async function notifyConsignorSales(db: SupabaseClient) {
     .eq("source", "consignor").eq("status", "sent").not("sign_token", "is", null).lt("created_at", cutoff)
     .or(`reminded_at.is.null,reminded_at.lt.${cutoff}`).limit(50);
   if (pe && !/reminded_at/.test(pe.message)) errors.push(`przypomnienia: ${pe.message}`);
+  // Bez przypomnień, gdy rzecz z umowy wróciła (zwrot / anulowanie) – żadna z jej sztuk nie jest już sprzedana.
+  const pendingIds = (pending ?? []).map((p) => p.id as string);
+  const { data: bound } = pendingIds.length ? await db.from("units").select("contract_id, status").in("contract_id", pendingIds) : { data: [] };
+  const stale = new Set<string>();
+  for (const id of pendingIds) {
+    const us = (bound ?? []).filter((b) => b.contract_id === id);
+    if (us.length && !us.some((b) => ["sold", "shipped"].includes(b.status as string))) stale.add(id);
+  }
+  // Odkładamy je o kolejne 5 godzin, żeby nie zajmowały miejsca w następnych przebiegach.
+  if (stale.size) await db.from("contracts").update({ reminded_at: new Date().toISOString() }).in("id", [...stale]);
   for (const p of pending ?? []) {
+    if (stale.has(p.id as string)) continue;
     const cons = p.consignor as unknown as { name: string; email: string | null } | null;
     const to = (p.seller_email as string | null) || cons?.email;
     if (!to) continue;
@@ -156,9 +173,10 @@ async function monthlySummary(db: SupabaseClient, company: string, base: string)
   }
   const from = warsawMidnight(prev.getFullYear(), prev.getMonth() + 1, 1).toISOString();
   const to = warsawMidnight(now.getFullYear(), now.getMonth() + 1, 1).toISOString();
-  const { data: units } = await db.from("units")
+  const units = await allPages((a, b) => db.from("units")
     .select("id, code, consignor_id, payout_amount, contract_id, consignor_payout_id, sold_at, variant:variants(option, product:products(title)), contract:contracts(status)")
-    .eq("owner_type", "consignment").in("status", ["sold", "shipped"]).gte("sold_at", from).lt("sold_at", to).not("consignor_id", "is", null).limit(5000);
+    .eq("owner_type", "consignment").in("status", ["sold", "shipped"]).gte("sold_at", from).lt("sold_at", to).not("consignor_id", "is", null)
+    .order("id").range(a, b));
   const list = (units ?? []) as unknown as (SoldUnit & { consignor_payout_id?: string | null; contract: { status: string } | null })[];
   const ids = [...new Set(list.map((u) => u.consignor_id))].filter((id) => !(state.done ?? []).includes(id));
   if (!ids.length) {

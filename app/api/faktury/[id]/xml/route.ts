@@ -1,13 +1,18 @@
 import type { NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { requireSection } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(_: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  // Faktury: dział Faktury, Sprzedaż albo Kasa (nie każdy zalogowany pracownik).
+  try {
+    await requireSection("faktury", "sprzedaz", "kasa");
+  } catch {
+    return new Response("Brak dostępu do faktur.", { status: 403 });
+  }
   const db = await createClient();
-  const { data: auth } = await db.auth.getClaims();
-  if (!auth?.claims?.sub) return new Response("unauthorized", { status: 401 });
   const { data: inv } = await db.from("invoices").select("number, xml").eq("id", id).maybeSingle();
   if (!inv?.xml) return new Response("Nie znaleziono", { status: 404 });
   return new Response(inv.xml, {

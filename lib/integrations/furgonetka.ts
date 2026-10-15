@@ -242,18 +242,19 @@ export async function deletePackage(db: SupabaseClient, id: string) {
   if (!res.ok && res.status !== 404) await json(res);
 }
 
-/** Zamówienie (nadanie) przesyłek; czeka do ~15 s na wynik. */
-export async function orderPackages(db: SupabaseClient, packageIds: string[]) {
+/** Zamówienie (nadanie) przesyłek; czeka do ~15 s na wynik. false = Furgonetka jeszcze przetwarza (wynik nieznany). */
+export async function orderPackages(db: SupabaseClient, packageIds: string[]): Promise<boolean> {
   const uuid = crypto.randomUUID();
   await json(await furgonetkaFetch(db, `/order-commands/${uuid}`, { method: "PUT", body: { packages: packageIds.map((id) => ({ id: Number(id) || id })) } }));
   for (let i = 0; i < 10; i++) {
     await new Promise((r) => setTimeout(r, 1500));
     const s = await json<{ status: string; errors?: { path?: string; message?: string }[] }>(await furgonetkaFetch(db, `/order-commands/${uuid}`));
-    if (s.status === "successful" || s.status === "success" || s.status === "done") return;
+    if (s.status === "successful" || s.status === "success" || s.status === "done") return true;
     if (s.status === "failed" || s.status === "error" || s.errors?.length) {
       throw new FurgonetkaError(422, s.errors?.map((e) => [e.path, e.message].filter(Boolean).join(": ")).join("; ") || "nie udało się nadać przesyłki");
     }
   }
+  return false;
 }
 
 /** Etykieta PDF przesyłki. API zwraca PDF albo JSON z plikiem w base64 / adresem. */
@@ -286,18 +287,19 @@ export async function accountServices(db: SupabaseClient) {
   return body.services ?? [];
 }
 
-/** Anulowanie przesyłek (dopóki kurier ich nie odebrał). */
-export async function cancelPackages(db: SupabaseClient, packageIds: string[]) {
+/** Anulowanie przesyłek (dopóki kurier ich nie odebrał). false = Furgonetka jeszcze przetwarza (wynik nieznany). */
+export async function cancelPackages(db: SupabaseClient, packageIds: string[]): Promise<boolean> {
   const uuid = crypto.randomUUID();
   await json(await furgonetkaFetch(db, `/cancel-command/${uuid}`, { method: "PUT", body: { packages: packageIds.map((id) => ({ id: Number(id) || id })) } }));
   for (let i = 0; i < 8; i++) {
     await new Promise((r) => setTimeout(r, 1500));
     const s = await json<{ status: string; errors?: { path?: string; message?: string }[] }>(await furgonetkaFetch(db, `/cancel-command/${uuid}`));
-    if (s.status === "successful" || s.status === "success" || s.status === "done") return;
+    if (s.status === "successful" || s.status === "success" || s.status === "done") return true;
     if (s.status === "failed" || s.status === "error" || s.errors?.length) {
       throw new FurgonetkaError(422, s.errors?.map((e) => [e.path, e.message].filter(Boolean).join(": ")).join("; ") || "nie udało się anulować przesyłki");
     }
   }
+  return false;
 }
 
 export type PriceQuote = { service: string; service_id: number | null; available: boolean; price: number | null; errors: string[] };

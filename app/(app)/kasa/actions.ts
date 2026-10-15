@@ -300,7 +300,7 @@ export async function finishPosOrder(_: unknown, formData: FormData): Promise<{ 
   const num = (v: unknown) => Number(String(v ?? "").replace(/\s/g, "").replace(",", "."));
   for (const i of items) {
     const n = num(i.price);
-    if (!Number.isFinite(n) || n < 0) return { error: "Podaj poprawną cenę przy każdej pozycji." };
+    if (!Number.isFinite(n) || n <= 0) return { error: "Podaj cenę większą od zera przy każdej pozycji (drukarka fiskalna nie przyjmie 0 zł)." };
     const price = Math.round(n * 100) / 100;
     if (i.unit_id) {
       if (i.ptu && !/^[A-F]$/.test(String(i.ptu))) return { error: "Zła stawka PTU przy sztuce." };
@@ -313,6 +313,13 @@ export async function finishPosOrder(_: unknown, formData: FormData): Promise<{ 
       if (!Number.isFinite(qty) || qty <= 0) return { error: `Zła ilość dla: ${name}.` };
       parsed.push({ name, ptu: i.ptu, price, quantity: qty, product_id: i.product_id || null });
     }
+  }
+  // Sztuka zarezerwowana = kupiona już w sklepie internetowym (Shopify zdjął stan). Sprzedaż w Kasie odebrałaby ją
+  // zamówieniu i zdjęła stan drugi raz.
+  const wanted = parsed.map((p) => p.unit_id).filter((x): x is string => !!x);
+  if (wanted.length) {
+    const { data: busy } = await supabase.from("units").select("code").in("id", wanted).neq("status", "in_stock");
+    if (busy?.length) return { error: `Nie na stanie (zarezerwowana przez zamówienie albo już sprzedana): ${busy.map((b) => b.code).join(", ")}. Usuń z koszyka.` };
   }
   // „Zapisz jako własny produkt” – do wyszukiwania w Kasie następnym razem (bez liczenia stanu).
   for (const i of items.filter((x) => !x.unit_id && x.save && !x.product_id)) {

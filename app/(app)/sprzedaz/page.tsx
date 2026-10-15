@@ -1,3 +1,4 @@
+import { warsawDayRange } from "@/lib/month";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { requireProfile } from "@/lib/auth";
@@ -75,11 +76,14 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
     .range((page - 1) * PER_PAGE, page * PER_PAGE - 1);
   if (tab) query = query.eq("status", tab);
   if (storeId) query = query.eq("store_id", storeId);
-  if (sp.od) query = query.gte("ordered_at", `${sp.od}T00:00:00`);
-  if (sp.do) query = query.lte("ordered_at", `${sp.do}T23:59:59`);
+  // Daty według czasu polskiego (wcześniej UTC – zamówienia z 0:00–2:00 wpadały w zły dzień).
+  const odR = warsawDayRange(sp.od), doR = warsawDayRange(sp.do);
+  if (odR) query = query.gte("ordered_at", odR.from);
+  if (doR) query = query.lt("ordered_at", doR.to);
   if (sp.platnosc === "pobranie") query = query.eq("cod", true);
-  if (sp.platnosc === "oplacone") query = query.eq("financial_status", "PAID");
-  if (sp.platnosc === "nieoplacone") query = query.neq("financial_status", "PAID").eq("cod", false);
+  if (sp.platnosc === "oplacone") query = query.in("financial_status", ["PAID", "PARTIALLY_REFUNDED"]);
+  // Nieopłacone: czeka na płatność (bez pobrań; anulowane i zwrócone to nie „nieopłacone”).
+  if (sp.platnosc === "nieoplacone") query = query.in("financial_status", ["PENDING", "AUTHORIZED", "PARTIALLY_PAID", "EXPIRED"]).eq("cod", false).is("cancelled_at", null);
   const q = (sp.q ?? "").replace(/[%,()#*]/g, "").trim();
   if (q) query = query.or(`number.ilike.%${q}%,customer_name.ilike.%${q}%,email.ilike.%${q}%`);
 
@@ -462,8 +466,9 @@ async function PosList({ page, q, sp }: { page: number; q: string; sp: Record<st
     .range((page - 1) * PER_PAGE, page * PER_PAGE - 1);
   if (sp.sklep) query = query.eq("store_id", sp.sklep);
   if (sp.platnosc) query = query.eq("payment_method", sp.platnosc);
-  if (sp.od) query = query.gte("created_at", `${sp.od}T00:00:00`);
-  if (sp.do) query = query.lte("created_at", `${sp.do}T23:59:59`);
+  const odR = warsawDayRange(sp.od), doR = warsawDayRange(sp.do);
+  if (odR) query = query.gte("created_at", odR.from);
+  if (doR) query = query.lt("created_at", doR.to);
   const { data: storeList } = await supabase.from("stores").select("id, name").order("name");
   const listParams = { widok: "stacjonarna", q: q || undefined, sklep: sp.sklep, platnosc: sp.platnosc, od: sp.od, do: sp.do, sort: sp.sort };
   const text = q.replace(/[%,()*\\]/g, " ").trim();

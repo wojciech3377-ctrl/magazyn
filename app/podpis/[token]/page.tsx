@@ -14,7 +14,7 @@ export default async function SignPage({ params }: { params: Promise<{ token: st
   const db = createAdminClient();
   const [company, buyerSignature] = await Promise.all([getCompany(db), getBuyerSignature(db)]);
   const { data: c } = /^[a-f0-9]{32,64}$/.test(token)
-    ? await db.from("contracts").select("id, number, status, sign_expires_at, items, payment_days, seller_name, seller_email, group_id").eq("sign_token", token).maybeSingle()
+    ? await db.from("contracts").select("id, number, status, sign_expires_at, items, payment_days, seller_name, seller_email, group_id, currency").eq("sign_token", token).maybeSingle()
     : { data: null };
 
   if (!c || c.status === "cancelled") {
@@ -78,6 +78,7 @@ export default async function SignPage({ params }: { params: Promise<{ token: st
         date={new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Warsaw" }).format(new Date())}
         paymentDays={c.payment_days ?? company.payment_days ?? 7}
         buyerSignature={buyerSignature}
+        fixedCurrency={c.currency ?? null}
         items={(c.items ?? []).map((i: { title: string; option: string; identifier?: string | null; qty?: number; price: number }) => ({ title: i.title, option: i.option, identifier: i.identifier ?? null, qty: Number(i.qty ?? 1), price: Number(i.price) }))}
       />
     </PublicShell>

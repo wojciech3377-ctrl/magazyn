@@ -337,6 +337,11 @@ export async function acceptContract(formData: FormData) {
   // Każda rzecz dostaje osobną umowę z własnym numerem (bez migracji 0040 – jedna umowa jak dotąd).
   const split = await (await import("@/lib/supabase/admin")).createAdminClient().rpc("split_contract", { p_contract_id: id });
   const ids = (split.error ? [id] : (split.data as string[] | null) ?? [id]);
+  // split_contract (SQL 40) nie zna późniejszych pól – nowe umowy dostają je z pierwotnej.
+  if (ids.length > 1) {
+    const { data: orig } = await supabase.from("contracts").select("doc_number, vat_form, amount_per_item").eq("id", id).maybeSingle();
+    if (orig) await supabase.from("contracts").update(orig).in("id", ids.filter((x) => x !== id));
+  }
   const msgs: string[] = [ids.length > 1 ? `Umowa zatwierdzona i podzielona na ${ids.length} umowy – osobna dla każdej rzeczy.` : "Umowa zatwierdzona."];
 
   // Umowa z ogólnego linku czeka jeszcze na przypisanie pozycji do katalogu; pozostałe od razu tworzą sztuki.

@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { requireProfile } from "@/lib/auth";
+import { guardSection } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isReused } from "@/lib/price-tag";
 
@@ -14,7 +14,7 @@ export default async function PriceTagPage({ searchParams }: { searchParams: Pro
   const sp = await searchParams;
   const raw = Array.isArray(sp.ids) ? sp.ids : (sp.ids ?? "").split(",");
   const ids = raw.flatMap((x) => x.split(",")).map((x) => x.trim()).filter((x) => /^[0-9a-f-]{36}$/.test(x)).slice(0, 200);
-  const { supabase } = await requireProfile();
+  const { supabase } = await guardSection("magazyn", "kasa", "dostawa");
   if (!ids.length) return <p className="p-6 text-sm text-muted">Nie wybrano żadnych sztuk. W Magazynie zaznacz sztuki i kliknij „Wydrukuj metki”.</p>;
   const db = createAdminClient();
   void supabase;

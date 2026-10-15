@@ -133,12 +133,26 @@ export async function deletePosOrder(formData: FormData) {
   const back = safeBack(String(formData.get("back") ?? "/sprzedaz?widok=stacjonarna"));
   const go = (key: "ok" | "blad", m: string) => redirect(`${back}${back.includes("?") ? "&" : "?"}${key}=${encodeURIComponent(m)}`);
   const db = createAdminClient();
-  const { data: o } = await db.from("pos_orders").select("id, code").eq("id", id).maybeSingle();
+  const { data: o } = await db.from("pos_orders").select("id, code, base_pending").eq("id", id).maybeSingle();
   if (!o) return go("blad", "Nie ma takiej sprzedaży.");
+  // Paragon w drukarce (w kolejce / drukuje się) – usunięcie skasowałoby zadanie, a paragon i tak by wyszedł.
+  const { count: printing } = await db.from("receipt_jobs").select("id", { count: "exact", head: true }).eq("pos_order_id", id).in("status", ["queued", "printing"]);
+  if (printing) return go("blad", "Paragon tej sprzedaży czeka w drukarce albo właśnie się drukuje – poczekaj na wydruk (albo anuluj zadanie w Ustawieniach → Drukarka) i spróbuj ponownie.");
   const { data: inv } = await db.from("invoices").select("number").eq("pos_order_id", id).not("status", "in", "(rejected,cancelled)").limit(1).maybeSingle();
   if (inv) return go("blad", `Do tej sprzedaży jest faktura ${inv.number} – najpierw ją usuń albo skoryguj.`);
   const { data: items } = await db.from("pos_order_items").select("unit_id, status").eq("order_id", id);
-  const unitIds = (items ?? []).filter((i) => i.status === "sold" && i.unit_id).map((i) => i.unit_id as string);
+  let unitIds = (items ?? []).filter((i) => i.status === "sold" && i.unit_id).map((i) => i.unit_id as string);
+  // Sztuki utworzone tylko do „Dołącz umowę” przy pozycji wpisanej ręcznie – nigdy nie były na stanie:
+  // nie wracają na stan (to byłby towar z niczego), tylko znikają z magazynu.
+  if (unitIds.length) {
+    const { data: made } = await db.from("unit_events").select("unit_id").in("unit_id", unitIds).eq("type", "status").like("data->>note", "sztuka utworzona do sprzedanej pozycji%");
+    const phantom = [...new Set((made ?? []).map((e) => e.unit_id as string))];
+    if (phantom.length) {
+      await db.from("units").update({ status: "removed", contract_id: null }).in("id", phantom);
+      await db.from("unit_events").insert(phantom.map((u) => ({ unit_id: u, type: "status", data: { to: "removed", note: `sprzedaż ${o.code} usunięta (sztuka tylko do umowy)` } })));
+      unitIds = unitIds.filter((u) => !phantom.includes(u));
+    }
+  }
   let back1: { id: string; variant_id: string; location_id: string }[] = [];
   if (unitIds.length) {
     const { data } = await db.from("units").update({ status: "in_stock", sold_at: null }).in("id", unitIds).in("status", ["sold", "shipped"]).select("id, variant_id, location_id");
@@ -148,7 +162,19 @@ export async function deletePosOrder(formData: FormData) {
   const { error } = await db.from("pos_orders").delete().eq("id", id);
   if (error) return go("blad", errorMessage(error));
   const { adjustStock } = await import("@/lib/stock");
-  if (back1.length) await adjustStock(supabase, back1.map((u) => ({ variantId: u.variant_id, locationId: u.location_id, delta: 1 })));
+  // −1 z tej sprzedaży, które nie doszło do Shopify (base_pending), znosi się z +1 – inaczej stan wzrósłby ponad prawdę.
+  const notSent = new Map<string, number>();
+  for (const p of (o.base_pending ?? []) as { variantId: string; locationId: string; delta: number }[]) {
+    if (p.delta < 0) notSent.set(`${p.variantId}|${p.locationId}`, (notSent.get(`${p.variantId}|${p.locationId}`) ?? 0) - p.delta);
+  }
+  const plus = back1.filter((u) => {
+    const k = `${u.variant_id}|${u.location_id}`;
+    const n = notSent.get(k) ?? 0;
+    if (n <= 0) return true;
+    notSent.set(k, n - 1);
+    return false;
+  });
+  if (plus.length) await adjustStock(supabase, plus.map((u) => ({ variantId: u.variant_id, locationId: u.location_id, delta: 1 })));
   revalidatePath("/sprzedaz");
   return go("ok", `Sprzedaż ${o.code} usunięta${back1.length ? `, ${back1.length} szt. wróciło na stan` : ""}.`);
 }

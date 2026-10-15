@@ -94,13 +94,15 @@ export async function signLinkedContract(token: string, _: Result | null, formDa
   const parsed = parseSeller(formData);
   if ("error" in parsed) return { error: parsed.error };
   const db = createAdminClient();
-  const { data: c } = await db.from("contracts").select("id, status, sign_expires_at").eq("sign_token", token).maybeSingle();
+  const { data: c } = await db.from("contracts").select("id, status, sign_expires_at, currency").eq("sign_token", token).maybeSingle();
   if (!c || c.status === "cancelled") return { error: "Ten link jest nieaktywny." };
   if (c.status === "signed") redirect(`/podpis/${token}`);
   if (c.sign_expires_at && new Date(c.sign_expires_at) < new Date()) return { error: "Link wygasł – poproś o nowy." };
+  // Kwoty umowy ustalił sklep – sprzedający nie zmienia waluty (inaczej 500 zł stałoby się 500 EUR).
+  const { currency, ...seller } = parsed.seller;
 
   const { data: updated, error } = await db.from("contracts")
-    .update({ ...parsed.seller, ...(await requestMeta()), status: "signed", signed_at: new Date().toISOString() })
+    .update({ ...seller, ...(c.currency ? {} : { currency }), ...(await requestMeta()), status: "signed", signed_at: new Date().toISOString() })
     .eq("id", c.id).eq("status", "sent").select("id");
   if (error) return { error: "Nie udało się zapisać umowy. Spróbuj ponownie." };
   if (!updated?.length) redirect(`/podpis/${token}`);
@@ -218,13 +220,22 @@ export async function respondContractOffer(token: string, _: Result | null, form
   if (error) return { error: "Nie udało się zapisać odpowiedzi. Spróbuj ponownie." };
   if (!done?.length) redirect(`/podpis/${token}/oferta`);
   // Umowa zawarta na nowych cenach: sztuki „w drodze”, PDF z podpisami, powiadomienie sklepu.
-  const its = items as { unit_id?: string; variant_id?: string }[];
-  if (its.every((i) => i.unit_id || i.variant_id)) {
-    const fin = await db.rpc("finalize_contract", { p_contract_id: c.id });
-    if (fin.error) await db.from("sync_log").insert({ job: "contract-offer", ok: false, message: `${c.id}: ${fin.error.message}` });
+  // Jak przy zatwierdzeniu w aplikacji: każda rzecz dostaje osobną umowę z własnym numerem.
+  const split = await db.rpc("split_contract", { p_contract_id: c.id });
+  const ids = split.error ? [c.id as string] : ((split.data as string[] | null) ?? [c.id as string]);
+  if (ids.length > 1) {
+    const { data: orig } = await db.from("contracts").select("doc_number, vat_form, amount_per_item, offer, offer_responded_at").eq("id", c.id).maybeSingle();
+    if (orig) await db.from("contracts").update(orig).in("id", ids.filter((x) => x !== c.id));
   }
+  const its = items as { unit_id?: string; variant_id?: string }[];
   const { deliverAcceptedContract } = await import("@/lib/contracts/store");
-  await deliverAcceptedContract(c.id);
+  for (const cid of ids) {
+    if (its.every((i) => i.unit_id || i.variant_id)) {
+      const fin = await db.rpc("finalize_contract", { p_contract_id: cid });
+      if (fin.error) await db.from("sync_log").insert({ job: "contract-offer", ok: false, message: `${cid}: ${fin.error.message}` });
+    }
+    await deliverAcceptedContract(cid);
+  }
   await notifyOfferAnswer(c.id, true);
   redirect(`/podpis/${token}/oferta`);
 }

@@ -133,7 +133,8 @@ export async function alignUnitVariant(db: SupabaseClient, unitId: string): Prom
   const store = (u.location as unknown as { store: { id: string; name: string; code: string; shopify_domain: string | null } }).store;
   if (!store.shopify_domain) throw new Error("Sklep bez połączenia ze Shopify.");
   const [{ data: link }, { data: locs }] = await Promise.all([
-    db.from("variant_store_links").select("shopify_inventory_item_id").eq("variant_id", u.variant_id).eq("store_id", store.id).not("shopify_inventory_item_id", "is", null).limit(1).maybeSingle(),
+    db.from("variant_store_links").select("shopify_inventory_item_id").eq("variant_id", u.variant_id).eq("store_id", store.id).not("shopify_inventory_item_id", "is", null)
+      .order("inventory_tracked", { ascending: false }).order("shopify_inventory_item_id").limit(1).maybeSingle(),
     db.from("locations").select("id, shopify_location_id, created_at").eq("store_id", store.id).eq("active", true).not("shopify_location_id", "is", null).order("created_at"),
   ]);
   if (!link) throw new Error("Rozmiar nie jest powiązany ze Shopify.");

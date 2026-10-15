@@ -37,27 +37,28 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
   if (!data) notFound();
   const u = data as unknown as UnitRow;
 
-  const [{ data: events }, { data: sales }, { data: contracts }, { data: consignors }, { data: contract }] = await Promise.all([
+  // Wszystko, co zależy tylko od sztuki – równolegle (wcześniej kilka zapytań po kolei).
+  const [{ data: events }, { data: sales }, { data: contracts }, { data: consignors }, { data: contract }, { data: mates }, { data: prodFlags }, images, shopDiag] = await Promise.all([
     supabase.from("unit_events").select("id, type, data, created_at").eq("unit_id", id).order("created_at", { ascending: false }),
     supabase.from("sales").select("id, order_ref, status, sold_at, product_name").eq("unit_id", id).order("sold_at", { ascending: false }),
     supabase.from("contracts").select("id, counterparty, contract_date").order("created_at", { ascending: false }).limit(200),
     supabase.from("consignors").select("id, name").order("name"),
     u.contract_id ? supabase.from("contracts").select("*").eq("id", u.contract_id).single() : Promise.resolve({ data: null }),
+    // Kwota z umowy dla tej sztuki – porównanie z kwotą zakupu w magazynie.
+    u.contract_id ? supabase.from("units").select("id, variant_id").eq("contract_id", u.contract_id) : Promise.resolve({ data: null }),
+    // Produkt spoza katalogu Shopify (z paczki komisanta / linku ogólnego) – do ręcznego przypisania.
+    supabase.from("products").select("*").eq("id", u.variant.product.id).maybeSingle(),
+    productImages(createAdminClient(), u.variant.product.id, u.location.store_id, u.variant.product.image_url).catch(() => []),
+    // „Sprawdź stan w Shopify” – na żywo, tylko na żądanie (zapytanie do Shopify).
+    sp.shopify === "1" ? diagnoseUnitStock(createAdminClient(), u.id).catch((e) => ({ levels: [], reasons: [], product: null, canAlign: false, master: "shopify" as const, error: errorMessage(e) })) : Promise.resolve(null),
   ]);
-  // Kwota z umowy dla tej sztuki – porównanie z kwotą zakupu w magazynie.
-  const { data: mates } = u.contract_id ? await supabase.from("units").select("id, variant_id").eq("contract_id", u.contract_id) : { data: null };
   const cur = contract?.currency && contract.currency !== "PLN" ? contract.currency as string : null;
   const inCur = (n: number) => (cur ? `${n.toFixed(2).replace(".", ",")} ${cur}` : money(n));
   const fromContract = contract && mates ? expectedPrices(contract, mates as { id: string; variant_id: string }[]).expected.get(u.id) : undefined;
   const ownPrice = u.owner_type === "consignment" ? u.payout_amount : u.purchase_price;
   const priceDiff = fromContract !== undefined && ownPrice !== null && ownPrice !== undefined && Math.abs(Number(ownPrice) - fromContract) >= 0.005;
 
-  // „Sprawdź stan w Shopify” – na żywo, tylko na żądanie (zapytanie do Shopify).
-  const shopDiag = sp.shopify === "1" ? await diagnoseUnitStock(createAdminClient(), u.id).catch((e) => ({ levels: [], reasons: [], product: null, canAlign: false, master: "shopify" as const, error: errorMessage(e) })) : null;
-  // Produkt spoza katalogu Shopify (z paczki komisanta / linku ogólnego) – do ręcznego przypisania.
-  const { data: prodFlags } = await supabase.from("products").select("*").eq("id", u.variant.product.id).maybeSingle();
   const unassigned = !!(prodFlags as { unassigned?: boolean } | null)?.unassigned;
-  const images = await productImages(createAdminClient(), u.variant.product.id, u.location.store_id, u.variant.product.image_url).catch(() => []);
   let fileUrl: string | null = null;
   if (contract?.file_path) {
     const { data: signed } = await supabase.storage.from("contracts").createSignedUrl(contract.file_path, 600);

@@ -1,4 +1,5 @@
 import "server-only";
+import { allPages, inChunksAll } from "@/lib/supabase/paging";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { LineItem } from "@/lib/sync/shop-orders";
 import { matchPieces } from "@/lib/orders/pieces";
@@ -78,14 +79,8 @@ function unitPart(u: Unit) {
   };
 }
 
-async function inChunks<T>(ids: (string | number)[], fn: (part: (string | number)[]) => PromiseLike<{ data: unknown; error: unknown }>) {
-  const out: T[] = [];
-  for (let i = 0; i < ids.length; i += 200) {
-    const { data, error } = await fn(ids.slice(i, i + 200));
-    if (error) throw error;
-    out.push(...((data ?? []) as T[]));
-  }
-  return out;
+function inChunks<T>(ids: (string | number)[], fn: (part: (string | number)[]) => PromiseLike<{ data: unknown; error: unknown }>) {
+  return inChunksAll<T>(ids, fn);
 }
 
 type Receipt = { number: string | null; issued_at: string; base_order_id: number | null; pos_order_id: string | null; source: string; items: { name: string; price_brutto: number; tax_rate: number }[] };
@@ -108,9 +103,9 @@ const invoiceDoc = (i: InvoiceRow | undefined): Doc | undefined => (i ? { kind: 
 
 type Order = {
   id: string; name: string; ordered_at: string; cancelled_at: string | null; status: string; cod: boolean; financial_status: string | null;
-  base_order_id: number | null; line_items: LineItem[]; shopify_order_id: string;
+  base_order_id: number | null; line_items: LineItem[]; shopify_order_id: string; fulfillments?: { status?: string }[] | null;
 };
-const ORDER_FIELDS = "id, name, ordered_at, cancelled_at, status, cod, financial_status, base_order_id, line_items, shopify_order_id";
+const ORDER_FIELDS = "id, name, ordered_at, cancelled_at, status, cod, financial_status, base_order_id, line_items, shopify_order_id, fulfillments";
 
 type Sale = { id: string; order_id: string; variant_id: string | null; status: string; shopify_line_id: string | null; shopify_line_index: number | null; unit: Unit };
 
@@ -134,8 +129,12 @@ async function shopLines(db: SupabaseClient, orders: Order[], docOf: (o: Order) 
   const lines: JpkLine[] = [];
   for (const o of orders) {
     const r = docOf(o);
-    const orderNote = o.cancelled_at
-      ? (o.cod && o.status === "problem" ? "NIE ODEBRANE POBRANIE" : "ANULOWANE")
+    // Pobranie anulowane po wysłaniu = klient nie odebrał paczki.
+    const sent = (o.fulfillments ?? []).some((f) => !/cancel|error|failure/i.test(f.status ?? ""));
+    const orderNote = o.cod && o.cancelled_at && sent
+      ? "NIE ODEBRANE POBRANIE"
+      : o.cancelled_at
+      ? "ANULOWANE"
       : (o.financial_status ?? "").toUpperCase() === "REFUNDED" || o.status === "returned" ? "ZWROT" : null;
     for (const p of matchPieces(o.id, o.line_items, salesBy.get(o.id) ?? [], (g) => variantOf.get(g))) {
       const l = p.line;
@@ -266,21 +265,20 @@ function orphanReceiptLines(receipts: OrphanReceipt[]): JpkLine[] {
 const ORPHAN_FIELDS = "id, number, issued_at, sale_ref, items";
 
 async function orphanReceipts(db: SupabaseClient, q: { from?: string; to?: string; ids?: string[] }) {
-  let query = db.from("receipts").select(ORPHAN_FIELDS).neq("source", "base").is("pos_order_id", null).is("order_id", null).is("base_order_id", null).limit(5000);
-  if (q.from) query = query.gte("issued_at", q.from);
-  if (q.to) query = query.lt("issued_at", q.to);
-  if (q.ids) query = query.in("id", q.ids);
-  const { data, error } = await query;
-  if (error) {
+  const build = (fields: string, a: number, b: number) => {
+    let query = db.from("receipts").select(fields).neq("source", "base").is("pos_order_id", null).is("order_id", null).is("base_order_id", null);
+    if (q.from) query = query.gte("issued_at", q.from);
+    if (q.to) query = query.lt("issued_at", q.to);
+    if (q.ids) query = query.in("id", q.ids);
+    return query.order("id").range(a, b);
+  };
+  try {
+    return await allPages<OrphanReceipt>((a, b) => build(ORPHAN_FIELDS, a, b));
+  } catch {
     // Bez migracji 0046 (brak kolumny sale_ref) – bez opisu sprzedaży.
-    let q2 = db.from("receipts").select("id, number, issued_at, items").neq("source", "base").is("pos_order_id", null).is("order_id", null).is("base_order_id", null).limit(5000);
-    if (q.from) q2 = q2.gte("issued_at", q.from);
-    if (q.to) q2 = q2.lt("issued_at", q.to);
-    if (q.ids) q2 = q2.in("id", q.ids);
-    const { data: d2 } = await q2;
-    return ((d2 ?? []) as Omit<OrphanReceipt, "sale_ref">[]).map((r) => ({ ...r, sale_ref: null }));
+    const d2 = await allPages<Omit<OrphanReceipt, "sale_ref">>((a, b) => build("id, number, issued_at, items", a, b)).catch(() => []);
+    return d2.map((r) => ({ ...r, sale_ref: null }));
   }
-  return (data ?? []) as OrphanReceipt[];
 }
 
 type CorrectionRow = { id: string; number: string; issue_date: string; total_gross: number; correction: { reason?: string; original_number?: string } | null };
@@ -317,14 +315,14 @@ export async function loadJpkLines(db: SupabaseClient, opts: { from: Date; to: D
   const to = opts.to.toISOString();
   const fromDay = new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Warsaw" }).format(opts.from);
   const toDay = new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Warsaw" }).format(opts.to);
-  const [{ data: monthReceipts, error: e1 }, { data: monthOrders, error: e2 }, { data: monthPos, error: e3 }, { data: monthInvoices, error: e4 }, monthPrinted] = await Promise.all([
-    db.from("receipts").select("base_order_id, pos_order_id").gte("issued_at", from).lt("issued_at", to).limit(10000),
-    db.from("orders").select("id").gte("ordered_at", from).lt("ordered_at", to).limit(10000),
-    db.from("pos_orders").select("id").gte("created_at", from).lt("created_at", to).limit(10000),
-    db.from("invoices").select(INVOICE_FIELDS).gte("issue_date", fromDay).lt("issue_date", toDay).neq("kind", "receipt").in("status", KSEF_SENT).limit(10000),
-    db.from("receipts").select("order_id").not("order_id", "is", null).gte("issued_at", from).lt("issued_at", to).limit(10000),
+  // Całe miesiące (stronami – Supabase oddaje najwyżej 1000 wierszy na zapytanie).
+  const [monthReceipts, monthOrders, monthPos, monthInvoices, monthPrinted] = await Promise.all([
+    allPages<{ base_order_id: number | null; pos_order_id: string | null }>((a, b) => db.from("receipts").select("base_order_id, pos_order_id").gte("issued_at", from).lt("issued_at", to).order("id").range(a, b)),
+    allPages<{ id: string }>((a, b) => db.from("orders").select("id").gte("ordered_at", from).lt("ordered_at", to).order("id").range(a, b)),
+    allPages<{ id: string }>((a, b) => db.from("pos_orders").select("id").gte("created_at", from).lt("created_at", to).order("id").range(a, b)),
+    allPages<InvoiceRow>((a, b) => db.from("invoices").select(INVOICE_FIELDS).gte("issue_date", fromDay).lt("issue_date", toDay).neq("kind", "receipt").in("status", KSEF_SENT).order("id").range(a, b)),
+    allPages<{ order_id: string }>((a, b) => db.from("receipts").select("order_id").not("order_id", "is", null).gte("issued_at", from).lt("issued_at", to).order("id").range(a, b)).then((data) => ({ data, error: null }), (error) => ({ data: null, error })),
   ]);
-  if (e1 || e2 || e3 || e4) throw e1 ?? e2 ?? e3 ?? e4;
   const invoicesM = (monthInvoices ?? []) as InvoiceRow[];
   const recBase = [...new Set((monthReceipts ?? []).map((r) => r.base_order_id).filter((x): x is number => !!x).map(Number))];
   const docPos = [...new Set([...(monthReceipts ?? []).map((r) => r.pos_order_id), ...invoicesM.map((i) => i.pos_order_id)].filter((x): x is string => !!x))];
@@ -356,8 +354,8 @@ export async function loadJpkLines(db: SupabaseClient, opts: { from: Date; to: D
     return d ? inMonth(d.date) : posInMonth.has(id);
   });
   // Korekty faktur: osobna linia z różnicą (nie pozycje po korekcie).
-  const { data: corr } = await db.from("invoices").select(CORRECTION_FIELDS).eq("kind", "correction")
-    .gte("issue_date", fromDay).lt("issue_date", toDay).in("status", KSEF_SENT).limit(2000);
+  const corr = await allPages<CorrectionRow>((a, b) => db.from("invoices").select(CORRECTION_FIELDS).eq("kind", "correction")
+    .gte("issue_date", fromDay).lt("issue_date", toDay).in("status", KSEF_SENT).order("id").range(a, b));
   const corrIds = new Set((corr ?? []).map((c) => c.id as string));
   const manual = invoicesM.filter((i) => !i.order_id && !i.pos_order_id && !corrIds.has(i.id)).map((i) => i.id);
   const correctionLines = correctionLinesFrom((corr ?? []) as CorrectionRow[]);

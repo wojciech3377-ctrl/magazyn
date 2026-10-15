@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { can, homeFor, SECTIONS, type Section } from "@/lib/permissions";
+import { USER_HEADER, verifyUserHeader } from "@/lib/auth-header";
 
 export type Profile = {
   id: string;
@@ -29,8 +30,8 @@ export function forgetProfile(id?: string) {
 
 export const requireProfile = cache(async () => {
   const supabase = await createClient();
-  // Id osoby sprawdzone już w proxy (nagłówek ustawia tylko proxy) – bez drugiego sprawdzania tokenu.
-  let userId = (await headers()).get("x-magazyn-uid") || undefined;
+  // Id osoby sprawdzone już w proxy (nagłówek podpisany kluczem serwera) – bez drugiego sprawdzania tokenu.
+  let userId = (await verifyUserHeader((await headers()).get(USER_HEADER))) || undefined;
   if (!userId) {
     const { data: auth } = await supabase.auth.getClaims();
     userId = auth?.claims?.sub;

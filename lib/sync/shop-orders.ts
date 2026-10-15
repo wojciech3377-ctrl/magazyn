@@ -1,4 +1,5 @@
 import "server-only";
+import { allPages } from "@/lib/supabase/paging";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { ordersUpdatedSince, type ShopifyOrder } from "@/lib/integrations/shopify";
 import { getPackage, listPackages, type FurgonetkaPackage } from "@/lib/integrations/furgonetka";
@@ -227,45 +228,55 @@ function shipmentRow(p: FurgonetkaPackage, orderId: string | null) {
  */
 export async function syncFurgonetkaShipments(db: SupabaseClient, pages = 3) {
   const since = new Date(Date.now() - 60 * 86400_000).toISOString();
-  const { data: recentOrders } = await db.from("orders").select("id, number, ordered_at, fulfillments").gte("ordered_at", since);
-  const byTracking = new Map<string, string>();
-  const byNumber = new Map<string, { id: string; ordered_at: string }[]>();
-  for (const o of recentOrders ?? []) {
-    for (const f of (o.fulfillments ?? []) as Fulfillment[]) for (const t of f.trackingInfo ?? []) if (t.number) byTracking.set(t.number.replace(/\s/g, ""), o.id);
-    byNumber.set(o.number, [...(byNumber.get(o.number) ?? []), { id: o.id, ordered_at: o.ordered_at }]);
-  }
-  const { data: known } = await db.from("shipments").select("external_id, order_id, state").eq("provider", "furgonetka");
-  const knownMap = new Map((known ?? []).map((k) => [k.external_id as string, k]));
-
-  const touched = new Set<string>();
-  const seen = new Set<string>();
-  const rows: ReturnType<typeof shipmentRow>[] = [];
+  // Najpierw paczki z Furgonetki, potem tylko potrzebne wiersze z bazy (co minutę – bez czytania całej tabeli przesyłek).
+  const packages: Awaited<ReturnType<typeof listPackages>>["packages"] = [];
   let last: string | null = null;
   for (let page = 0; page < pages; page++) {
     const r = await listPackages(db, { limit: 50, lastPackageId: last });
-    for (const p of r.packages) {
-      const id = String(p.package_id);
-      seen.add(id);
-      const tracking = p.parcels?.[0]?.package_no?.replace(/\s/g, "") ?? "";
-      const ref = String(p.order_number ?? p.user_reference_number ?? "").replace(/^#/, "").trim();
-      let orderId = knownMap.get(id)?.order_id as string | null | undefined;
-      if (!orderId && tracking) orderId = byTracking.get(tracking);
-      if (!orderId && ref && byNumber.has(ref)) {
-        // Ten sam numer w dwóch sklepach: bierzemy zamówienie złożone najbliżej przed przesyłką.
-        const added = p.datetime_add ?? new Date().toISOString();
-        const cands = byNumber.get(ref)!.filter((c) => c.ordered_at <= added).sort((a, b) => b.ordered_at.localeCompare(a.ordered_at));
-        orderId = (cands[0] ?? byNumber.get(ref)![0]).id;
-      }
-      if (!orderId && !knownMap.has(id)) continue;
-      rows.push(shipmentRow(p, orderId ?? null));
-      if (orderId) touched.add(orderId);
-    }
+    packages.push(...r.packages);
     if (!r.hasMore || !r.last) break;
     last = r.last;
   }
+  const seen = new Set(packages.map((p) => String(p.package_id)));
+  const [recentOrders, { data: knownSeen }, { data: knownOpen }] = await Promise.all([
+    // Stronami: ponad 1000 zamówień w 60 dni nie może gubić dopasowań.
+    allPages<{ id: string; number: string; ordered_at: string; fulfillments: Fulfillment[] | null }>((a, b) =>
+      db.from("orders").select("id, number, ordered_at, fulfillments").gte("ordered_at", since).order("id").range(a, b)),
+    seen.size ? db.from("shipments").select("external_id, order_id, state").eq("provider", "furgonetka").in("external_id", [...seen]) : Promise.resolve({ data: [] }),
+    // Paczki z aplikacji jeszcze w drodze (do odświeżenia, gdy nie ma ich na pierwszych stronach listy).
+    db.from("shipments").select("external_id, order_id, state").eq("provider", "furgonetka").not("order_id", "is", null)
+      .or("state.is.null,and(state.not.ilike.*deliver*,state.not.ilike.*cancel*)").order("created_at", { ascending: false }).limit(200),
+  ]);
+  const byTracking = new Map<string, string>();
+  const byNumber = new Map<string, { id: string; ordered_at: string }[]>();
+  for (const o of recentOrders) {
+    for (const f of (o.fulfillments ?? []) as Fulfillment[]) for (const t of f.trackingInfo ?? []) if (t.number) byTracking.set(t.number.replace(/\s/g, ""), o.id);
+    byNumber.set(o.number, [...(byNumber.get(o.number) ?? []), { id: o.id, ordered_at: o.ordered_at }]);
+  }
+  const known = [...(knownSeen ?? []), ...(knownOpen ?? [])];
+  const knownMap = new Map(known.map((k) => [k.external_id as string, k]));
+
+  const touched = new Set<string>();
+  const rows: ReturnType<typeof shipmentRow>[] = [];
+  for (const p of packages) {
+    const id = String(p.package_id);
+    const tracking = p.parcels?.[0]?.package_no?.replace(/\s/g, "") ?? "";
+    const ref = String(p.order_number ?? p.user_reference_number ?? "").replace(/^#/, "").trim();
+    let orderId = knownMap.get(id)?.order_id as string | null | undefined;
+    if (!orderId && tracking) orderId = byTracking.get(tracking);
+    if (!orderId && ref && byNumber.has(ref)) {
+      // Ten sam numer w dwóch sklepach: bierzemy zamówienie złożone najbliżej przed przesyłką.
+      const added = p.datetime_add ?? new Date().toISOString();
+      const cands = byNumber.get(ref)!.filter((c) => c.ordered_at <= added).sort((a, b) => b.ordered_at.localeCompare(a.ordered_at));
+      orderId = (cands[0] ?? byNumber.get(ref)![0]).id;
+    }
+    if (!orderId && !knownMap.has(id)) continue;
+    rows.push(shipmentRow(p, orderId ?? null));
+    if (orderId) touched.add(orderId);
+  }
 
   // Paczki z aplikacji, których nie ma na pierwszych stronach listy, a jeszcze nie są dostarczone.
-  const stale = (known ?? []).filter((k) => !seen.has(k.external_id as string) && k.order_id && !/deliver|cancel/i.test(String(k.state ?? ""))).slice(0, 15);
+  const stale = (knownOpen ?? []).filter((k) => !seen.has(k.external_id as string) && k.order_id && !/deliver|cancel/i.test(String(k.state ?? ""))).slice(0, 15);
   for (const k of stale) {
     try {
       rows.push(shipmentRow(await getPackage(db, k.external_id as string), k.order_id as string));

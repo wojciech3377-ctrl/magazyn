@@ -1,6 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { shopifyGraphql } from "@/lib/integrations/shopify";
+import { errorMessage } from "@/lib/errors";
 
 /**
  * Stany magazynowe między aplikacją a Shopify. Główne źródło wybiera się w Ustawieniach:
@@ -267,7 +268,8 @@ export async function pushStockToShopify(db: SupabaseClient, maxChanges = 500, o
     );
     for (let i = 0; i < todo.length; i += 100) {
       const batch = todo.slice(i, i + 100);
-      const errs = (await send(batch)).inventorySetQuantities.userErrors;
+      // Błąd sieci / Shopify dla całej paczki: zapis z changeFromQuantity jest bezpieczny do ponowienia – pozycja po pozycji.
+      const errs = await send(batch).then((r) => r.inventorySetQuantities.userErrors, (e) => [{ message: String(e), code: null }]);
       if (!errs.length) { done += batch.length; continue; }
       // Jedna zła pozycja blokuje całą paczkę – wtedy pozycja po pozycji, żeby reszta się zapisała.
       for (const one of batch) {
@@ -342,6 +344,8 @@ export async function reconcileRecentFromShopify(db: SupabaseClient) {
   const { stores, locs } = await storesAndLocations(db);
   const out: Record<string, unknown> = {};
   for (const s of stores) {
+    // Błąd jednego sklepu nie zatrzymuje drugiego.
+    try {
     const mapped = locs.filter((l) => l.store_id === s.id && l.active && l.shopify_location_id);
     if (!mapped.length) continue;
     const key = `stock_live:${s.id}`;
@@ -406,6 +410,9 @@ export async function reconcileRecentFromShopify(db: SupabaseClient) {
     }
     await db.from("sync_state").upsert({ key, value: { since: startedAt }, updated_at: new Date().toISOString() });
     out[s.name] = result;
+    } catch (e) {
+      out[s.name] = `błąd: ${errorMessage(e)}`;
+    }
   }
   return out;
 }

@@ -33,3 +33,12 @@ export function monthLabel(key: string) {
   const [y, m] = key.split("-").map(Number);
   return new Intl.DateTimeFormat("pl-PL", { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(y, m - 1, 15)));
 }
+
+/** Dzień „RRRR-MM-DD” (polski) → [początek, początek następnego dnia) w UTC; zły format → null. */
+export function warsawDayRange(day: string | undefined) {
+  if (!day || !/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+  const [y, m, d] = day.split("-").map(Number);
+  const from = warsawMidnight(y, m, d);
+  const next = new Date(Date.UTC(y, m - 1, d + 1));
+  return { from: from.toISOString(), to: warsawMidnight(next.getUTCFullYear(), next.getUTCMonth() + 1, next.getUTCDate()).toISOString() };
+}

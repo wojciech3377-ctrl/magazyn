@@ -36,7 +36,8 @@ export async function searchCatalog(q: string): Promise<CatalogHit[]> {
   const { data: pv } = productIds.length ? await db.from("variants").select("id").in("product_id", productIds.slice(0, 200)) : { data: [] };
   const ids = [...new Set([...direct, ...(links.data ?? []).map((l) => l.variant_id as string), ...(pv ?? []).map((v) => v.id as string)])];
   if (!ids.length) return [];
-  const { data } = await db.from("variants").select("id, option, position, product:products(title, image_url)").in("id", ids.slice(0, 150));
+  // Bez produktów „nieprzypisanych do Shopify” (tymczasowe, z paczek i umów spoza katalogu).
+  const { data } = await db.from("variants").select("id, option, position, product:products!inner(title, image_url, unassigned)").in("id", ids.slice(0, 150)).eq("product.unassigned", false);
   const collator = new Intl.Collator("pl", { numeric: true });
   return (data ?? []).map((v) => {
     const p = v.product as unknown as { title: string; image_url: string | null };

@@ -1,4 +1,5 @@
 import "server-only";
+import { allPages } from "@/lib/supabase/paging";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
@@ -48,9 +49,9 @@ export async function requireConsignor(opts: { passwordPage?: boolean } = {}) {
 }
 
 export async function consignorUnits(db: SupabaseClient, consignorId: string) {
-  const { data, error } = await db.rpc("consignor_units", { p_consignor_id: consignorId });
-  if (error) throw error;
-  return ((data ?? []) as ConsignorUnit[]).map((u) => ({ ...u, payout_amount: u.payout_amount === null ? null : Number(u.payout_amount) }));
+  // Stronami: Supabase oddaje najwyżej 1000 wierszy (także z funkcji) – inaczej saldo dużego komisanta byłoby zaniżone.
+  const data = await allPages<ConsignorUnit>((a, b) => db.rpc("consignor_units", { p_consignor_id: consignorId }).order("id").range(a, b));
+  return data.map((u) => ({ ...u, payout_amount: u.payout_amount === null ? null : Number(u.payout_amount) }));
 }
 
 /** Saldo: kwoty komisanta za rzeczy sprzedane z paragonem / fakturą minus wypłaty. */

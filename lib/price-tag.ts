@@ -193,13 +193,16 @@ async function newShoes(db: SupabaseClient, list: TagSource[]): Promise<(product
 }
 
 /** Zapytania po wielu id w paczkach (limit długości adresu i 1000 wierszy na odpowiedź). */
-async function chunked<T>(ids: string[], size: number, fn: (part: string[]) => PromiseLike<{ data: unknown[] | null }>) {
-  const out: T[] = [];
-  for (let i = 0; i < ids.length; i += size) out.push(...(((await fn(ids.slice(i, i + size))).data ?? []) as T[]));
-  return out;
+/** Po kawałkach; kawałek z pełnym 1000 wierszy (limit Supabase, np. historia cen) dzieli się na pół. Błąd = brak danych. */
+async function chunked<T>(ids: string[], size: number, fn: (part: string[]) => PromiseLike<{ data: unknown[] | null; error?: unknown }>) {
+  return inChunksAll<T>(ids, async (part) => {
+    const r = await fn(part as string[]);
+    return { data: r.error ? [] : r.data, error: null };
+  }, size);
 }
 
 import { productTagCode } from "./price-tag-code";
+import { inChunksAll } from "@/lib/supabase/paging";
 export { productTagCode, parseProductTagCode } from "./price-tag-code";
 
 /** Metki produktów z katalogu (jedna na produkt, bez rozmiaru) – ceny i Omnibus jak na metkach sztuk, w wybranym sklepie. */

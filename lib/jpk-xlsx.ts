@@ -69,7 +69,7 @@ function addSheet(wb: ExcelJS.Workbook, name: string, header: string[], widths: 
     });
   });
   // Kwoty jako liczby z dwoma miejscami.
-  for (const col of [3, name === "Paragony" ? 9 : 8]) ws.getColumn(col).numFmt = "#,##0.##";
+  for (const col of [3, name === "Paragony" ? 9 : 8]) ws.getColumn(col).numFmt = "#,##0.00";
   for (const col of name === "Paragony" ? [6, 8] : [5, 7]) {
     ws.getColumn(col).numFmt = "dd.mm.yyyy";
     ws.getColumn(col).alignment = { horizontal: "right" };

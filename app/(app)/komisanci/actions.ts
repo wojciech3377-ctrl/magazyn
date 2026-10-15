@@ -170,6 +170,10 @@ export async function toggleUnitPaid(formData: FormData) {
   const db = createAdminClient();
   const { data: u } = await db.from("units").select("id, code, payout_amount, consignor_payout_id, consignor_id, status, contract:contracts(number, doc_number, template), variant:variants(option, product:products(title))").eq("id", unitId).eq("consignor_id", id).maybeSingle();
   if (!u) back(id, "Nie ma takiej rzeczy.", false);
+  // Zamiar z formularza: drugie kliknięcie / odświeżenie nie cofa właśnie zapisanej wypłaty (i odwrotnie).
+  const want = s(formData, "want");
+  if (want === "1" && u!.consignor_payout_id) back(id, `${u!.code} jest już oznaczona jako zapłacona.`);
+  if (want === "0" && !u!.consignor_payout_id) back(id, `${u!.code} nie jest oznaczona jako zapłacona.`);
   if (u!.consignor_payout_id) {
     await supabase.from("consignor_payouts").delete().eq("id", u!.consignor_payout_id).eq("consignor_id", id);
     await db.from("units").update({ consignor_payout_id: null }).eq("id", unitId);
@@ -186,7 +190,12 @@ export async function toggleUnitPaid(formData: FormData) {
     consignor_id: id, amount, note: [title, v ? `${v.product.title} ${v.option}` : u!.code].filter(Boolean).join(" – ").slice(0, 300), unit_ids: [unitId],
   }).select("id").single();
   if (error || !payout) back(id, errorMessage(error), false);
-  await db.from("units").update({ consignor_payout_id: payout!.id }).eq("id", unitId);
+  // Tylko gdy rzecz nadal nie ma wypłaty (dwa równoczesne kliknięcia nie tworzą dwóch wypłat).
+  const { data: claimed } = await db.from("units").update({ consignor_payout_id: payout!.id }).eq("id", unitId).is("consignor_payout_id", null).select("id");
+  if (!claimed?.length) {
+    await db.from("consignor_payouts").delete().eq("id", payout!.id);
+    back(id, `${u!.code} jest już oznaczona jako zapłacona.`);
+  }
   await db.from("unit_events").insert({ unit_id: unitId, type: "payout", data: { paid: true, amount, title, payout_id: payout!.id } });
   revalidatePath(`/komisanci/${id}`);
   back(id, `Zapłacono ${amount.toFixed(2)} zł${title ? ` (tytuł: ${title})` : ""}.`);

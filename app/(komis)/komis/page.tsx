@@ -29,7 +29,8 @@ function docOf(c: ConsignorContract | undefined): SoldRow["doc"] {
   if (!c || c.status === "cancelled" || c.status === "rejected") return { kind: "none" };
   if (c.status === "sent") {
     const live = c.source === "consignor" && c.sign_token && (!c.sign_expires_at || new Date(c.sign_expires_at) > new Date());
-    return live ? { kind: "sign", href: `/podpis/${c.sign_token}` } : c.source === "consignor" ? { kind: "none" } : { kind: "sign", href: null };
+    // Niepodpisana umowa komisanta (np. wysłana automatycznie po sprzedaży) – można ją podpisać albo zamiast niej wgrać fakturę.
+    return live ? { kind: "sign", href: `/podpis/${c.sign_token}`, swappable: true } : c.source === "consignor" ? { kind: "none" } : { kind: "sign", href: null };
   }
   if (c.status === "signed") return { kind: "approve" };
   return { kind: "done", label: c.type === "invoice" ? `faktura ${c.doc_number ?? ""}`.trim() : `umowa${c.number ? ` nr ${c.number}` : ""}` };

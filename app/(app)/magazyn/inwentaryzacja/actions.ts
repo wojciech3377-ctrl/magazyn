@@ -1,6 +1,7 @@
 "use server";
 
 import { requireSection } from "@/lib/auth";
+import { allPages } from "@/lib/supabase/paging";
 
 export type InvLine = { unitId: string | null; code: string | null; title: string; option: string; status?: string; note?: string };
 export type InvSummary = { expected: number; scanned: number; matched: number; missing: InvLine[]; extra: (InvLine & { scan: string })[]; reportId: string | null } | { error: string };
@@ -15,10 +16,10 @@ export async function summarizeInventory(locationId: string, scans: string[]): P
   const { supabase } = await requireSection("magazyn");
   if (!/^[0-9a-f-]{36}$/.test(locationId)) return { error: "Wybierz lokalizację." };
   const codes = scans.map((s) => s.trim().toUpperCase()).filter(Boolean).slice(0, 5000);
-  const { data: expectedRows } = await supabase.from("units_list").select("id, code, identifier, title, option, status, variant_id")
-    .eq("location_id", locationId).in("status", PRESENT).limit(10000);
   type U = { id: string; code: string; identifier: string | null; title: string; option: string; status: string; variant_id: string };
-  const expected = (expectedRows ?? []) as U[];
+  // Stronami – lokalizacja z ponad 1000 sztuk inaczej pokazałaby resztę jako „spoza lokalizacji”.
+  const expected = await allPages<U>((a, b) => supabase.from("units_list").select("id, code, identifier, title, option, status, variant_id")
+    .eq("location_id", locationId).in("status", PRESENT).order("id").range(a, b));
   const left = new Map(expected.map((u) => [u.id, u]));
   const byCode = new Map<string, U>();
   for (const u of expected) { byCode.set(u.code.toUpperCase(), u); if (u.identifier) byCode.set(u.identifier.toUpperCase(), u); }

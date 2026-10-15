@@ -8,7 +8,7 @@ import { attachConsignorInvoice, createConsignorContract, prepareInvoiceUpload, 
 
 export type SoldRow = {
   id: string; code: string; title: string; option: string; price: number | null; soldAt: string; hasDocument: boolean; paid?: boolean;
-  doc: { kind: "none" } | { kind: "sign"; href: string | null } | { kind: "approve" } | { kind: "done"; label: string };
+  doc: { kind: "none" } | { kind: "sign"; href: string | null; swappable?: boolean } | { kind: "approve" } | { kind: "done"; label: string };
 };
 
 const pln = (n: number | null) => (n === null ? "–" : new Intl.NumberFormat("pl-PL", { style: "currency", currency: "PLN" }).format(n));
@@ -22,7 +22,8 @@ export function SoldList({ rows }: { rows: SoldRow[] }) {
   const [mode, setMode] = useState<"contract" | "invoice" | null>(null);
   const [file, setFile] = useState<{ path: string; name: string } | null>(null);
   const [upload, setUpload] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null });
-  const open = rows.filter((r) => r.doc.kind === "none");
+  const pickable = (r: SoldRow) => r.doc.kind === "none" || (r.doc.kind === "sign" && !!r.doc.swappable);
+  const open = rows.filter(pickable);
   const pending = contractPending || invoicePending;
   const state = mode === "invoice" ? invoiceState : contractState;
 
@@ -54,7 +55,7 @@ export function SoldList({ rows }: { rows: SoldRow[] }) {
             {!rows.length && <tr><td colSpan={6} className="py-6 text-center text-muted">Jeszcze nic nie sprzedaliśmy.</td></tr>}
             {rows.map((r) => (
               <tr key={r.id}>
-                <td>{r.doc.kind === "none" && <input type="checkbox" name="sold" value={r.id} className="h-4 w-4" checked={picked.has(r.id)} onChange={(e) => toggle(r.id, e.target.checked)} aria-label={`Wybierz ${r.title}`} />}</td>
+                <td>{pickable(r) && <input type="checkbox" name="sold" value={r.id} className="h-4 w-4" checked={picked.has(r.id)} onChange={(e) => toggle(r.id, e.target.checked)} aria-label={`Wybierz ${r.title}`} />}</td>
                 <td>{r.title} · <b>{r.option}</b> <span className="font-mono text-xs text-muted">{r.code}</span></td>
                 <td className="whitespace-nowrap text-sm text-muted">{r.soldAt}</td>
                 <td className="text-right tabular-nums">{pln(r.price)}</td>

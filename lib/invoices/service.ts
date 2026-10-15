@@ -37,7 +37,7 @@ type Unit = { id: string; purchase_form: string } | null;
 
 /** Szkic faktury do zamówienia ze sklepu: nabywca z adresu, pozycje z zamówienia (marża / 23% wg sztuki), wysyłka 23%. */
 export async function draftFromOrder(db: SupabaseClient, orderId: string): Promise<InvoiceDraft | null> {
-  const { data: o } = await db.from("orders").select("id, ordered_at, customer_name, email, shipping_address, shipping_method, shipping_price, financial_status, cod, payment_gateways, line_items").eq("id", orderId).maybeSingle();
+  const { data: o } = await db.from("orders").select("id, ordered_at, customer_name, email, shipping_address, shipping_method, shipping_price, financial_status, cod, payment_gateways, line_items, refunded_lines").eq("id", orderId).maybeSingle();
   if (!o) return null;
   const { data: sales } = await db.from("sales").select("id, variant_id, status, unit:units(id, purchase_form)").eq("order_id", orderId);
   const lines = (o.line_items ?? []) as LineItem[];
@@ -49,7 +49,11 @@ export async function draftFromOrder(db: SupabaseClient, orderId: string): Promi
   for (const l of lines) {
     if (l.service) continue;
     const variantId = l.shopify_variant_id ? variantOf.get(l.shopify_variant_id) : undefined;
-    for (let n = 0; n < Math.max(1, l.quantity); n++) {
+    // Pozycje zwrócone (zwrot w Shopify) nie trafiają na fakturę / paragon.
+    const back = Number((o.refunded_lines as Record<string, number> | null)?.[l.id] ?? 0);
+    const left = l.quantity - back;
+    if (back > 0 && left <= 0) continue;
+    for (let n = 0; n < Math.max(1, left); n++) {
       const idx = pool.findIndex((s) => variantId && s.variant_id === variantId);
       const sale = idx >= 0 ? pool.splice(idx, 1)[0] : null;
       items.push({
@@ -113,12 +117,16 @@ export async function draftFromPos(db: SupabaseClient, posOrderId: string): Prom
         const is23 = rateOf(fiscal, (i.ptu as string | null) ?? "A") === 23;
         return { name: (i.name as string | null) ?? "Pozycja", quantity: qty, unit: "szt.", unit_price_gross: Number(i.price), total_gross: Math.round(Number(i.price) * qty * 100) / 100, vat: is23 ? "23" : "margin", pos_item_id: i.id, checkVat: !is23 } satisfies DraftItem;
       }
+      const qty = Number(i.quantity ?? 1) || 1;
+      const rate = i.ptu ? rateOf(fiscal, i.ptu as string) : null;
       return {
-        name: (i.name as string | null)?.trim() || (u.variant ? `${u.variant.product.title} ${u.variant.option}` : "Towar"), quantity: 1, unit: "szt.",
+        name: (i.name as string | null)?.trim() || (u.variant ? `${u.variant.product.title} ${u.variant.option}` : "Towar"), quantity: qty, unit: "szt.",
         // Stawka wybrana w Kasie (np. A = 23%, F = marża); bez wyboru – wg formy sprzedaży sztuki.
-        unit_price_gross: Number(i.price), total_gross: Number(i.price),
-        vat: i.ptu ? (rateOf(fiscal, i.ptu as string) === 23 ? "23" : "margin") : u.purchase_form === "vat_23" ? "23" : "margin",
+        unit_price_gross: Number(i.price), total_gross: Math.round(Number(i.price) * qty * 100) / 100,
+        vat: rate !== null ? (rate === 23 ? "23" : "margin") : u.purchase_form === "vat_23" ? "23" : "margin",
         unit_id: u.id, pos_item_id: i.id,
+        // Stawka inna niż 23% / marża (np. 8%, 5%) – faktura zna tylko 23% i marżę: do sprawdzenia.
+        checkVat: rate !== null && rate !== 23 && rate !== 0 ? true : undefined,
       } satisfies DraftItem;
     }),
     orderId: null,

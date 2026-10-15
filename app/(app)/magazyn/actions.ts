@@ -11,8 +11,11 @@ import { errorMessage } from "@/lib/errors";
 import { inheritContractPrice, priceMessage } from "@/lib/contracts/inherit-price";
 import { changesSince } from "@/lib/sync/changes";
 
-/** Statusy liczone w stanie magazynu (Shopify). */
-const COUNTED = ["in_stock", "reserved"];
+/**
+ * Statusy, które przy ruchu w aplikacji zmieniają stan „dostępne” w Shopify. Zarezerwowana sztuka jest już zdjęta
+ * ze stanu przez zamówienie – jej przeniesienie / oddanie / usunięcie nie może zdjąć stanu drugi raz.
+ */
+const COUNTED = ["in_stock"];
 
 function back(path: string, msg: string, tone: "ok" | "error" = "ok"): never {
   const sep = path.includes("?") ? "&" : "?";
@@ -39,13 +42,14 @@ export async function bulkAction(formData: FormData) {
   if (action === "move") {
     const locationId = String(formData.get("location_id") ?? "");
     if (!locationId) back(returnTo, "Wybierz lokalizację docelową.", "error");
-    const { data: locs } = await supabase.from("locations").select("id, base_warehouse_id");
-    const wh = new Map((locs ?? []).map((l) => [l.id as string, l.base_warehouse_id as string | null]));
+    const { data: locs } = await supabase.from("locations").select("id, shopify_location_id");
+    const shopLoc = new Map((locs ?? []).map((l) => [l.id as string, l.shopify_location_id as string | null]));
     const changes: StockChange[] = [];
     for (const u of units!) {
-      // Stan w Shopify zmienia się tylko, gdy sztuka na stanie zmienia lokalizację.
+      // Stan w Shopify zmienia się tylko, gdy sztuka na stanie zmienia lokalizację Shopify
+      // (dwie lokalizacje aplikacji z tą samą lokalizacją Shopify albo obie bez niej – bez zmiany).
       if (u.location_id === locationId || !COUNTED.includes(u.status)) continue;
-      if (wh.get(u.location_id) === wh.get(locationId)) continue;
+      if ((shopLoc.get(u.location_id) ?? null) === (shopLoc.get(locationId) ?? null)) continue;
       changes.push({ variantId: u.variant_id, locationId: u.location_id, delta: -1 });
       changes.push({ variantId: u.variant_id, locationId, delta: 1 });
     }
@@ -110,17 +114,20 @@ export async function bulkAction(formData: FormData) {
   }
 
   if (action === "delete") {
-    // Usuwanie z aplikacji (np. pomyłki, usługi z importu) – tylko administrator, stan w Shopify bez zmian.
+    // Usuwanie z aplikacji (np. pomyłki) – tylko administrator; sztuki na stanie: −1 w Shopify (jak przy jednej sztuce).
     if (profile.role !== "admin") back(returnTo, "Usuwać sztuki może tylko administrator.", "error");
     const { data: sold } = await supabase.from("sales").select("unit_id").in("unit_id", ids);
     const blocked = new Set((sold ?? []).map((s) => s.unit_id as string));
     const toDelete = ids.filter((id) => !blocked.has(id));
+    let results: Awaited<ReturnType<typeof adjustStock>> = [];
     if (toDelete.length) {
-      const { error: e } = await supabase.from("units").delete().in("id", toDelete);
+      const { data: gone, error: e } = await supabase.from("units").delete().in("id", toDelete).select("id, status, variant_id, location_id");
       if (e) back(returnTo, e.message, "error");
+      results = await adjustStock(supabase, (gone ?? []).filter((u) => COUNTED.includes(u.status as string))
+        .map((u) => ({ variantId: u.variant_id as string, locationId: u.location_id as string, delta: -1 })));
     }
     revalidatePath("/magazyn");
-    back(returnTo, `Usunięto ${toDelete.length} szt. Stan w Shopify bez zmian.${blocked.size ? ` ${blocked.size} szt. ze sprzedażą pominięto.` : ""}`);
+    back(returnTo, `Usunięto ${toDelete.length} szt.${blocked.size ? ` ${blocked.size} szt. ze sprzedażą pominięto.` : ""}${baseSummary(results)}`, results.some((r) => !r.ok) ? "error" : "ok");
   }
 
   back(returnTo, "Nieznana akcja.", "error");

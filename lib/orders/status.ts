@@ -90,16 +90,16 @@ export function computeOrderStatus(o: OrderForStatus, shipments: ShipmentLike[])
   }
   if (ret === "IN_PROGRESS" || ret === "RETURN_REQUESTED") return { status: "problem", detail: ret === "RETURN_REQUESTED" ? "klient prosi o zwrot" : "zwrot w toku – klient odsyła towar" };
   if (ret === "RETURN_FAILED") return { status: "problem", detail: "zwrot nieudany" };
-  // Zarchiwizowane w Shopify = zamówienie zakończone.
-  if (o.closed_at) return { status: "delivered", detail: r.money === "partial" ? "zarchiwizowane · częściowy zwrot" : "zarchiwizowane w Shopify" };
-
   const active = shipments
     .map((s) => ({ s, kind: classifyShipment(s) }))
     .filter((x): x is { s: ShipmentLike; kind: "shipped" | "delivered" | "problem" } => x.kind !== null)
     .sort((a, b) => (b.s.state_at ?? "").localeCompare(a.s.state_at ?? ""));
+  // Problem z przesyłką (np. nieodebrane pobranie) widać także po zarchiwizowaniu zamówienia w Shopify.
+  const problem = active.find((x) => x.kind === "problem");
+  if (problem) return { status: "problem", detail: problem.s.state_description };
+  // Zarchiwizowane w Shopify = zamówienie zakończone.
+  if (o.closed_at) return { status: "delivered", detail: r.money === "partial" ? "zarchiwizowane · częściowy zwrot" : "zarchiwizowane w Shopify" };
   if (active.length) {
-    const problem = active.find((x) => x.kind === "problem");
-    if (problem) return { status: "problem", detail: problem.s.state_description };
     if (active.every((x) => x.kind === "delivered")) return { status: "delivered", detail: active[0].s.state_description };
     return { status: "shipped", detail: active.find((x) => x.kind === "shipped")?.s.state_description ?? null };
   }

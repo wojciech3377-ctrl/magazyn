@@ -29,32 +29,54 @@ async function run(db: SupabaseClient, job: string, fn: () => Promise<unknown>, 
  * przesyłki z Furgonetki, statusy KSeF, e-maile do komisantów.
  */
 export async function runFastJobs(db: SupabaseClient) {
+  // Nieudane zadania → „Błędy automatu” w Ustawieniach (po 3 nieudanych przebiegach z rzędu).
+  const failed: Issue[] = [];
   const shop = await run(db, "shopify-orders", () => syncShopifyOrders(db));
+  if (!shop.ok) failed.push(fastJobIssue("shopify-orders", shop.error));
   const live = await run(db, "live", () => runLiveSync(db, 0), false);
   {
     const { data: settled, error } = await db.rpc("settle_order_units");
-    if (error && !/settle_order_units/.test(error.message)) await db.from("sync_log").insert({ job: "settle", ok: false, message: error.message });
-    else if (settled) await db.from("sync_log").insert({ job: "settle", ok: true, message: JSON.stringify({ sold: settled }) });
+    if (error && !/settle_order_units/.test(error.message)) {
+      await db.from("sync_log").insert({ job: "settle", ok: false, message: error.message });
+      failed.push(fastJobIssue("settle", error.message));
+    } else if (settled) await db.from("sync_log").insert({ job: "settle", ok: true, message: JSON.stringify({ sold: settled }) });
   }
-  try {
-    const r = await backfillContractNumbers(db);
-    if (r.checked) await db.from("sync_log").insert({ job: "contract-numbers", ok: true, message: JSON.stringify(r) });
-  } catch (e) {
-    await db.from("sync_log").insert({ job: "contract-numbers", ok: false, message: errorMessage(e) });
-  }
-  try {
-    const r = await notifyConsignorSales(db);
-    if (r.sent || ("reminded" in r && (r.reminded || r.monthly)) || "errors" in r) await db.from("sync_log").insert({ job: "consignor-mail", ok: !("errors" in r), message: JSON.stringify(r) });
-  } catch (e) {
-    await db.from("sync_log").insert({ job: "consignor-mail", ok: false, message: errorMessage(e) });
-  }
-  if (ksefConfigured()) {
-    const { count } = await db.from("invoices").select("id", { count: "exact", head: true }).eq("status", "sending");
-    if (count) await run(db, "ksef", () => pollKsef(db));
-  }
-  const ship = furgonetkaConfigured() && (await furgonetkaConnection(db))
-    ? await run(db, "furgonetka", () => syncFurgonetkaShipments(db))
-    : { ok: true, result: "niepołączona" };
+  // Niezależne od siebie – równolegle (krótszy przebieg co minutę).
+  const [, , , ship] = await Promise.all([
+    (async () => {
+      try {
+        const r = await backfillContractNumbers(db);
+        if (r.checked) await db.from("sync_log").insert({ job: "contract-numbers", ok: true, message: JSON.stringify(r) });
+      } catch (e) {
+        await db.from("sync_log").insert({ job: "contract-numbers", ok: false, message: errorMessage(e) });
+      }
+    })(),
+    (async () => {
+      try {
+        const r = await notifyConsignorSales(db);
+        if (r.sent || ("reminded" in r && (r.reminded || r.monthly)) || "errors" in r) await db.from("sync_log").insert({ job: "consignor-mail", ok: !("errors" in r), message: JSON.stringify(r) });
+        if ("errors" in r && r.errors?.length) failed.push(fastJobIssue("consignor-mail", r.errors.join(" · ")));
+      } catch (e) {
+        await db.from("sync_log").insert({ job: "consignor-mail", ok: false, message: errorMessage(e) });
+        failed.push(fastJobIssue("consignor-mail", e));
+      }
+    })(),
+    (async () => {
+      if (!ksefConfigured()) return;
+      const { count } = await db.from("invoices").select("id", { count: "exact", head: true }).eq("status", "sending");
+      if (!count) return;
+      const k = await run(db, "ksef", () => pollKsef(db));
+      if (!k.ok) failed.push(fastJobIssue("ksef", k.error));
+    })(),
+    (async () => {
+      const r = furgonetkaConfigured() && (await furgonetkaConnection(db))
+        ? await run(db, "furgonetka", () => syncFurgonetkaShipments(db))
+        : { ok: true, result: "niepołączona" as unknown };
+      if (!r.ok && "error" in r) failed.push(fastJobIssue("furgonetka", r.error));
+      return r;
+    })(),
+  ]);
+  await syncIssues(db, "fast", failed);
   return { shop, live, ship, ok: shop.ok && ship.ok };
 }
 

@@ -195,7 +195,9 @@ export function PosForm({ stores, printer, ptu, defaultPtu, ptuFor, printerOnlin
   const ptuText = (letter: string) => ptu.find((p) => p.letter === letter)?.label ?? letter;
 
   return (
-    <form action={action} className="grid gap-5 lg:grid-cols-3">
+    <form action={action} className="grid gap-5 lg:grid-cols-3"
+      // Enter w polu (cena, nazwa, skaner) nie może zatwierdzić sprzedaży i wysłać paragonu fiskalnego.
+      onKeyDown={(e) => { if (e.key === "Enter" && e.target instanceof HTMLInputElement) e.preventDefault(); }}>
       <input type="hidden" name="items" value={JSON.stringify(items)} />
       <input type="hidden" name="payment" value={payment} />
 

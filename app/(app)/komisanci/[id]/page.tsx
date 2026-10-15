@@ -129,9 +129,9 @@ export default async function ConsignorPage({ params, searchParams }: { params: 
                   <td className="whitespace-nowrap">
                     {["sold", "shipped"].includes(u.status) ? (
                       extra.get(u.id)?.paid ? (
-                        <span className="flex items-center gap-2"><Pill tone="green">zapłacono ✓</Pill>{isAdmin && <form action={toggleUnitPaid}><input type="hidden" name="id" value={id} /><input type="hidden" name="unit_id" value={u.id} /><button className="text-xs text-muted hover:underline">cofnij</button></form>}</span>
+                        <span className="flex items-center gap-2"><Pill tone="green">zapłacono ✓</Pill>{isAdmin && <form action={toggleUnitPaid}><input type="hidden" name="id" value={id} /><input type="hidden" name="unit_id" value={u.id} /><input type="hidden" name="want" value="0" /><button className="text-xs text-muted hover:underline">cofnij</button></form>}</span>
                       ) : u.has_document ? (
-                        <span className="flex items-center gap-2"><Pill tone="amber">do wypłaty</Pill>{isAdmin && <form action={toggleUnitPaid}><input type="hidden" name="id" value={id} /><input type="hidden" name="unit_id" value={u.id} /><SubmitButton className="btn-secondary px-2 py-0.5 text-xs" pendingText="…">Zapłacono</SubmitButton></form>}</span>
+                        <span className="flex items-center gap-2"><Pill tone="amber">do wypłaty</Pill>{isAdmin && <form action={toggleUnitPaid}><input type="hidden" name="id" value={id} /><input type="hidden" name="unit_id" value={u.id} /><input type="hidden" name="want" value="1" /><SubmitButton className="btn-secondary px-2 py-0.5 text-xs" pendingText="…">Zapłacono</SubmitButton></form>}</span>
                       ) : <Pill tone="slate">bez paragonu / faktury</Pill>
                     ) : null}
                     {extra.get(u.id)?.title && <span className="block text-xs text-muted">umowa {extra.get(u.id)!.title}</span>}

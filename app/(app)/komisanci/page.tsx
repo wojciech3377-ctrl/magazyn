@@ -34,14 +34,18 @@ export default async function KomisanciPage({ searchParams }: { searchParams: Pr
   const openBy = new Map<string, number>();
   for (const o of open ?? []) openBy.set(o.consignor_id as string, (openBy.get(o.consignor_id as string) ?? 0) + 1);
   const stats = new Map<string, { onStock: number; sold: number; balance: number }>();
-  for (const c of allConsignors ?? []) {
-    const units = await consignorUnits(db, c.id as string);
-    const bal = await consignorBalance(db, c.id as string, units);
-    stats.set(c.id as string, {
-      onStock: units.filter((u) => ["in_stock", "in_transit", "reserved", "consignor_hold"].includes(u.status)).length,
-      sold: units.filter((u) => ["sold", "shipped"].includes(u.status)).length,
-      balance: bal.balance,
-    });
+  // Po 8 komisantów naraz (wcześniej po kolei – lista ładowała się tym wolniej, im więcej komisantów).
+  const list = allConsignors ?? [];
+  for (let i = 0; i < list.length; i += 8) {
+    await Promise.all(list.slice(i, i + 8).map(async (c) => {
+      const units = await consignorUnits(db, c.id as string);
+      const bal = await consignorBalance(db, c.id as string, units);
+      stats.set(c.id as string, {
+        onStock: units.filter((u) => ["in_stock", "in_transit", "reserved", "consignor_hold"].includes(u.status)).length,
+        sold: units.filter((u) => ["sold", "shipped"].includes(u.status)).length,
+        balance: bal.balance,
+      });
+    }));
   }
 
   const sort = SORTS[sp.sort ?? ""] ? sp.sort! : "nazwa";

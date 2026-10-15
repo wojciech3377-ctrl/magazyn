@@ -163,8 +163,9 @@ export async function createLabel(_: LabelState, fd: FormData): Promise<LabelSta
   }).select("id").single();
   if (insErr) return { error: insErr.message };
 
+  let processing = false;
   try {
-    await orderPackages(db, [packageId]);
+    processing = !(await orderPackages(db, [packageId]));
   } catch (e) {
     await deletePackage(db, packageId).catch(() => {});
     await db.from("shipments").delete().eq("id", ship.id);
@@ -187,7 +188,7 @@ export async function createLabel(_: LabelState, fd: FormData): Promise<LabelSta
     // numer dojdzie przy następnym odczycie przesyłek
   }
 
-  let warning: string | undefined;
+  let warning: string | undefined = processing ? "Furgonetka jeszcze nadaje przesyłkę – etykieta i numer pojawią się za chwilę (odśwież stronę)." : undefined;
   const store = order.store as { code: string; shopify_domain: string | null } | null;
   if (fd.get("fulfill") && tracking && store?.shopify_domain && isShopifyOrder(order.shopify_order_id)) {
     try {
@@ -235,7 +236,7 @@ type OrderForOp = {
 
 async function loadOrder(id: string) {
   const db = createAdminClient();
-  const { data } = await db.from("orders").select("id, store_id, shopify_order_id, name, cancelled_at, line_items, cod, payment_gateways, customer_name, email, total, store:stores(code, shopify_domain)").eq("id", id).maybeSingle();
+  const { data } = await db.from("orders").select("id, store_id, shopify_order_id, name, cancelled_at, line_items, refunded_lines, cod, payment_gateways, customer_name, email, total, store:stores(code, shopify_domain)").eq("id", id).maybeSingle();
   return data as unknown as OrderForOp | null;
 }
 
@@ -249,6 +250,8 @@ async function releaseSales(saleIds: string[], backToStock: boolean, notes: stri
   const { data: sales } = await supabase.from("sales").select("id, status, unit:units(id, code, status, variant_id, location_id)").in("id", saleIds);
   const changes: StockChange[] = [];
   for (const s of sales ?? []) {
+    // Sprzedaż już anulowana: sztuka mogła pójść do innego zamówienia – nie wolno jej „zwracać”.
+    if (s.status === "cancelled") continue;
     const u = s.unit as unknown as { id: string; code: string; status: string; variant_id: string; location_id: string } | null;
     // Także „zarezerwowana” (zamówienie bez paragonu): Shopify przy anulowaniu / zwrocie w aplikacji nie przywraca stanu.
     if (u && ["sold", "shipped", "reserved"].includes(u.status)) {
@@ -311,8 +314,9 @@ export async function cancelOrderAction(_: OrderOpState, fd: FormData): Promise<
     const open = (ships ?? []).filter((s) => /^(waiting|ordered|new|created)$/i.test(s.state ?? ""));
     if (open.length) {
       try {
-        await cancelPackages(db, open.map((s) => s.external_id));
-        await db.from("shipments").update({ state: "canceled", state_description: "Anulowana", updated_at: new Date().toISOString() }).in("id", open.map((s) => s.id));
+        const confirmed = await cancelPackages(db, open.map((s) => s.external_id));
+        if (!confirmed) notes.push("Etykieta: Furgonetka jeszcze przetwarza anulowanie – sprawdź za chwilę w panelu Furgonetki, czy przesyłka jest anulowana.");
+        else await db.from("shipments").update({ state: "canceled", state_description: "Anulowana", updated_at: new Date().toISOString() }).in("id", open.map((s) => s.id));
       } catch (e) {
         notes.push(`Etykieta: ${errorMessage(e)} – anuluj ją w panelu Furgonetki.`);
       }
@@ -350,7 +354,8 @@ export async function returnOrderAction(_: OrderOpState, fd: FormData): Promise<
   const order = await loadOrder(str(fd, "order_id"));
   if (!order) return { error: "Nie ma takiego zamówienia." };
   const picked = order.line_items
-    .map((l) => ({ line: l, qty: Math.min(l.quantity, Math.max(0, Math.floor(num(fd, `qty_${l.id}`)))) }))
+    // Nie więcej niż zostało (pozycje już zwrócone wcześniej się nie liczą).
+    .map((l) => ({ line: l, qty: Math.min(l.quantity - Number((order as { refunded_lines?: Record<string, number> | null }).refunded_lines?.[l.id] ?? 0), Math.max(0, Math.floor(num(fd, `qty_${l.id}`)))) }))
     .filter((x) => x.qty > 0);
   const refundMoney = !!fd.get("refund");
   const rawAmount = str(fd, "amount").replace(/\s/g, "").replace(",", ".");

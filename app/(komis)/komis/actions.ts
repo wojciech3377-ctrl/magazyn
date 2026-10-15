@@ -126,11 +126,22 @@ async function soldWithoutContract(db: SupabaseClient, consignor: Consignor, fd:
   if (!ids.length) return { error: "Zaznacz sprzedane rzeczy." };
   const { data: stale } = await db.from("units").select("contract:contracts(id, status, source, sign_expires_at)")
     .in("id", ids).eq("consignor_id", consignor.id).not("contract_id", "is", null);
+  // Niepodpisana umowa komisanta (także wysłana automatycznie po sprzedaży) ustępuje nowemu dokumentowi:
+  // zaznaczone rzeczy z niej wypadają, a pusta umowa jest anulowana.
+  const seen = new Set<string>();
   for (const u of stale ?? []) {
     const c = u.contract as unknown as { id: string; status: string; source: string | null; sign_expires_at: string | null } | null;
-    if (c && c.source === "consignor" && c.status === "sent" && c.sign_expires_at && new Date(c.sign_expires_at) < new Date()) {
+    if (!c || seen.has(c.id) || c.source !== "consignor" || c.status !== "sent") continue;
+    seen.add(c.id);
+    const { data: full } = await db.from("contracts").select("items").eq("id", c.id).eq("status", "sent").maybeSingle();
+    if (!full) continue;
+    const rest = ((full.items ?? []) as { unit_id?: string; qty?: number; price?: number }[]).filter((i) => !i.unit_id || !ids.includes(i.unit_id));
+    if (!rest.length) {
       const { data: done } = await db.from("contracts").update({ status: "cancelled" }).eq("id", c.id).eq("status", "sent").select("id");
       if (done?.length) await db.from("units").update({ contract_id: null }).eq("contract_id", c.id);
+    } else {
+      const { data: done } = await db.from("contracts").update({ items: rest, amount: contractTotal(rest as never) }).eq("id", c.id).eq("status", "sent").select("id");
+      if (done?.length) await db.from("units").update({ contract_id: null }).eq("contract_id", c.id).in("id", ids);
     }
   }
   const { data } = await db.from("units").select("id, code, identifier, payout_amount, contract_id, variant:variants(option, product:products(title))")

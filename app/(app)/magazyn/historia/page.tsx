@@ -25,15 +25,16 @@ export default async function HistoryPage({ searchParams }: { searchParams: Prom
   const q = (sp.q ?? "").replace(/[%,()*\\]/g, " ").trim();
 
   let unitIds: string[] | null = null;
-  if (q || owner) {
-    let uq = supabase.from("units_list").select("id").limit(1000);
-    if (q) uq = uq.or(`code.ilike.%${q}%,identifier.ilike.%${q}%,title.ilike.%${q}%,style_sku.ilike.%${q}%,consignor_name.ilike.%${q}%`);
+  if (q) {
+    let uq = supabase.from("units_list").select("id").or(`code.ilike.%${q}%,identifier.ilike.%${q}%,title.ilike.%${q}%,style_sku.ilike.%${q}%,consignor_name.ilike.%${q}%`).limit(300);
     if (owner) uq = uq.eq("owner_type", owner);
     const { data } = await uq;
     unitIds = (data ?? []).map((u) => u.id as string);
   }
-  let query = supabase.from("unit_events").select("id, unit_id, type, data, created_at, unit:units(id, code, owner_type, consignor:consignors(name), variant:variants(option, product:products(title)))", { count: "exact" })
+  // Właściciel: filtr po sztuce w samym zapytaniu (wcześniej tylko zdarzenia ~300 przypadkowych sztuk).
+  let query = supabase.from("unit_events").select(`id, unit_id, type, data, created_at, unit:units${owner ? "!inner" : ""}(id, code, owner_type, consignor:consignors(name), variant:variants(option, product:products(title)))`, { count: "exact" })
     .order("created_at", { ascending: false }).range((page - 1) * PER_PAGE, page * PER_PAGE - 1);
+  if (owner) query = query.eq("unit.owner_type", owner);
   if (type) query = query.eq("type", type);
   if (unitIds) query = query.in("unit_id", unitIds.length ? unitIds.slice(0, 300) : ["00000000-0000-0000-0000-000000000000"]);
   const { data, count } = await query;

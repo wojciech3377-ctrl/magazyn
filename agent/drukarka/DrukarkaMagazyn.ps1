@@ -5,7 +5,7 @@
 param([switch]$Raz)  # -Raz: jedno sprawdzenie kolejki i koniec (do testów)
 
 $ErrorActionPreference = 'Stop'
-$Wersja = '0.3.3'
+$Wersja = '0.3.4'
 $Folder = Split-Path -Parent $MyInvocation.MyCommand.Path
 $PlikUstawien = Join-Path $Folder 'config.json'
 $PlikDziennika = Join-Path $Folder 'dziennik.txt'
@@ -357,6 +357,60 @@ function Drukuj-Paragon($zadanie) {
   }
 }
 
+# ---------- Zgłoszenie wydrukowanego paragonu (nie może zginąć) ----------
+
+$PlikZaleglych = Join-Path $Folder 'niewyslane.json'
+$OstatnieZalegle = [datetime]::MinValue
+
+function Kod-Bledu($err) {
+  try { return [int]$err.Exception.Response.StatusCode } catch { return 0 }
+}
+
+# Odmowa aplikacji (4xx poza złym kluczem 401) – ponawianie nic nie da.
+function Blad-Trwaly($err) {
+  $k = Kod-Bledu $err
+  return ($k -ge 400 -and $k -lt 500 -and $k -ne 401 -and $k -ne 408 -and $k -ne 429)
+}
+
+function Zglos-Wydruk($id, $dane) {
+  # Paragon już wydrukowany: zgłaszamy do skutku (kilka prób), a gdy aplikacja nie odpowiada – zapis do pliku
+  # i ponowienie w kolejnych przebiegach. Nigdy nie zgłaszamy wtedy błędu (to zgubiłoby paragon w aplikacji).
+  for ($i = 0; $i -lt 6; $i++) {
+    try { $null = Wywolaj-Api 'POST' "/api/drukarka/zadanie/$id" $dane; return $true } catch {
+      Zapisz-Dziennik "  nie udało się zgłosić wydruku (próba $($i + 1)): $(Tresc-Bledu $_)"
+      if (Blad-Trwaly $_) { Zapisz-Dziennik "  aplikacja odrzuciła zgłoszenie – sprawdź ten paragon w aplikacji (Ustawienia → Drukarka)."; return $false }
+      Start-Sleep -Seconds (5 * ($i + 1))
+    }
+  }
+  $lista = @()
+  if (Test-Path $PlikZaleglych) { try { $raw = Get-Content $PlikZaleglych -Raw -Encoding UTF8 | ConvertFrom-Json; $lista = @($raw | ForEach-Object { $_ }) } catch { $lista = @() } }
+  $lista += [pscustomobject]@{ id = "$id"; dane = $dane; od = (Get-Date).ToString('o') }
+  ($lista | ConvertTo-Json -Depth 6) | Set-Content -Path $PlikZaleglych -Encoding UTF8
+  Zapisz-Dziennik "  zapisano do ponownego zgłoszenia ($PlikZaleglych)"
+  return $false
+}
+
+function Wyslij-Zalegle {
+  if (-not (Test-Path $PlikZaleglych)) { return }
+  # Najwyżej raz na minutę.
+  if (((Get-Date) - $script:OstatnieZalegle).TotalSeconds -lt 60) { return }
+  $script:OstatnieZalegle = Get-Date
+  $lista = @()
+  try { $raw = Get-Content $PlikZaleglych -Raw -Encoding UTF8 | ConvertFrom-Json; $lista = @($raw | ForEach-Object { $_ }) } catch { return }
+  $zostaje = @()
+  foreach ($z in $lista) {
+    if ($z.od -and ((Get-Date) - [datetime]$z.od).TotalDays -gt 7) { Zapisz-Dziennik "Porzucono zaległe zgłoszenie paragonu $($z.id) (ponad 7 dni) – sprawdź go w aplikacji." ; continue }
+    try { $null = Wywolaj-Api 'POST' "/api/drukarka/zadanie/$($z.id)" $z.dane; Zapisz-Dziennik "Zgłoszono zaległy paragon $($z.id)" }
+    catch {
+      Zapisz-Dziennik "Zaległy paragon $($z.id): $(Tresc-Bledu $_)"
+      if (Blad-Trwaly $_) { Zapisz-Dziennik "  aplikacja odrzuciła zgłoszenie – porzucono, sprawdź ten paragon w aplikacji." }
+      else { $zostaje += $z }
+    }
+  }
+  if ($zostaje.Count) { ($zostaje | ConvertTo-Json -Depth 6) | Set-Content -Path $PlikZaleglych -Encoding UTF8 }
+  else { Remove-Item $PlikZaleglych -ErrorAction SilentlyContinue }
+}
+
 # ---------- Główna pętla ----------
 
 $mutex = New-Object Threading.Mutex($false, 'Global\DrukarkaMagazyn')
@@ -371,6 +425,7 @@ while ($true) {
       $null = Wywolaj-Api 'POST' '/api/drukarka/stan' @{ wersja = $Wersja; tryb = $Ust.drukarka.tryb; polaczenie = $polaczenie; komputer = $env:COMPUTERNAME }
       $ostatniStan = Get-Date
     }
+    Wyslij-Zalegle
     $zadanie = Wywolaj-Api 'GET' '/api/drukarka/zadanie' $null
     if ($null -ne $zadanie) {
       Zapisz-Dziennik "Paragon #$($zadanie.number): $($zadanie.lines.Count) poz., $($zadanie.total) PLN"
@@ -380,9 +435,10 @@ while ($true) {
           $null = Wywolaj-Api 'POST' "/api/drukarka/zadanie/$($zadanie.id)" @{ ok = $true; number = $wynik }
         } else {
           $w = Drukuj-Paragon $zadanie
-          $null = Wywolaj-Api 'POST' "/api/drukarka/zadanie/$($zadanie.id)" @{ ok = $true; number = "$($w.Numer)"; daily = "$($w.Doba)"; printout = [bool]$w.ZWydruku; text = "$($w.Tresc)" }
           Zapisz-Dziennik "  wydrukowany, nr $($w.Numer) (w dobie: $($w.Doba))"
           if (-not $w.ZWydruku) { Zapisz-Dziennik "  UWAGA: nie odczytano numeru wydruku z treści paragonu – wysłano numer w dobie. Treść: $($w.Tresc)" }
+          # Od tej chwili paragon istnieje – błąd zgłoszenia nie jest błędem druku.
+          $null = Zglos-Wydruk $zadanie.id @{ ok = $true; number = "$($w.Numer)"; daily = "$($w.Doba)"; printout = [bool]$w.ZWydruku; text = "$($w.Tresc)" }
         }
       } catch {
         $blad = Tresc-Bledu $_

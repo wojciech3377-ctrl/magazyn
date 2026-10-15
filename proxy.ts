@@ -2,8 +2,7 @@ import { createServerClient } from "@supabase/ssr";
 import { supabaseUrl } from "@/lib/supabase/url";
 import { NextResponse, type NextRequest } from "next/server";
 
-/** Nagłówek z id osoby sprawdzonej w proxy (czyta go lib/auth.ts). */
-const USER_HEADER = "x-magazyn-uid";
+import { signUserHeader, USER_HEADER } from "@/lib/auth-header";
 
 const PUBLIC_PATHS = ["/login", "/manifest.webmanifest", "/api/shopify/webhook", "/api/cron", "/api/drukarka/", "/podpis", "/umowa/"];
 
@@ -46,10 +45,10 @@ export async function proxy(request: NextRequest) {
   // Nagłówki zapytania z nonce – Next.js dodaje go do swoich skryptów podczas renderowania.
   // Zalogowana osoba sprawdzona tutaj trafia do strony nagłówkiem USER_HEADER (strona nie sprawdza tokenu drugi raz).
   // Nagłówek z przeglądarki jest zawsze usuwany – ustawia go tylko proxy po weryfikacji.
-  const forward = (userId?: string) => {
+  const forward = (signed?: string | null) => {
     const h = new Headers(request.headers);
     h.delete(USER_HEADER);
-    if (userId) h.set(USER_HEADER, userId);
+    if (signed) h.set(USER_HEADER, signed);
     if (isPage) {
       h.set("x-nonce", nonce);
       h.set("Content-Security-Policy", csp);
@@ -89,7 +88,7 @@ export async function proxy(request: NextRequest) {
     url.search = path === "/" ? "" : `?next=${encodeURIComponent(path + request.nextUrl.search)}`;
     return finish(NextResponse.redirect(url));
   }
-  response = forward(userId);
+  response = forward(await signUserHeader(userId));
   refreshed.forEach(({ name, value, options }) => response.cookies.set(name, value, hardened(options)));
   return finish(response);
 }
