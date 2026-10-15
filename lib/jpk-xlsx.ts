@@ -32,13 +32,13 @@ export async function jpkWorkbook(lines: JpkLine[]) {
   const invoices = lines.filter((l) => l.kind === "invoice");
 
   addSheet(wb, "Paragony", ["LP", "Nazwa przedmiotu", "Kwota", "Grupa VAT", "PARAGON", "DATA", "Uwagi", "Data zakupu", "Kwota zakupu", "Numer umowy", "Uwagi"],
-    [6, 44, 10, 10, 11, 12, 16, 13, 12, 16, 26],
-    receipts.map((l, i) => [i + 1, l.name, l.price, l.vat, numOrText(l.docNumber), plDate(l.docDate), "",
+    [6, 44, 10, 10, 11, 12, 24, 13, 12, 16, 26],
+    receipts.map((l, i) => [i + 1, l.name, l.price, l.vat, numOrText(l.docNumber), plDate(l.docDate), l.note ?? "",
       plDate(l.contractDate), l.purchasePrice, l.contractNumber ?? "", [l.saleNote, currencyNote(l.currency)].filter(Boolean).join(" · ")]),
     receipts);
   addSheet(wb, "Faktury", ["LP", "Nazwa przedmiotu", "Kwota", "NR FV", "data", "Uwagi", "Data zakupu", "Kwota zakupu", "Numer umowy", "Uwagi"],
-    [6, 44, 10, 16, 12, 16, 13, 12, 16, 26],
-    invoices.map((l, i) => [i + 1, l.name, l.price, l.docNumber ?? "", plDate(l.docDate), "", plDate(l.contractDate), l.purchasePrice, l.contractNumber ?? "", [l.saleNote, currencyNote(l.currency)].filter(Boolean).join(" · ")]),
+    [6, 44, 10, 16, 12, 24, 13, 12, 16, 26],
+    invoices.map((l, i) => [i + 1, l.name, l.price, l.docNumber ?? "", plDate(l.docDate), l.note ?? "", plDate(l.contractDate), l.purchasePrice, l.contractNumber ?? "", [l.saleNote, currencyNote(l.currency)].filter(Boolean).join(" · ")]),
     invoices);
 
   return Buffer.from(await wb.xlsx.writeBuffer());

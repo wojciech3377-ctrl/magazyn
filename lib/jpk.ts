@@ -40,6 +40,8 @@ export type JpkLine = {
   pendingContractId: string | null; // umowa w toku (czeka na podpis) do sprzedaży bez sztuki
   contractStage: ContractStage | null; // etap umowy sztuki (w toku / gotowa)
   consignorWait: boolean;      // rzecz komisanta bez umowy – czeka na umowę / fakturę od komisanta
+  lineRef: string | null;      // pos:<pozycja kasy> | fv:<pozycja faktury> – pozycja bez sztuki („Dołącz umowę” tworzy sztukę)
+  note: string | null;         // notatka do linii JPK (jpk_notes)
 };
 
 type Contract = { id: string; number: number | null; doc_number: string | null; contract_date: string | null; currency: string | null; template: string | null; status: string; paid_at: string | null; source: string | null };
@@ -146,7 +148,7 @@ async function shopLines(db: SupabaseClient, orders: Order[], docOf: (o: Order) 
         orderLabel: o.name, orderHref: `/sprzedaz/${o.id}`,
         saleNote: orderNote ?? (sale?.status === "cancelled" ? "ZWROT" : null),
         saleId: sale?.id ?? null, variantLinked: !!p.variantId, baseOrderId: o.base_order_id ? Number(o.base_order_id) : null,
-        pieceRef: p.ref, pendingContractId: sale && !sale.unit ? pendingBy.get(sale.id) ?? null : null,
+        pieceRef: p.ref, pendingContractId: sale && !sale.unit ? pendingBy.get(sale.id) ?? null : null, lineRef: null, note: null,
       });
     }
   }
@@ -175,6 +177,7 @@ async function posLines(db: SupabaseClient, posOrderIds: string[], docOf: (posOr
       orderLabel: i.order?.code ?? "", orderHref: i.order ? `/kasa/${i.order.id}` : null,
       saleNote: i.status === "returned" ? "ZWROT" : null,
       saleId: null, variantLinked: true, baseOrderId: null, pieceRef: null, pendingContractId: null,
+      lineRef: i.unit ? null : `pos:${i.id}`, note: null,
     };
   });
 }
@@ -237,6 +240,7 @@ async function manualInvoiceLines(db: SupabaseClient, invoiceIds: string[]) {
     name: i.name, price: Number(i.total_gross), vat: i.unit ? vatOf(i.unit) : i.vat === "23" ? "A" : "F", ...unitPart(i.unit),
     orderLabel: i.invoice.number, orderHref: `/sprzedaz/faktury/${i.invoice.id}`, saleNote: null,
     saleId: null, variantLinked: false, baseOrderId: null, pieceRef: null, pendingContractId: null,
+    lineRef: i.unit ? null : `fv:${i.id}`, note: null,
   }));
 }
 
@@ -255,7 +259,7 @@ function orphanReceiptLines(receipts: OrphanReceipt[]): JpkLine[] {
       vat: it.ptu ?? (Number(it.tax_rate) === 23 ? "A" : "F"), unitId: null, unitCode: null,
       contractId: null, contractNumber: null, contractDate: null, purchasePrice: null, currency: null, contractStage: null, consignorWait: false,
       orderLabel: r.sale_ref ?? `paragon ${r.number ?? ""}`, orderHref: null, saleNote: "SPRZEDAŻ USUNIĘTA",
-      saleId: null, variantLinked: false, baseOrderId: null, pieceRef: null, pendingContractId: null,
+      saleId: null, variantLinked: false, baseOrderId: null, pieceRef: null, pendingContractId: null, lineRef: null, note: null,
     };
   }));
 }
@@ -277,6 +281,31 @@ async function orphanReceipts(db: SupabaseClient, q: { from?: string; to?: strin
     return ((d2 ?? []) as Omit<OrphanReceipt, "sale_ref">[]).map((r) => ({ ...r, sale_ref: null }));
   }
   return (data ?? []) as OrphanReceipt[];
+}
+
+type CorrectionRow = { id: string; number: string; issue_date: string; total_gross: number; correction: { reason?: string; original_number?: string } | null };
+const CORRECTION_FIELDS = "id, number, issue_date, total_gross, correction";
+
+function correctionLinesFrom(rows: CorrectionRow[]): JpkLine[] {
+  return rows.map((c) => {
+    const k = c.correction ?? {};
+    return {
+      key: `k:${c.id}`, source: "shop", kind: "invoice", docNumber: c.number, docDate: invoiceInstant(c.issue_date), saleDate: invoiceInstant(c.issue_date),
+      name: `Korekta do ${k.original_number ?? "faktury"}${k.reason ? `: ${k.reason}` : ""}`, price: Number(c.total_gross), vat: "", unitId: null, unitCode: null,
+      contractId: null, contractNumber: null, contractDate: null, purchasePrice: null, currency: null, contractStage: null, consignorWait: false,
+      orderLabel: c.number, orderHref: `/sprzedaz/faktury/${c.id}`, saleNote: "KOREKTA",
+      saleId: null, variantLinked: false, baseOrderId: null, pieceRef: null, pendingContractId: null, lineRef: null, note: null,
+    };
+  });
+}
+
+/** Notatki do linii (jpk_notes). Bez SQL 59 – linie bez notatek. */
+async function withNotes(db: SupabaseClient, lines: JpkLine[]) {
+  const keys = lines.map((l) => l.key);
+  const notes = await inChunks<{ line_key: string; note: string }>(keys, (part) => db.from("jpk_notes").select("line_key, note").in("line_key", part as string[])).catch(() => []);
+  const byKey = new Map(notes.map((n) => [n.line_key, n.note]));
+  for (const l of lines) l.note = byKey.get(l.key) ?? null;
+  return lines;
 }
 
 /**
@@ -327,20 +356,11 @@ export async function loadJpkLines(db: SupabaseClient, opts: { from: Date; to: D
     return d ? inMonth(d.date) : posInMonth.has(id);
   });
   // Korekty faktur: osobna linia z różnicą (nie pozycje po korekcie).
-  const { data: corr } = await db.from("invoices").select("id, number, issue_date, total_gross, correction").eq("kind", "correction")
+  const { data: corr } = await db.from("invoices").select(CORRECTION_FIELDS).eq("kind", "correction")
     .gte("issue_date", fromDay).lt("issue_date", toDay).in("status", KSEF_SENT).limit(2000);
   const corrIds = new Set((corr ?? []).map((c) => c.id as string));
   const manual = invoicesM.filter((i) => !i.order_id && !i.pos_order_id && !corrIds.has(i.id)).map((i) => i.id);
-  const correctionLines: JpkLine[] = (corr ?? []).map((c) => {
-    const k = (c.correction ?? {}) as { reason?: string; original_number?: string };
-    return {
-      key: `k:${c.id}`, source: "shop", kind: "invoice", docNumber: c.number as string, docDate: invoiceInstant(c.issue_date as string), saleDate: invoiceInstant(c.issue_date as string),
-      name: `Korekta do ${k.original_number ?? "faktury"}${k.reason ? `: ${k.reason}` : ""}`, price: Number(c.total_gross), vat: "", unitId: null, unitCode: null,
-      contractId: null, contractNumber: null, contractDate: null, purchasePrice: null, currency: null, contractStage: null, consignorWait: false,
-      orderLabel: c.number as string, orderHref: `/sprzedaz/faktury/${c.id}`, saleNote: "KOREKTA",
-      saleId: null, variantLinked: false, baseOrderId: null, pieceRef: null, pendingContractId: null,
-    };
-  });
+  const correctionLines = correctionLinesFrom((corr ?? []) as CorrectionRow[]);
 
   const lines = [
     ...(await shopLines(db, keepOrders, orderDoc)),
@@ -352,7 +372,7 @@ export async function loadJpkLines(db: SupabaseClient, opts: { from: Date; to: D
   // JPK = tylko sprzedaże z dokumentem: faktury w KSeF, paragony fiskalne (kasa i zamówienia). „Bez dokumentu” to
   // osobny podgląd sprzedaży, do których trzeba jeszcze wystawić paragon / fakturę – nie wchodzą do JPK.
   const filtered = opts.kind === "all" ? lines.filter((l) => !!l.kind) : opts.kind === "none" ? lines.filter((l) => !l.kind) : lines.filter((l) => l.kind === opts.kind);
-  return sortLines(filtered);
+  return sortLines(await withNotes(db, filtered));
 }
 
 /** Linie po kluczach (eksport zaznaczonych). */
@@ -361,6 +381,7 @@ export async function loadJpkLinesByKeys(db: SupabaseClient, keys: string[]) {
   const posItemIds = keys.filter((k) => k.startsWith("p:")).map((k) => k.slice(2));
   const invItemIds = keys.filter((k) => k.startsWith("i:")).map((k) => k.slice(2));
   const receiptIds = [...new Set(keys.filter((k) => k.startsWith("r:")).map((k) => k.split(":")[1]).filter((x) => /^[0-9a-f-]{36}$/.test(x)))];
+  const correctionIds = keys.filter((k) => k.startsWith("k:")).map((k) => k.slice(2)).filter((x) => /^[0-9a-f-]{36}$/.test(x));
   const orders = await inChunks<Order>(orderIds, (part) => db.from("orders").select(ORDER_FIELDS).in("id", part as string[]));
   const posItems = await inChunks<{ order_id: string }>(posItemIds, (part) => db.from("pos_order_items").select("order_id").in("id", part as string[]));
   const invItems = await inChunks<{ invoice_id: string }>(invItemIds, (part) => db.from("invoice_items").select("invoice_id").in("id", part as string[]));
@@ -372,6 +393,7 @@ export async function loadJpkLinesByKeys(db: SupabaseClient, keys: string[]) {
     ...(await posLines(db, posIds, posDoc)),
     ...(await manualInvoiceLines(db, [...new Set(invItems.map((i) => i.invoice_id))])),
     ...(receiptIds.length ? orphanReceiptLines(await orphanReceipts(db, { ids: receiptIds })) : []),
+    ...correctionLinesFrom(await inChunks<CorrectionRow>(correctionIds, (part) => db.from("invoices").select(CORRECTION_FIELDS).in("id", part as string[]).eq("kind", "correction"))),
   ].filter((l) => want.has(l.key));
-  return sortLines(lines);
+  return sortLines(await withNotes(db, lines));
 }

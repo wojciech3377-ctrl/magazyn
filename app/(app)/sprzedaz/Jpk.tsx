@@ -13,6 +13,7 @@ import { errorMessage } from "@/lib/errors";
 import { KSEF_STATUS } from "@/lib/invoices/labels";
 import { isSettled, MISSING_BTN, STAGE_TEXT } from "@/lib/contracts/stage";
 import { ConsignorWaiting } from "@/components/ContractBadges";
+import { JpkNote } from "./JpkNote";
 
 const KINDS: { key: "all" | DocKind | "none"; label: string }[] = [
   { key: "all", label: "Do JPK: paragony i faktury" },
@@ -123,11 +124,11 @@ export async function Jpk({ sp }: { sp: Record<string, string | undefined> }) {
             <thead>
               <tr>
                 <th className="w-8" /><th>Dokument</th><th>Data</th><th>Nazwa przedmiotu</th><th className="text-right">Kwota</th><th>VAT</th>
-                <th>Data zakupu</th>{prices && <th className="text-right">Kwota zakupu</th>}<th>Numer umowy</th><th>Uwagi</th><th>Sprzedaż</th>
+                <th>Data zakupu</th>{prices && <th className="text-right">Kwota zakupu</th>}<th>Numer umowy</th><th>Uwagi</th><th>Notatka</th><th>Sprzedaż</th>
               </tr>
             </thead>
             <tbody>
-              {!lines.length && <tr><td colSpan={11} className="py-10 text-center text-muted">Brak sprzedaży w tym okresie.</td></tr>}
+              {!lines.length && <tr><td colSpan={12} className="py-10 text-center text-muted">Brak sprzedaży w tym okresie.</td></tr>}
               {lines.map((l) => {
                 const foreign = l.currency && l.currency !== "PLN";
                 const red = !!l.saleNote;
@@ -151,12 +152,14 @@ export async function Jpk({ sp }: { sp: Record<string, string | undefined> }) {
                         : l.consignorWait ? <ConsignorWaiting />
                         : l.unitId ? <Link className={MISSING_BTN} href={`/sprzedaz/umowa?sztuka=${l.unitId}&back=${encodeURIComponent(`/sprzedaz?${qs}`)}`}>Dołącz umowę</Link>
                         : l.pieceRef && !l.saleNote ? <button form="jpk-umowa" name="umowa_dla" value={l.pieceRef} className={MISSING_BTN} title={l.variantLinked ? undefined : "Produkt nie jest powiązany z katalogiem – wybierzesz go przy umowie"}>Dołącz umowę</button>
-                        : <span className="text-muted">–</span>}
+                        : l.lineRef && !l.saleNote ? <Link className={MISSING_BTN} href={`/sprzedaz/umowa/pozycja?ref=${l.lineRef}&back=${encodeURIComponent(`/sprzedaz?${qs}`)}`} title="Pozycja bez sztuki z magazynu – wybierzesz produkt z katalogu">Dołącz umowę</Link>
+                        : <span className="text-muted" title={l.saleNote === "SPRZEDAŻ USUNIĘTA" ? "Sprzedaż usunięta – został tylko paragon, nie ma do czego dołączyć umowy" : l.saleNote === "KOREKTA" ? "Korekta faktury – umowa jest przy fakturze korygowanej" : undefined}>–</span>}
                     </td>
                     <td className="whitespace-nowrap text-xs">
                       {l.saleNote && <span className="font-semibold text-bad">{l.saleNote} </span>}
                       {foreign && <span className="font-medium">{l.currency === "EUR" ? "EURO" : l.currency}</span>}
                     </td>
+                    <td><JpkNote lineKey={l.key} initial={l.note} /></td>
                     <td className="whitespace-nowrap text-xs">
                       {l.orderHref ? <Link className="text-accent hover:underline" href={l.orderHref}>{l.orderLabel}</Link> : l.orderLabel}
                       {profile.role === "admin" && l.source === "pos" && l.orderHref?.startsWith("/kasa/") && (

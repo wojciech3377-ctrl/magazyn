@@ -10,7 +10,8 @@ import { errorMessage } from "@/lib/errors";
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
-const KEY = /^(o:[0-9a-f-]{36}:\d{1,3}:\d{1,3}|[pi]:[0-9a-f-]{36})$/i;
+// Linie: zamówienie (o), kasa (p), faktura ręczna (i), korekta (k), paragon usuniętej sprzedaży (r).
+const KEY = /^(o:[0-9a-f-]{36}:\d{1,3}:\d{1,3}|[pik]:[0-9a-f-]{36}|r:[0-9a-f-]{36}:\d{1,4})$/i;
 
 /**
  * Eksport zaznaczonych linii JPK (POST z formularza): „xlsx” = plik JPK w Excelu (tylko z dostępem do cen),

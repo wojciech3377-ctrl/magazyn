@@ -152,3 +152,39 @@ export async function deletePosOrder(formData: FormData) {
   revalidatePath("/sprzedaz");
   return go("ok", `Sprzedaż ${o.code} usunięta${back1.length ? `, ${back1.length} szt. wróciło na stan` : ""}.`);
 }
+
+const JPK_KEY = /^(o:[0-9a-f-]{36}:\d{1,3}:\d{1,3}|[pik]:[0-9a-f-]{36}|r:[0-9a-f-]{36}:\d{1,4})$/i;
+
+/** Notatka do linii JPK (zapis po wyjściu z pola; pusta – usuwa). Trafia też do pliku Excel (kolumna „Uwagi”). */
+export async function saveJpkNote(key: string, note: string): Promise<{ ok?: true; error?: string }> {
+  const { supabase } = await requireSection("sprzedaz", "faktury");
+  if (!JPK_KEY.test(key)) return { error: "Nieznana linia." };
+  const text = note.replace(/\s+/g, " ").trim().slice(0, 500);
+  const { error } = text
+    ? await supabase.from("jpk_notes").upsert({ line_key: key, note: text, updated_at: new Date().toISOString() })
+    : await supabase.from("jpk_notes").delete().eq("line_key", key);
+  if (error) return { error: /jpk_notes|schema cache/i.test(error.message) ? "Notatki wymagają SQL 59 w Supabase." : error.message };
+  return { ok: true };
+}
+
+/**
+ * „Dołącz umowę” do pozycji bez sztuki z magazynu (kasa: pozycja wpisana z nazwy / produkt własny; faktura ręczna):
+ * wybrany produkt i rozmiar z katalogu → sprzedana sztuka → zwykłe dołączanie umowy do sztuki.
+ */
+export async function createUnitForLine(formData: FormData) {
+  const { supabase } = await requireSection("sprzedaz", "faktury");
+  const ref = String(formData.get("ref") ?? "");
+  const variant = String(formData.get("variant_id") ?? "");
+  const back = safeBack(String(formData.get("back") ?? ""));
+  const m = /^(pos|fv):([0-9a-f-]{36})$/.exec(ref);
+  const self = `/sprzedaz/umowa/pozycja?ref=${encodeURIComponent(ref)}&back=${encodeURIComponent(back)}`;
+  if (!m) redirect(back);
+  if (!/^[0-9a-f-]{36}$/.test(variant)) redirect(`${self}&blad=${encodeURIComponent("Wybierz produkt i rozmiar z katalogu.")}`);
+  const { data: unitId, error } = await supabase.rpc("create_line_unit", { p_kind: m[1] === "pos" ? "pos" : "invoice", p_item: m[2], p_variant: variant });
+  if (error || !unitId) {
+    const msg = error && /create_line_unit|schema cache/i.test(error.message) ? "Ta funkcja wymaga SQL 59 w Supabase." : error?.message ?? "Nie udało się utworzyć sztuki.";
+    redirect(`${self}&blad=${encodeURIComponent(msg)}`);
+  }
+  revalidatePath("/sprzedaz");
+  redirect(`/sprzedaz/umowa?sztuka=${unitId}&back=${encodeURIComponent(back)}`);
+}
