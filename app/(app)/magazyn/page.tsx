@@ -23,7 +23,7 @@ export const maxDuration = 300;
 
 const PER_PAGE = 100;
 
-const FILTER_KEYS = ["sklep", "lokalizacja", "status", "umowa", "wlasciciel", "komisant", "forma", "rozmiar", "cena_od", "cena_do", "zakup_od", "zakup_do", "od", "do", "imei", "kat"];
+const FILTER_KEYS = ["sklep", "lokalizacja", "status", "umowa", "wlasciciel", "komisant", "forma", "rozmiar", "cena_od", "cena_do", "zakup_od", "zakup_do", "od", "do", "imei", "kat", "shopify"];
 
 function sortOptions(prices: boolean) {
   return [
@@ -63,7 +63,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
   const filters: UnitFilters = {
     q: sp.q, sklep: sp.sklep, lokalizacja: sp.lokalizacja, status: MAGAZYN_STATUSES.includes(sp.status ?? "") ? sp.status : undefined, umowa: sp.umowa, wlasciciel: sp.wlasciciel, komisant: sp.komisant,
     forma: sp.forma, rozmiar: sp.rozmiar, cena_od: sp.cena_od, cena_do: sp.cena_do, zakup_od: sp.zakup_od, zakup_do: sp.zakup_do,
-    od: sp.od, do: sp.do, imei: sp.imei, kat: sp.kat, sort: sp.sort, kier: sp.kier,
+    od: sp.od, do: sp.do, imei: sp.imei, kat: sp.kat, shopify: sp.shopify, sort: sp.sort, kier: sp.kier,
   };
   const pickedCats = parseCategories(sp.kat);
   const more = false;
@@ -71,7 +71,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
   const [unitsRes, { data: stores }, { data: locations }, { data: contracts }, { count: noContract }, { data: consignors }, { count: unusedContracts }, { data: cols }] = await Promise.all([
     // Filtr kategorii bez SQL 58 – komunikat zamiast błędu strony.
     queryUnits(supabase, filters, [(page - 1) * PER_PAGE, page * PER_PAGE - 1]).catch((e) => {
-      if (pickedCats.length) return { rows: [] as UnitRow[], count: 0, catError: true };
+      if (pickedCats.length || sp.shopify) return { rows: [] as UnitRow[], count: 0, catError: true };
       throw e;
     }),
     supabase.from("stores").select("id, name").order("name"),
@@ -98,11 +98,14 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
   // Shopify: SKU rozmiaru, wersja robocza (draft) i tag „reused” produktu w sklepie sztuki.
   const productIds = [...new Set(rows.map((r) => r.variant.product.id))];
   const variantIds = [...new Set(rows.map((r) => r.variant.id))];
-  const [{ data: contractRows }, { data: pLinks }, { data: vLinks }] = await Promise.all([
+  const [{ data: contractRows }, { data: pLinks }, { data: vLinks }, { data: prodFlags }] = await Promise.all([
     contractIds.length ? supabase.from("contracts").select(CONTRACT_LITE_FIELDS).in("id", contractIds) : Promise.resolve({ data: [] }),
     productIds.length ? supabase.from("product_store_links").select("product_id, store_id, status, tags").in("product_id", productIds) : Promise.resolve({ data: [] }),
     variantIds.length ? supabase.from("variant_store_links").select("variant_id, store_id, sku").in("variant_id", variantIds) : Promise.resolve({ data: [] }),
+    // Produkty spoza katalogu Shopify („nieprzypisany do Shopify”) – bez SQL 63 kolumny nie ma, wtedy nic.
+    productIds.length ? supabase.from("products").select("*").in("id", productIds).then((r) => r, () => ({ data: [] })) : Promise.resolve({ data: [] }),
   ]);
+  const unassignedIds = new Set(((prodFlags ?? []) as { id: string; unassigned?: boolean }[]).filter((p) => p.unassigned).map((p) => p.id));
   const contractById = new Map((contractRows ?? []).map((c) => [c.id as string, c as unknown as ContractLite]));
   type PL = { product_id: string; store_id: string; status: string | null; tags: string[] | null };
   const shopOf = (productId: string, storeId: string) => {
@@ -167,7 +170,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
       {sp.ok && <div className="mb-4"><Notice tone="ok">{sp.ok}</Notice></div>}
       {sp.zmiany && <ChangesPreview id={sp.zmiany} />}
       {sp.blad && <div className="mb-4"><Notice tone="error">{sp.blad}</Notice></div>}
-      {catError && <div className="mb-4"><Notice tone="error">Filtr kategorii wymaga SQL 58 w Supabase (kolekcje ze Shopify).</Notice></div>}
+      {catError && <div className="mb-4"><Notice tone="error">{sp.shopify ? "Filtr „Nieprzypisane do Shopify” wymaga SQL 63 w Supabase." : "Filtr kategorii wymaga SQL 58 w Supabase (kolekcje ze Shopify)."}</Notice></div>}
 
       <ListToolbar
         q={sp.q}
@@ -187,6 +190,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
           forma: (v) => PURCHASE_FORM[v] ?? null,
           rozmiar: (v) => `rozmiar ${v}`,
           imei: (v) => (v === "jest" ? "z IMEI" : "bez IMEI"),
+          shopify: (v) => (v === "nieprzypisane" ? "nieprzypisane do Shopify" : null),
           cena_od: (v) => `cena od ${v} zł`,
           cena_do: (v) => `cena do ${v} zł`,
           zakup_od: (v) => `zakup od ${v} zł`,
@@ -257,6 +261,12 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
             <option value="brak">Bez IMEI</option>
           </select>
         </FilterField>
+        <FilterField label="Shopify">
+          <select className="input" name="shopify" defaultValue={sp.shopify ?? ""}>
+            <option value="">Wszystkie</option>
+            <option value="nieprzypisane">Nieprzypisane do Shopify</option>
+          </select>
+        </FilterField>
         <FilterField label="Rozmiar">
           <input className="input" name="rozmiar" defaultValue={sp.rozmiar} placeholder="np. 42" />
         </FilterField>
@@ -310,7 +320,11 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
                       <span className="min-w-0">
                         <span className="line-clamp-2 font-medium leading-tight hover:underline">{u.variant.product.title}{shop.reused && <span className="ml-1.5 inline-block rounded-full bg-amber-100 px-1.5 py-px align-middle text-[11px] font-semibold text-amber-800" title="Tag w Shopify: reused (używane)">reused</span>}</span>
                         <span className="block break-all text-xs text-muted">{u.variant.product.style_sku ?? "bez SKU"}</span>
-                        {u.shop_missing && (
+                        {unassignedIds.has(u.variant.product.id) ? (
+                          <span className="mt-0.5 flex flex-wrap gap-1">
+                            <span className="rounded bg-orange-100 px-1.5 py-0.5 text-[11px] font-semibold text-orange-800" title="Rzecz spoza katalogu – przypisz ją do produktu z Shopify na karcie sztuki">nieprzypisany do Shopify</span>
+                          </span>
+                        ) : u.shop_missing && (
                           <span className="mt-0.5 flex flex-wrap gap-1">
                             <span className="rounded bg-rose-100 px-1.5 py-0.5 text-[11px] font-semibold text-bad" title="Tego rozmiaru nie ma w żadnym sklepie Shopify">brak w Shopify</span>
                             {u.contract_id && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-semibold text-amber-800" title="Sztuka ma umowę – nie usuwamy jej automatycznie">umowa nadal aktywna</span>}

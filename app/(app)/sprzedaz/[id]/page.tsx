@@ -16,6 +16,7 @@ import type { ContractLite } from "@/lib/contracts/stage";
 import { SwapForm } from "../SwapForm";
 import { LabelForm } from "./LabelForm";
 import { OrderOps } from "./OrderOps";
+import { manualPayment } from "@/lib/orders/payment";
 import { WtbButton, WtbOrderButton } from "@/components/WtbButton";
 import { ReceiptButton } from "@/components/ReceiptButton";
 import { fiscalPrinterReady } from "@/lib/fiscal/jobs";
@@ -267,6 +268,7 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
             hasLabels={activeShipments.length > 0}
             canCancel={status !== "returned" && status !== "cancelled"}
             canRefund={status !== "returned" || Number(order.refund_pending ?? 0) + Number(order.refunded_amount ?? 0) < Number(order.total ?? 0)}
+            manualRefund={manualPayment(order)}
           />
         </section>
       )}

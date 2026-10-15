@@ -318,3 +318,22 @@ export async function alignUnitNow(formData: FormData) {
   revalidatePath("/magazyn");
   return go("ok", text);
 }
+
+/** Sztuka „nieprzypisana do Shopify” → wybrany rozmiar z katalogu (na stanie: +1 w Shopify). */
+export async function assignUnitToShopify(formData: FormData) {
+  const { supabase } = await requireSection("magazyn", "dostawa");
+  const id = String(formData.get("id") ?? "");
+  const variant = String(formData.get("variant_id") ?? "");
+  const go = (k: "ok" | "blad", m: string) => redirect(`/magazyn/${id}?${k}=${encodeURIComponent(m)}`);
+  if (!/^[0-9a-f-]{36}$/.test(variant)) return go("blad", "Wybierz produkt i rozmiar z katalogu.");
+  const { data, error } = await supabase.rpc("assign_unit_variant", { p_unit: id, p_variant: variant });
+  if (error) return go("blad", error.message);
+  const r = data as { status: string; location_id: string };
+  let note = "";
+  if (r.status === "in_stock") {
+    const [res] = await adjustStock(supabase, [{ variantId: variant, locationId: r.location_id, delta: 1 }]);
+    note = res ? (res.ok ? " Stan w Shopify +1." : ` Stan w Shopify: ${res.message}`) : "";
+  }
+  revalidatePath("/magazyn");
+  return go("ok", `Sztuka przypisana do produktu z Shopify.${note}`);
+}

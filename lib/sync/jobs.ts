@@ -44,7 +44,7 @@ export async function runFastJobs(db: SupabaseClient) {
   }
   try {
     const r = await notifyConsignorSales(db);
-    if (r.sent || "errors" in r) await db.from("sync_log").insert({ job: "consignor-mail", ok: !("errors" in r), message: JSON.stringify(r) });
+    if (r.sent || ("reminded" in r && (r.reminded || r.monthly)) || "errors" in r) await db.from("sync_log").insert({ job: "consignor-mail", ok: !("errors" in r), message: JSON.stringify(r) });
   } catch (e) {
     await db.from("sync_log").insert({ job: "consignor-mail", ok: false, message: errorMessage(e) });
   }

@@ -39,8 +39,10 @@ function GoodsChoice({ allowKeep }: { allowKeep: boolean }) {
 }
 
 /** Anulowanie z całkowitym zwrotem i zwrot częściowy z wyborem pozycji / kwoty (tylko administrator). */
-export function OrderOps({ orderId, lines, paid, shippingPrice, hasLabels, canCancel, canRefund }: {
+export function OrderOps({ orderId, lines, paid, shippingPrice, hasLabels, canCancel, canRefund, manualRefund = null }: {
   orderId: string; lines: Line[]; paid: boolean; shippingPrice: number; hasLabels: boolean; canCancel: boolean; canRefund: boolean;
+  /** „za pobraniem” / „przelewem tradycyjnym” – Shopify nie zwróci pieniędzy sam. */
+  manualRefund?: string | null;
 }) {
   const [open, setOpen] = useState<"cancel" | "refund" | null>(null);
   const [cancelState, cancelAction, cancelPending] = useActionState<OrderOpState, FormData>(cancelOrderAction, null);
@@ -84,6 +86,7 @@ export function OrderOps({ orderId, lines, paid, shippingPrice, hasLabels, canCa
               {paid
                 ? <label className="flex items-center gap-2"><input type="checkbox" name="refund" defaultChecked /> Zwróć klientowi całą kwotę (na oryginalną metodę płatności)</label>
                 : <p className="text-muted">Zamówienie nie jest opłacone – nie ma czego zwracać.</p>}
+              {paid && manualRefund && <p className="rounded-md border border-amber-300 bg-amber-50 p-2 text-sm text-amber-900"><b>Uwaga:</b> zamówienie opłacone {manualRefund} – Shopify nie odeśle pieniędzy sam. Po anulowaniu przelej kwotę klientowi; w „Do zrobienia” pojawi się przypomnienie.</p>}
               <label className="flex items-center gap-2"><input type="checkbox" name="notify" defaultChecked /> Wyślij klientowi e-mail o anulowaniu</label>
               {hasLabels && <label className="flex items-center gap-2"><input type="checkbox" name="cancel_labels" defaultChecked /> Anuluj nieodebraną etykietę w Furgonetce</label>}
             </div>
@@ -131,6 +134,7 @@ export function OrderOps({ orderId, lines, paid, shippingPrice, hasLabels, canCa
                 </div>
               )}
             </div>
+            {money && manualRefund && <p className="rounded-md border border-amber-300 bg-amber-50 p-2 text-sm text-amber-900"><b>Uwaga:</b> zamówienie opłacone {manualRefund} – Shopify nie odeśle pieniędzy sam. Po zapisaniu przelej kwotę klientowi; w „Do zrobienia” pojawi się przypomnienie z kwotą i danymi klienta.</p>}
             <GoodsChoice allowKeep />
             <div><input className="input" name="note" placeholder="Notatka do zwrotu (opcjonalnie)" aria-label="Notatka do zwrotu" /></div>
             <Result state={refundState} />

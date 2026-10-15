@@ -17,6 +17,7 @@ export type UnitFilters = {
   od?: string; // data przyjęcia od (YYYY-MM-DD)
   do?: string;
   imei?: string; // "jest" | "brak"
+  shopify?: string; // "nieprzypisane" – sztuki produktów spoza katalogu Shopify
   kat?: string; // kategorie (kolekcje Shopify) rozdzielone „|” – sztuki z produktów w którejkolwiek z nich
   sort?: string;
   kier?: string; // asc | desc
@@ -100,6 +101,7 @@ export async function queryUnits(db: SupabaseClient, f: UnitFilters, range?: [nu
   if (f.rozmiar?.trim()) query = query.ilike("option", `${f.rozmiar.trim().replace(/[%,()*\\]/g, "")}%`);
   if (f.imei === "jest") query = query.not("identifier", "is", null);
   if (f.imei === "brak") query = query.is("identifier", null);
+  if (f.shopify === "nieprzypisane") query = query.is("unassigned", true);
   const cats = parseCategories(f.kat);
   if (cats.length) query = query.overlaps("collections", `{${cats.map((c) => `"${c.replace(/["\\]/g, "\\$&")}"`).join(",")}}`);
   const [cOd, cDo, zOd, zDo] = [num(f.cena_od), num(f.cena_do), num(f.zakup_od), num(f.zakup_do)];

@@ -9,7 +9,8 @@ import { describeEvent, type HistoryEvent } from "@/lib/history";
 import { CONTRACT_TYPE, dateOnly, dateTime, EVENT_TYPE, money, PURCHASE_FORM, SALE_STATUS, UNIT_STATUS } from "@/lib/labels";
 import { Field, Notice, PageHeader, Pill, StatusBadge } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
-import { alignUnitNow, changeStatus, deleteUnit, updateUnit } from "../actions";
+import { alignUnitNow, assignUnitToShopify, changeStatus, deleteUnit, updateUnit } from "../actions";
+import { VariantPick } from "@/components/VariantPick";
 import { diagnoseUnitStock } from "@/lib/unit-stock";
 import { errorMessage } from "@/lib/errors";
 import { expectedPrices } from "@/lib/contracts/inherit-price";
@@ -18,10 +19,10 @@ const NEXT_STATUS: Record<string, { to: string; label: string; danger?: boolean 
   in_transit: [{ to: "in_stock", label: "Przyjmij na stan" }],
   in_stock: [
     { to: "reserved", label: "Zarezerwuj (−1 w Shopify)" },
-    { to: "out", label: "Wydaj poza sklepem (przedmiot się usunie, a umowa doda się do niewykorzystanych)", danger: true },
+    { to: "out", label: "Wydaj poza sklepem (rzecz znika z magazynu, umowa – do niewykorzystanych)", danger: true },
     { to: "in_transit", label: "Cofnij do „w drodze”" },
   ],
-  reserved: [{ to: "in_stock", label: "Zdejmij rezerwację" }, { to: "out", label: "Wydaj poza sklepem (przedmiot się usunie, a umowa doda się do niewykorzystanych)", danger: true }],
+  reserved: [{ to: "in_stock", label: "Zdejmij rezerwację" }, { to: "out", label: "Wydaj poza sklepem (rzecz znika z magazynu, umowa – do niewykorzystanych)", danger: true }],
   sold: [{ to: "shipped", label: "Oznacz jako wysłaną" }, { to: "return_to_stock", label: "Zwrot – wraca na stan" }, { to: "returned", label: "Zwrot – do sprawdzenia" }],
   shipped: [{ to: "return_to_stock", label: "Zwrot – wraca na stan" }, { to: "returned", label: "Zwrot – do sprawdzenia" }],
   returned: [{ to: "in_stock", label: "Przywróć na stan" }],
@@ -53,6 +54,9 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
 
   // „Sprawdź stan w Shopify” – na żywo, tylko na żądanie (zapytanie do Shopify).
   const shopDiag = sp.shopify === "1" ? await diagnoseUnitStock(createAdminClient(), u.id).catch((e) => ({ levels: [], reasons: [], product: null, canAlign: false, master: "shopify" as const, error: errorMessage(e) })) : null;
+  // Produkt spoza katalogu Shopify (z paczki komisanta / linku ogólnego) – do ręcznego przypisania.
+  const { data: prodFlags } = await supabase.from("products").select("*").eq("id", u.variant.product.id).maybeSingle();
+  const unassigned = !!(prodFlags as { unassigned?: boolean } | null)?.unassigned;
   const images = await productImages(createAdminClient(), u.variant.product.id, u.location.store_id, u.variant.product.image_url).catch(() => []);
   let fileUrl: string | null = null;
   if (contract?.file_path) {
@@ -76,6 +80,17 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
       />
       {sp.ok && <div className="mb-4"><Notice tone="ok">{sp.ok}</Notice></div>}
       {sp.blad && <div className="mb-4"><Notice tone="error">{sp.blad}</Notice></div>}
+      {unassigned && (
+        <section className="card mb-5 border-orange-300 bg-orange-50/50 p-4">
+          <h2 className="h2 mb-1">Nieprzypisany do Shopify</h2>
+          <p className="mb-3 text-sm text-muted">Tej rzeczy nie było w katalogu („{u.variant.product.title} · {u.variant.option}”). Nie ma jej w Shopify, więc nie ma ceny ani stanu w sklepie. Wybierz produkt i rozmiar z katalogu – sztuka się z nim połączy{u.status === "in_stock" ? ", a stan w Shopify wzrośnie o 1" : ""}. Nowego produktu? Dodaj go najpierw w Shopify.</p>
+          <form action={assignUnitToShopify} className="max-w-xl space-y-2">
+            <input type="hidden" name="id" value={u.id} />
+            <VariantPick name="variant_id" storeId={u.location.store_id} label="Produkt z katalogu" />
+            <SubmitButton pendingText="Przypisuję…">Przypisz do produktu z Shopify</SubmitButton>
+          </form>
+        </section>
+      )}
 
       <div className="grid gap-5 lg:grid-cols-3">
         <div className="min-w-0 space-y-5 lg:col-span-2">
@@ -247,7 +262,7 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
                 <form key={s.to} action={changeStatus}>
                   <input type="hidden" name="id" value={u.id} />
                   <input type="hidden" name="to" value={s.to} />
-                  <SubmitButton className="btn-secondary w-full" pendingText="Zmieniam…">{s.label}</SubmitButton>
+                  <SubmitButton className="btn-secondary h-auto w-full whitespace-normal py-2 text-center leading-snug" pendingText="Zmieniam…">{s.label}</SubmitButton>
                 </form>
               ))}
             </div>

@@ -93,7 +93,7 @@ export async function AcceptTab() {
 
       {signed.map((c) => {
         const items = c.items ?? [];
-        const needsLocation = !c.location_id && items.some((it) => !it.unit_id && it.variant_id);
+        const needsLocation = !c.location_id && items.some((it) => !it.unit_id);
         const needsAssign = items.some((it) => !it.unit_id && !it.variant_id);
         return (
           <div key={c.id} className="card space-y-3 p-4">
@@ -231,7 +231,7 @@ export async function TransitTab() {
                       <td className="font-medium">{x.option ?? "–"}</td>
                       <td className="whitespace-nowrap text-sm">{PURCHASE_FORM_SHORT[x.purchase_form] ?? "VAT marża"}</td>
                       {profile.can_see_prices && <td className="text-right tabular-nums">{money(x.final_price)}</td>}
-                      <td className="min-w-64">{x.variant_id ? <span className="text-sm text-ok">z katalogu ✓</span> : <VariantPick name={`v_${x.id}`} storeId={loc?.store_id ?? ""} label="Wybierz produkt i rozmiar" />}</td>
+                      <td className="min-w-64">{x.variant_id ? <span className="text-sm text-ok">z katalogu ✓</span> : <VariantPick name={`v_${x.id}`} storeId={loc?.store_id ?? ""} label="Produkt z katalogu (puste = nieprzypisany do Shopify)" />}</td>
                     </tr>
                   ))}
                 </tbody>

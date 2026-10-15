@@ -251,7 +251,8 @@ async function TemplateSection({ c, canSeePrices }: { c: TemplateContract; canSe
     && items.some((i) => !i.unit_id && !i.variant_id);
   const { data: locations } = needsAssign ? await supabase.from("locations").select("id, name, store_id, store:stores(name)").eq("active", true) : { data: [] };
   // Umowa z ogólnego linku z modelami z katalogu: przy zatwierdzeniu wybierasz, dokąd przyjdzie towar.
-  const needsLocation = c.status === "signed" && !c.location_id && items.some((i) => !i.unit_id && i.variant_id);
+  // Rzeczy bez sztuki (z katalogu albo spoza – „nieprzypisane do Shopify”) powstaną w wybranej lokalizacji.
+  const needsLocation = c.status === "signed" && !c.location_id && items.some((i) => !i.unit_id);
   const { data: acceptLocations } = needsLocation
     ? await supabase.from("locations").select("id, name, store:stores(name)").eq("active", true).order("name")
     : { data: [] };

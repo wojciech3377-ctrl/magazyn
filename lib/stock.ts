@@ -28,7 +28,12 @@ export async function adjustStock(db: SupabaseClient, changes: StockChange[]) {
       if (!loc.shopify_location_id) throw new Error(`lokalizacja „${loc.name}” nie ma przypisanej lokalizacji Shopify (Ustawienia → Stany magazynowe)`);
       const { data: link } = await db.from("variant_store_links").select("shopify_inventory_item_id")
         .eq("variant_id", c.variantId).eq("store_id", store.id).not("shopify_inventory_item_id", "is", null).limit(1).maybeSingle();
-      if (!link) throw new Error(`ten rozmiar nie ma wariantu w Shopify ${store.name}`);
+      if (!link) {
+        // Produkt „nieprzypisany do Shopify” (spoza katalogu) – nie ma czego zmieniać, dojdzie po przypisaniu.
+        const { data: v } = await db.from("variants").select("product:products(*)").eq("id", c.variantId).maybeSingle();
+        if ((v?.product as { unassigned?: boolean } | null)?.unassigned) { results.push({ ...c, ok: true, message: "nieprzypisany do Shopify – bez zmiany stanu" }); continue; }
+        throw new Error(`ten rozmiar nie ma wariantu w Shopify ${store.name}`);
+      }
       const data = await shopifyGraphql<{ inventoryAdjustQuantities: { userErrors: { message: string }[] } }>(
         store.shopify_domain, store.code,
         `mutation Adj($input: InventoryAdjustQuantitiesInput!, $key: String!) { inventoryAdjustQuantities(input: $input) @idempotent(key: $key) { inventoryAdjustmentGroup { id } userErrors { field message } } }`,

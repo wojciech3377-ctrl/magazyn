@@ -1,5 +1,7 @@
 "use server";
 
+import { manualPayment } from "@/lib/orders/payment";
+
 import { revalidatePath } from "next/cache";
 import { requireAdmin, requireSection } from "@/lib/auth";
 import { errorMessage } from "@/lib/errors";
@@ -227,12 +229,13 @@ export type OrderOpState = { error?: string; ok?: string; notes?: string[] } | n
 
 type OrderForOp = {
   id: string; store_id: string; shopify_order_id: string; name: string; cancelled_at: string | null; line_items: LineItem[];
+  cod: boolean | null; payment_gateways: string[] | null; customer_name: string | null; email: string | null; total: number | null;
   store: { code: string; shopify_domain: string | null } | null;
 };
 
 async function loadOrder(id: string) {
   const db = createAdminClient();
-  const { data } = await db.from("orders").select("id, store_id, shopify_order_id, name, cancelled_at, line_items, store:stores(code, shopify_domain)").eq("id", id).maybeSingle();
+  const { data } = await db.from("orders").select("id, store_id, shopify_order_id, name, cancelled_at, line_items, cod, payment_gateways, customer_name, email, total, store:stores(code, shopify_domain)").eq("id", id).maybeSingle();
   return data as unknown as OrderForOp | null;
 }
 
@@ -247,7 +250,8 @@ async function releaseSales(saleIds: string[], backToStock: boolean, notes: stri
   const changes: StockChange[] = [];
   for (const s of sales ?? []) {
     const u = s.unit as unknown as { id: string; code: string; status: string; variant_id: string; location_id: string } | null;
-    if (u && ["sold", "shipped"].includes(u.status)) {
+    // Także „zarezerwowana” (zamówienie bez paragonu): Shopify przy anulowaniu / zwrocie w aplikacji nie przywraca stanu.
+    if (u && ["sold", "shipped", "reserved"].includes(u.status)) {
       const { error } = await supabase.rpc("return_unit", { p_unit_id: u.id, p_back_to_stock: backToStock });
       if (error) notes.push(`${u.code}: ${error.message}`);
       else if (backToStock) changes.push({ variantId: u.variant_id, locationId: u.location_id, delta: 1 });
@@ -258,6 +262,19 @@ async function releaseSales(saleIds: string[], backToStock: boolean, notes: stri
   if (changes.length) {
     for (const r of await adjustStock(supabase, changes)) if (!r.ok) notes.push(`Stan w Shopify: ${r.message}`);
   }
+}
+
+/** Przypomnienie w „Do zrobienia”: zwrot pieniędzy, którego Shopify nie zrobi (pobranie / zwykły przelew). */
+async function manualRefundTask(order: OrderForOp, kind: string, amount: number | null) {
+  const today = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Warsaw" });
+  const kwota = amount !== null ? `${amount.toFixed(2).replace(".", ",")} zł` : "pieniądze";
+  const { error } = await createAdminClient().from("tasks").insert({
+    title: `Przelej zwrot ${kwota} – zamówienie ${order.name}`,
+    notes: [`Zamówienie ${order.name} było opłacone ${kind} – Shopify nie odeśle pieniędzy sam. Zrób przelew i odhacz zadanie.`,
+      order.customer_name ? `Klient: ${order.customer_name}` : "", order.email ? `E-mail: ${order.email}` : ""].filter(Boolean).join("\n"),
+    priority: "high", due_date: today, start_date: today, assignees: [],
+  });
+  return error ? `Nie udało się dodać przypomnienia: ${error.message}` : `Dodane przypomnienie w „Do zrobienia”: przelej ${kwota} klientowi.`;
 }
 
 /** Anulowanie zamówienia: Shopify (zwrot pieniędzy), etykieta w Furgonetce, sztuki z powrotem na stan. */
@@ -301,6 +318,9 @@ export async function cancelOrderAction(_: OrderOpState, fd: FormData): Promise<
       }
     }
   }
+
+  const manualKind = manualPayment(order);
+  if (fd.get("refund") && manualKind) notes.push(`Zamówienie opłacone ${manualKind} – Shopify nie zwróci pieniędzy. ${await manualRefundTask(order, manualKind, order.total !== null ? Number(order.total) : null)}`);
 
   const { data: sales } = await db.from("sales").select("id").eq("order_id", order.id);
   await releaseSales((sales ?? []).map((s) => s.id), str(fd, "units") !== "check", notes);
@@ -348,7 +368,12 @@ export async function returnOrderAction(_: OrderOpState, fd: FormData): Promise<
       const r = await refundShopifyLines(order.store.shopify_domain, order.store.code, order.shopify_order_id,
         picked.map((p) => ({ lineItemId: p.line.id, quantity: p.qty })),
         { refundMoney, shipping, notify: !!fd.get("notify"), note: str(fd, "note") || undefined, amount, keepGoods: goods === "keep", key: /^[0-9a-f-]{36}$/i.test(str(fd, "nonce")) ? `zwrot-${str(fd, "nonce")}` : undefined });
-      summary = r.moneyBack ? ` Zwrot pieniędzy: ${(amount ?? r.suggested).toFixed(2)} zł.` : refundMoney ? " Shopify nie zwrócił pieniędzy automatycznie (np. płatność za pobraniem) – oddaj je ręcznie." : "";
+      const manualKind = manualPayment(order);
+      summary = r.moneyBack && !manualKind ? ` Zwrot pieniędzy: ${(amount ?? r.suggested).toFixed(2)} zł.` : "";
+      if (refundMoney && (!r.moneyBack || manualKind)) {
+        const kind = manualKind ?? "płatnością, której Shopify nie zwraca automatycznie";
+        notes.push(`Zamówienie opłacone ${kind} – Shopify nie odeśle pieniędzy. ${await manualRefundTask(order, kind, amount ?? r.suggested)}`);
+      }
     } catch (e) {
       return { error: errorMessage(e) };
     }

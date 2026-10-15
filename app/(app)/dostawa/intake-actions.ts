@@ -70,9 +70,16 @@ export async function receiveIntake(fd: FormData) {
   const list = (items ?? []) as IntakeItem[];
   const got = list.filter((i) => fd.get(`got_${i.id}`));
   if (!got.length) back("w-drodze", "Zaznacz rzeczy, które dotarły.", false);
+  // Rzecz spoza katalogu (nie wybrano produktu) – produkt „nieprzypisany do Shopify”, przypiszesz go później na karcie sztuki.
+  let unassigned = 0;
   for (const i of got) {
-    const v = i.variant_id ?? (String(fd.get(`v_${i.id}`) ?? "") || null);
-    if (!v) back("w-drodze", `Wybierz produkt z katalogu dla: ${i.title} ${i.option ?? ""}`, false);
+    let v = i.variant_id ?? (String(fd.get(`v_${i.id}`) ?? "") || null);
+    if (!v) {
+      const { data: nv, error: ne } = await db.rpc("create_unassigned_variant", { p_title: i.title, p_option: i.option ?? "" });
+      if (ne || !nv) back("w-drodze", /create_unassigned_variant|schema cache/i.test(ne?.message ?? "") ? `Wybierz produkt z katalogu dla: ${i.title} ${i.option ?? ""} (rzeczy spoza katalogu wymagają SQL 63).` : `Nie udało się dodać „${i.title}”: ${ne?.message ?? ""}`, false);
+      v = nv as string;
+      unassigned++;
+    }
     i.variant_id = v;
   }
   // Przejęcie paczki (drugi klik / równoległe przyjęcie nic nie zdubluje).
@@ -116,7 +123,7 @@ export async function receiveIntake(fd: FormData) {
     { href: `${await appUrl()}/komis`, label: "Otwórz panel" });
   revalidatePath("/dostawa");
   revalidatePath("/magazyn");
-  redirect(`/dostawa/${deliveryId}`);
+  redirect(`/dostawa/${deliveryId}${unassigned ? `?ok=${encodeURIComponent(`${unassigned} szt. spoza katalogu ma status „nieprzypisany do Shopify” – przypisz je na karcie sztuki (Magazyn → filtr „Nieprzypisane do Shopify”).`)}` : ""}`);
 }
 
 /** Umowa podpisana przez sprzedającego: nasza oferta cenowa (nowe kwoty pozycji) → e-mail z linkiem do akceptacji. */

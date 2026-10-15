@@ -345,7 +345,22 @@ export async function acceptContract(formData: FormData) {
   let unlinked = false;
   const errors: string[] = [];
   for (const g of group ?? []) {
-    const items = (g.items ?? []) as { unit_id?: string; variant_id?: string }[];
+    let items = (g.items ?? []) as { unit_id?: string; variant_id?: string; title?: string; option?: string; unassigned?: boolean }[];
+    // Pozycje spoza katalogu (np. z ogólnego linku) → produkt „nieprzypisany do Shopify”; przypiszesz go na karcie sztuki.
+    if (items.some((i) => !i.unit_id && !i.variant_id)) {
+      const admin = (await import("@/lib/supabase/admin")).createAdminClient();
+      const next = [];
+      for (const it of items) {
+        if (it.unit_id || it.variant_id) { next.push(it); continue; }
+        const { data: nv, error: ne } = await admin.rpc("create_unassigned_variant", { p_title: it.title ?? "", p_option: it.option ?? "" });
+        next.push(ne || !nv ? it : { ...it, variant_id: nv as string, unassigned: true });
+      }
+      if (next.every((i) => i.unit_id || i.variant_id)) {
+        await supabase.from("contracts").update({ items: next }).eq("id", g.id);
+        items = next;
+        msgs.push("Rzeczy spoza katalogu mają status „nieprzypisany do Shopify” – przypisz je na karcie sztuki.");
+      }
+    }
     if (items.every((i) => i.unit_id || i.variant_id)) {
       const fin = await supabase.rpc("finalize_contract", { p_contract_id: g.id });
       if (fin.error) errors.push(`Sztuki (nr ${g.number}): ${fin.error.message}`);
