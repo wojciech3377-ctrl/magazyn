@@ -2,6 +2,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { shopifyGraphql } from "@/lib/integrations/shopify";
 import { splitProductGids, type Store } from "@/lib/sync/catalog";
+import { getStockMaster, pushStockToShopify } from "@/lib/sync/shopify-stock";
 
 /**
  * „Dlaczego aplikacja pokazuje inny stan niż Shopify?” – dla produktów pasujących do wyszukiwania:
@@ -92,6 +93,14 @@ export async function diagnoseStock(db: SupabaseClient, input: string): Promise<
  */
 export async function fixProductStock(db: SupabaseClient, text: string) {
   const first = await diagnoseStock(db, text);
+  // Główny jest magazyn aplikacji: to aplikacja ma rację – stan tych rozmiarów idzie do Shopify, sztuki zostają.
+  if ((await getStockMaster(db)) === "app") {
+    const ids = new Set(first.rows.map((r) => r.appVariantId).filter((x): x is string => !!x));
+    const pushed = ids.size ? await pushStockToShopify(db, 500, ids) : {};
+    const totals = Object.entries(pushed).map(([store, v]) => ({ store, added: 0, removed: 0, pushed: typeof v === "object" && v ? Number((v as { changed?: number }).changed ?? 0) : 0 }));
+    const errors = [...first.errors, ...Object.entries(pushed).flatMap(([store, v]) => (v && typeof v === "object" && "errors" in v ? [`${store}: ${((v as { errors: string[] }).errors).join("; ")}`] : typeof v === "string" ? [`${store}: ${v}`] : []))];
+    return { split: 0, totals, errors, master: "app" as const };
+  }
   const { data: stores } = await db.from("stores").select("*").not("shopify_domain", "is", null);
   let split = 0;
   const sharedVariants = [...new Set(first.rows.filter((r) => r.shared > 1 && r.appVariantId).map((r) => `${r.store}|${r.appVariantId}`))];
@@ -108,7 +117,7 @@ export async function fixProductStock(db: SupabaseClient, text: string) {
   }
   const { rows, errors } = split ? await diagnoseStock(db, text) : first;
   const { data: locs } = await db.from("locations").select("id, store_id, shopify_location_id, created_at").eq("active", true).not("shopify_location_id", "is", null).order("created_at");
-  const totals: { store: string; added: number; removed: number }[] = [];
+  const totals: { store: string; added: number; removed: number; pushed: number }[] = [];
   for (const st of stores ?? []) {
     const mine = (locs ?? []).filter((l) => l.store_id === st.id);
     const byShopLoc = new Map<string, string[]>();
@@ -133,7 +142,7 @@ export async function fixProductStock(db: SupabaseClient, text: string) {
     });
     if (error) { errors.push(`${st.name}: ${error.message}`); continue; }
     const d = data as { created?: number; removed?: number; withdrawn?: number };
-    totals.push({ store: st.name as string, added: d.created ?? 0, removed: (d.removed ?? 0) + (d.withdrawn ?? 0) });
+    totals.push({ store: st.name as string, added: d.created ?? 0, removed: (d.removed ?? 0) + (d.withdrawn ?? 0), pushed: 0 });
   }
-  return { split, totals, errors };
+  return { split, totals, errors, master: "shopify" as const };
 }

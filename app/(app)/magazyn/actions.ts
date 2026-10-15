@@ -309,7 +309,9 @@ export async function alignUnitNow(formData: FormData) {
   try {
     const { alignUnitVariant } = await import("@/lib/unit-stock");
     const r = await alignUnitVariant(createAdminClient(), id);
-    text = `Wyrównano do Shopify: dodano ${r.created ?? 0}, usunięto ${r.removed ?? 0}, wycofano ${r.withdrawn ?? 0}${r.kept ? `, zostaje ${r.kept} (komis albo ruch w ostatnich 30 min)` : ""}.`;
+    text = r.master === "app"
+      ? `Stan w Shopify ustawiony według aplikacji (zmieniono ${r.pushed ?? 0}). Sztuki zostają.`
+      : `Wyrównano do Shopify: dodano ${r.created ?? 0}, usunięto ${r.removed ?? 0}, wycofano ${r.withdrawn ?? 0}${r.kept ? `, zostaje ${r.kept} (komis albo ruch w ostatnich 30 min)` : ""}.`;
   } catch (e) {
     return go("blad", errorMessage(e));
   }

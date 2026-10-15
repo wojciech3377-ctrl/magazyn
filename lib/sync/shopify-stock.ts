@@ -87,6 +87,22 @@ async function trackedLinks(db: SupabaseClient, storeId: string) {
   return out;
 }
 
+/**
+ * Sztuki na stanie w lokalizacjach (wariant × lokalizacja). Supabase oddaje najwyżej 1000 wierszy na zapytanie –
+ * czytamy stronami. Wcześniej przy ponad 1000 rozmiarach na stanie reszta liczyła się jako 0, a zapis
+ * „aplikacja → Shopify” zerował im stan na stronie.
+ */
+async function allStockCounts(db: SupabaseClient, locationIds: string[]) {
+  const out: { variant_id: string; location_id: string; qty: number }[] = [];
+  for (let from = 0; from < 1_000_000; from += 1000) {
+    const { data, error } = await db.rpc("stock_counts", { p_location_ids: locationIds }).order("variant_id").order("location_id").range(from, from + 999);
+    if (error) throw error;
+    out.push(...((data ?? []) as typeof out));
+    if ((data ?? []).length < 1000) break;
+  }
+  return out;
+}
+
 /** Lokalizacje aplikacji sklepu pogrupowane po lokalizacji Shopify (pierwsza – tam trafiają nowe sztuki). */
 function groupByShopLocation(mapped: Loc[]) {
   const groups = new Map<string, Loc[]>();
@@ -191,15 +207,14 @@ export async function reconcileShopifyLevel(db: SupabaseClient, storeId: string,
 type Change = { inventoryItemId: string; locationId: string; quantity: number; changeFromQuantity: number };
 
 /** Różnice, gdyby aplikacja była główna: ile pozycji w Shopify trzeba zmienić (bez zapisu). */
-export async function planPushToShopify(db: SupabaseClient) {
+export async function planPushToShopify(db: SupabaseClient, onlyVariants?: Set<string>) {
   const { stores, locs } = await storesAndLocations(db);
   const plan: { store: Store; changes: Change[]; note?: string }[] = [];
   for (const s of stores) {
     const mapped = locs.filter((l) => l.store_id === s.id && l.active && l.shopify_location_id);
     if (!mapped.length) { plan.push({ store: s, changes: [], note: "brak lokalizacji Shopify przy lokalizacjach aplikacji" }); continue; }
     const links = await trackedLinks(db, s.id);
-    const { data: counts, error } = await db.rpc("stock_counts", { p_location_ids: mapped.map((l) => l.id) });
-    if (error) throw error;
+    const counts = await allStockCounts(db, mapped.map((l) => l.id));
     const shopLocOf = new Map(mapped.map((l) => [l.id, l.shopify_location_id!]));
     const want = new Map<string, number>(); // `${variant}|${shopLoc}` → sztuk
     for (const c of (counts ?? []) as { variant_id: string; location_id: string; qty: number }[]) {
@@ -222,6 +237,7 @@ export async function planPushToShopify(db: SupabaseClient) {
         if (levels.has(l.shopify_inventory_item_id) && !owner.has(l.variant_id)) owner.set(l.variant_id, l.shopify_inventory_item_id);
       }
       for (const l of links) {
+        if (onlyVariants && !onlyVariants.has(l.variant_id)) continue;
         // Pozycja niepodpięta w tej lokalizacji Shopify – pomijamy (Shopify nie przyjmie stanu bez aktywacji).
         if (!levels.has(l.shopify_inventory_item_id)) continue;
         const current = levels.get(l.shopify_inventory_item_id)!;
@@ -236,26 +252,31 @@ export async function planPushToShopify(db: SupabaseClient) {
 }
 
 /** Aplikacja jest główna: zapis stanów do Shopify (porcjami, z kontrolą, że stan w Shopify się w międzyczasie nie zmienił). */
-export async function pushStockToShopify(db: SupabaseClient, maxChanges = 500) {
-  const plan = await planPushToShopify(db);
+export async function pushStockToShopify(db: SupabaseClient, maxChanges = 500, onlyVariants?: Set<string>) {
+  const plan = await planPushToShopify(db, onlyVariants);
   const results: Record<string, unknown> = {};
   for (const p of plan) {
     if (p.note) { results[p.store.name] = p.note; continue; }
     const todo = p.changes.slice(0, maxChanges);
     let done = 0;
     const errors: string[] = [];
+    const send = (batch: Change[]) => shopifyGraphql<{ inventorySetQuantities: { userErrors: { message: string; code: string | null }[] } }>(
+      p.store.shopify_domain, p.store.code,
+      `mutation Set($input: InventorySetQuantitiesInput!, $key: String!) { inventorySetQuantities(input: $input) @idempotent(key: $key) { inventoryAdjustmentGroup { id } userErrors { field message code } } }`,
+      { key: crypto.randomUUID(), input: { name: "available", reason: "correction", referenceDocumentUri: "magazyn://stan-z-aplikacji", quantities: batch } },
+    );
     for (let i = 0; i < todo.length; i += 100) {
       const batch = todo.slice(i, i + 100);
-      const data = await shopifyGraphql<{ inventorySetQuantities: { userErrors: { message: string; code: string | null }[] } }>(
-        p.store.shopify_domain, p.store.code,
-        `mutation Set($input: InventorySetQuantitiesInput!, $key: String!) { inventorySetQuantities(input: $input) @idempotent(key: $key) { inventoryAdjustmentGroup { id } userErrors { field message code } } }`,
-        { key: crypto.randomUUID(), input: { name: "available", reason: "correction", referenceDocumentUri: "magazyn://stan-z-aplikacji", quantities: batch } },
-      );
-      const errs = data.inventorySetQuantities.userErrors;
-      if (errs.length) errors.push(...errs.map((e) => e.message));
-      else done += batch.length;
+      const errs = (await send(batch)).inventorySetQuantities.userErrors;
+      if (!errs.length) { done += batch.length; continue; }
+      // Jedna zła pozycja blokuje całą paczkę – wtedy pozycja po pozycji, żeby reszta się zapisała.
+      for (const one of batch) {
+        const e1 = (await send([one]).catch((e) => ({ inventorySetQuantities: { userErrors: [{ message: String(e), code: null }] } }))).inventorySetQuantities.userErrors;
+        if (e1.length) errors.push(...e1.map((e) => e.message));
+        else done++;
+      }
     }
-    results[p.store.name] = { changed: done, left: p.changes.length - todo.length, ...(errors.length ? { errors: [...new Set(errors)].slice(0, 3) } : {}) };
+    results[p.store.name] = { changed: done, left: p.changes.length - todo.length, ...(errors.length ? { failed: errors.length, errors: [...new Set(errors)].slice(0, 3) } : {}) };
   }
   return results;
 }
@@ -279,8 +300,7 @@ export async function compareStock(db: SupabaseClient, limit = 300) {
     const mapped = locs.filter((l) => l.store_id === s.id && l.active && l.shopify_location_id);
     if (!mapped.length) { notes.push(`${s.name}: brak lokalizacji Shopify przy lokalizacjach aplikacji`); continue; }
     const links = await trackedLinks(db, s.id);
-    const { data: counts, error } = await db.rpc("stock_counts", { p_location_ids: mapped.map((l) => l.id) });
-    if (error) throw error;
+    const counts = await allStockCounts(db, mapped.map((l) => l.id));
     for (const [shopLoc, group] of groupByShopLocation(mapped)) {
       const levels = await readLevels(s.shopify_domain, s.code, shopLoc);
       const ids = new Set(group.map((g) => g.id));

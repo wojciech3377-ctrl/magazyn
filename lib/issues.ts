@@ -83,7 +83,15 @@ export function catalogIssues(r: {
       });
       continue;
     }
-    const d = (v ?? {}) as { kept?: number; uwaga?: string; withdrawn?: number };
+    const d = (v ?? {}) as { kept?: number; uwaga?: string; withdrawn?: number; failed?: number; errors?: string[]; left?: number };
+    if (d.failed) out.push({
+      key: `zapis:${store}`,
+      title: `${store}: nie udało się ustawić stanu w Shopify dla ${d.failed} rozmiarów`,
+      detail: (d.errors ?? []).join(" · "),
+      hint: "Główny jest magazyn aplikacji, więc te rozmiary mogą mieć w Shopify inny stan niż w aplikacji (np. 0 na stronie). Najczęściej rozmiar nie jest aktywny w tej lokalizacji Shopify – włącz go w Shopify (Produkt → Stan magazynowy → lokalizacja).",
+      href: stocks,
+    });
+    if ((d.left ?? 0) > 0) out.push({ key: `zapis-reszta:${store}`, title: `${store}: ${d.left} zmian stanu czeka na kolejny zapis do Shopify`, detail: "Automat zapisuje najwyżej 500 zmian naraz.", hint: "Reszta przejdzie przy kolejnych przebiegach (co ok. 20 min) albo po kliknięciu „Sprawdź nowe produkty i stany”.", showAfter: 3 });
     if ((d.kept ?? 0) > 0) out.push({
       key: `nadmiar:${store}`,
       title: `${store}: ${d.kept} szt. w aplikacji ponad stan w Shopify zostało`,

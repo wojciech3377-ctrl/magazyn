@@ -13,7 +13,8 @@ import { catalogIssues, syncIssues } from "@/lib/issues";
  * 2. stany: Shopify → sztuki w Magazynie albo (gdy główny jest magazyn aplikacji) aplikacja → Shopify.
  */
 
-type ShopState = { since: string; after: string | null; high: string };
+/** seen – produkty z datą zmiany równą `since` (już odczytane; Shopify szuka „od” włącznie), highIds – te przy `high`. */
+type ShopState = { since: string; after: string | null; high: string; seen?: string[]; highIds?: string[] };
 
 /**
  * Produkty ze Shopify zmienione od ostatniego razu (po 50 na stronę) – do limitu stron albo czasu;
@@ -32,13 +33,22 @@ export async function syncShopifyProductsIncremental(db: SupabaseClient, maxPage
     for (let page = 0; page < maxPages; page++) {
       if (Date.now() > deadline) { more = true; break; }
       const r = await productsUpdatedSince(store.shopify_domain!, store.code, state.since, state.after);
-      if (r.nodes.length) await upsertShopifyProducts(db, store, r.nodes);
-      count += r.nodes.length;
-      for (const p of r.nodes) if (p.updatedAt > state.high) state.high = p.updatedAt;
+      // Ostatni produkt z poprzedniego odczytu wraca przy każdym sprawdzeniu (zapytanie „od” jest włącznie) –
+      // pomijamy go, jeśli od tamtej pory się nie zmienił (np. „zmieniło się 2 produktów: AirPods 4” za każdym razem).
+      const seen = new Set(state.seen ?? []);
+      const fresh = r.nodes.filter((p) => !(p.updatedAt === state.since && seen.has(p.id)));
+      if (fresh.length) await upsertShopifyProducts(db, store, fresh);
+      count += fresh.length;
+      for (const p of r.nodes) {
+        if (p.updatedAt > state.high) { state.high = p.updatedAt; state.highIds = [p.id]; }
+        else if (p.updatedAt === state.high && !(state.highIds ?? []).includes(p.id)) state.highIds = [...(state.highIds ?? []), p.id];
+      }
       if (r.pageInfo.hasNextPage) {
         state.after = r.pageInfo.endCursor;
         more = page === maxPages - 1;
       } else {
+        if (state.high !== state.since) state.seen = state.highIds ?? [];
+        else state.seen = [...new Set([...(state.seen ?? []), ...(state.highIds ?? [])])];
         state.since = state.high;
         state.after = null;
         break;

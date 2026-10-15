@@ -335,8 +335,10 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
             {stock.diag?.data && stock.diag.data.rows.some((r) => r.reasons.length > 0 && r.tracked) && (
               <form action={fixProductStockNow} className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm">
                 <input type="hidden" name="sprawdz" value={sp.sprawdz} />
-                <span>Są różnice. Aplikacja może od razu rozdzielić połączone produkty i ustawić liczbę sztuk tych rozmiarów na stan z Shopify (komisu nie rusza).</span>
-                <SubmitButton pendingText="Wyrównuję…">Wyrównaj te produkty teraz</SubmitButton>
+                {stock.master === "app"
+                  ? <span>Są różnice. Główny jest <b>magazyn aplikacji</b> – przycisk ustawi stan tych rozmiarów w Shopify według sztuk w aplikacji (sztuki zostają).</span>
+                  : <span>Są różnice. Główny jest <b>Shopify</b> – aplikacja rozdzieli połączone produkty i ustawi liczbę sztuk tych rozmiarów na stan z Shopify (sztuki, których w Shopify nie ma, znikną; komisu nie rusza).</span>}
+                <SubmitButton pendingText="Wyrównuję…">{stock.master === "app" ? "Wyślij stan z aplikacji do Shopify" : "Wyrównaj te produkty teraz"}</SubmitButton>
               </form>
             )}
             {stock.diag?.error && <Notice tone="error">{stock.diag.error}</Notice>}

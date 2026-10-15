@@ -265,9 +265,10 @@ export async function fixProductStockNow(formData: FormData) {
   try {
     const { fixProductStock } = await import("@/lib/stock-diagnose");
     const r = await fixProductStock(db, text);
-    const parts = r.totals.map((t) => `${t.store}: dodano ${t.added}, usunięto ${t.removed}`);
     await db.from("sync_log").insert({ job: "stock", ok: !r.errors.length, message: `Wyrównanie „${text}”: ${JSON.stringify(r)}` });
     if (r.errors.length) back(r.errors.join(" · "), "blad");
+    if (r.master === "app") back(`Główny jest magazyn aplikacji – sztuki zostają, stan w Shopify ustawiony według aplikacji. ${r.totals.map((t) => `${t.store}: zmieniono ${t.pushed}`).join(" · ") || "Bez zmian."}`, "ok");
+    const parts = r.totals.map((t) => `${t.store}: dodano ${t.added}, usunięto ${t.removed}`);
     back(`Wyrównano ze Shopify.${r.split ? ` Rozdzielono ${r.split} połączonych produktów.` : ""} ${parts.join(" · ") || "Bez zmian."}`, "ok");
   } catch (e) {
     unstable_rethrow(e);

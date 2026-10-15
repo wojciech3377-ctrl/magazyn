@@ -1,6 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { shopifyGraphql } from "@/lib/integrations/shopify";
+import { getStockMaster, pushStockToShopify } from "@/lib/sync/shopify-stock";
 
 /**
  * „Dlaczego ta sztuka jest w magazynie, a w Shopify / na stronie stan 0?” – stan rozmiaru w Shopify na żywo
@@ -12,6 +13,8 @@ export type UnitStockDiag = {
   reasons: { tone: "ok" | "warn" | "bad"; text: string }[];
   product: { status: string; url: string | null } | null;
   canAlign: boolean;
+  /** Główny magazyn: „app” – aplikacja ustawia stan w Shopify, „shopify” – aplikacja dopasowuje sztuki do Shopify. */
+  master: "app" | "shopify";
   error: string | null;
 };
 
@@ -23,7 +26,8 @@ type Live = {
 };
 
 export async function diagnoseUnitStock(db: SupabaseClient, unitId: string): Promise<UnitStockDiag> {
-  const out: UnitStockDiag = { levels: [], reasons: [], product: null, canAlign: false, error: null };
+  const master = await getStockMaster(db);
+  const out: UnitStockDiag = { levels: [], reasons: [], product: null, canAlign: false, master, error: null };
   const say = (tone: "ok" | "warn" | "bad", text: string) => out.reasons.push({ tone, text });
   const { data: u } = await db.from("units").select("id, code, status, owner_type, variant_id, location:locations(id, name, store_id, shopify_location_id, store:stores(id, name, code, shopify_domain))").eq("id", unitId).maybeSingle();
   if (!u) return { ...out, error: "Nie ma takiej sztuki." };
@@ -84,7 +88,11 @@ export async function diagnoseUnitStock(db: SupabaseClient, unitId: string): Pro
   if (mine && u.status === "in_stock") {
     const app = mine.app ?? 0;
     const shop = Math.max(0, mine.available);
-    if (app > shop) {
+    if (master === "app" && app !== shop) {
+      say("warn", `W Shopify (${mine.location}) dostępne: ${shop}, w aplikacji na stanie: ${app}.`);
+      say("warn", `Główny jest magazyn aplikacji – to aplikacja ustawia stan w Shopify (co ok. 20 min), sztuk nie usuwa. Różnica znaczy, że zapis do Shopify jeszcze nie przeszedł albo się nie udał (zobacz „Błędy automatu” w Ustawieniach).${app > shop ? "" : " Shopify zostanie obniżony do stanu z aplikacji."}`);
+      out.canAlign = true;
+    } else if (app > shop) {
       const last = recent?.[0]?.created_at as string | undefined;
       const ex = (excess ?? []).find((e) => sameShopLoc(loc.shopify_location_id).includes(e.location_id as string));
       say("warn", `W Shopify (${mine.location}) dostępne: ${shop}, w aplikacji na stanie: ${app}.`);
@@ -110,7 +118,16 @@ export async function diagnoseUnitStock(db: SupabaseClient, unitId: string): Pro
 }
 
 /** Wyrównanie jednego rozmiaru do Shopify teraz (bez czekania 10 / 30 min; komisu nie rusza, ruch z ostatnich 30 min nadal blokuje). */
-export async function alignUnitVariant(db: SupabaseClient, unitId: string) {
+export async function alignUnitVariant(db: SupabaseClient, unitId: string): Promise<{ created?: number; removed?: number; withdrawn?: number; kept?: number; pushed?: number; master: "app" | "shopify" }> {
+  if ((await getStockMaster(db)) === "app") {
+    const { data: unit } = await db.from("units").select("variant_id").eq("id", unitId).maybeSingle();
+    if (!unit) throw new Error("Nie ma takiej sztuki.");
+    const r = await pushStockToShopify(db, 500, new Set([unit.variant_id as string]));
+    const vals = Object.values(r);
+    const errs = vals.flatMap((v) => (v && typeof v === "object" && "errors" in v ? (v as { errors: string[] }).errors : []));
+    if (errs.length) throw new Error(`Shopify: ${errs.join("; ")}`);
+    return { pushed: vals.reduce<number>((n, v) => n + (v && typeof v === "object" ? Number((v as { changed?: number }).changed ?? 0) : 0), 0), master: "app" };
+  }
   const { data: u } = await db.from("units").select("variant_id, location:locations(store_id, store:stores(id, name, code, shopify_domain))").eq("id", unitId).maybeSingle();
   if (!u) throw new Error("Nie ma takiej sztuki.");
   const store = (u.location as unknown as { store: { id: string; name: string; code: string; shopify_domain: string | null } }).store;
@@ -132,5 +149,5 @@ export async function alignUnitVariant(db: SupabaseClient, unitId: string) {
     p_confirm_minutes: 0, p_remove: true, p_surplus_minutes: 0, p_history_limit: 1000,
   });
   if (error) throw new Error(error.message);
-  return r as { created?: number; removed?: number; withdrawn?: number; kept?: number };
+  return { ...(r as { created?: number; removed?: number; withdrawn?: number; kept?: number }), master: "shopify" };
 }

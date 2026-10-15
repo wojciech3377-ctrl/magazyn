@@ -52,7 +52,7 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
   const priceDiff = fromContract !== undefined && ownPrice !== null && ownPrice !== undefined && Math.abs(Number(ownPrice) - fromContract) >= 0.005;
 
   // „Sprawdź stan w Shopify” – na żywo, tylko na żądanie (zapytanie do Shopify).
-  const shopDiag = sp.shopify === "1" ? await diagnoseUnitStock(createAdminClient(), u.id).catch((e) => ({ levels: [], reasons: [], product: null, canAlign: false, error: errorMessage(e) })) : null;
+  const shopDiag = sp.shopify === "1" ? await diagnoseUnitStock(createAdminClient(), u.id).catch((e) => ({ levels: [], reasons: [], product: null, canAlign: false, master: "shopify" as const, error: errorMessage(e) })) : null;
   const images = await productImages(createAdminClient(), u.variant.product.id, u.location.store_id, u.variant.product.image_url).catch(() => []);
   let fileUrl: string | null = null;
   if (contract?.file_path) {
@@ -132,7 +132,7 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
             {shopDiag?.canAlign && profile.role === "admin" && (
               <form action={alignUnitNow} className="mt-3">
                 <input type="hidden" name="id" value={u.id} />
-                <SubmitButton className="btn-secondary" pendingText="Wyrównuję…">Wyrównaj ten rozmiar do Shopify teraz</SubmitButton>
+                <SubmitButton className="btn-secondary" pendingText="Wyrównuję…">{shopDiag.master === "app" ? "Wyślij stan tego rozmiaru do Shopify" : "Wyrównaj ten rozmiar do Shopify teraz"}</SubmitButton>
               </form>
             )}
           </section>
