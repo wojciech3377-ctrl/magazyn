@@ -102,11 +102,13 @@ export function ListToolbar({
 }
 
 /** Pole filtra z etykietą (w panelu filtrów). */
-export function FilterField({ label, children, wide }: { label: string; children: React.ReactNode; wide?: boolean }) {
+export function FilterField({ label, children, wide, group }: { label: string; children: React.ReactNode; wide?: boolean; group?: boolean }) {
+  // `group` – pole z kilkoma kontrolkami (np. lista pól wyboru): bez otaczającego <label>, który przejmowałby kliknięcia.
+  const Tag = group ? "div" : "label";
   return (
-    <label className={`block min-w-0 ${wide ? "sm:col-span-2" : ""}`}>
+    <Tag className={`block min-w-0 ${wide ? "sm:col-span-2" : ""}`} role={group ? "group" : undefined} aria-label={group ? label : undefined}>
       <span className="mb-1 block text-xs font-medium text-muted">{label}</span>
       {children}
-    </label>
+    </Tag>
   );
 }

@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { productsUpdatedSince } from "@/lib/integrations/shopify";
 import { detachDeletedShopifyProducts, splitSameStoreDuplicates, upsertShopifyProducts, type Store } from "./catalog";
 import { syncStock } from "./shopify-stock";
+import { syncCollections } from "./collections";
 
 /**
  * Automat katalogu (co ~15 min z zadania cyklicznego; na żywo robią to webhooki Shopify):
@@ -54,6 +55,7 @@ export async function runAutoCatalog(db: SupabaseClient, force = false) {
   const { data: st } = await db.from("sync_state").select("value").eq("key", "auto_catalog").maybeSingle();
   const last = (st?.value as { at?: string } | null)?.at;
   if (!force && last && Date.now() - Date.parse(last) < 14 * 60_000) return null;
+  const started = Date.now();
   await db.from("sync_state").upsert({ key: "auto_catalog", value: { at: new Date().toISOString() }, updated_at: new Date().toISOString() });
   // Ręcznie (przycisk) – cały katalog do ~4 min; z automatu – do 1,5 min, reszta przy kolejnym odczycie.
   const shopify = await syncShopifyProductsIncremental(db, force ? 200 : 20, Date.now() + (force ? 210_000 : 90_000));
@@ -64,5 +66,10 @@ export async function runAutoCatalog(db: SupabaseClient, force = false) {
   const split = await splitSameStoreDuplicates(db, force ? 200 : 25).catch((e) => `błąd: ${errorMessage(e)}`);
   const { data: purged, error: purgeErr } = await db.rpc("purge_non_shopify", { p_dry_run: false, p_max: 100 });
   const stock = await syncStock(db);
-  return { shopify, deleted, split, stock, notInShopify: purgeErr ? purgeErr.message : purged };
+  // Kolekcje (kategorie do filtra w Magazynie): z automatu co ~3 godziny, z przycisku – gdy starsze niż 30 min.
+  const collections = await syncCollections(db, {
+    deadline: Math.min(Date.now() + (force ? 45_000 : 60_000), started + 270_000),
+    minAgeMs: force ? 30 * 60_000 : 3 * 3600_000,
+  }).catch((e) => `błąd: ${errorMessage(e)}`);
+  return { shopify, deleted, split, stock, collections, notInShopify: purgeErr ? purgeErr.message : purged };
 }

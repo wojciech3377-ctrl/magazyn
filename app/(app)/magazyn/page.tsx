@@ -2,7 +2,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { requireProfile } from "@/lib/auth";
 import { parseProductTagCode } from "@/lib/price-tag-code";
-import { queryUnits, UNIT_SORTS, type UnitFilters, type UnitRow } from "@/lib/queries/units";
+import { parseCategories, queryUnits, UNIT_SORTS, type UnitFilters, type UnitRow } from "@/lib/queries/units";
+import { CategoryPicker } from "@/components/CategoryPicker";
 import { money, dateOnly, OWNER_TYPE, PURCHASE_FORM, UNIT_STATUS } from "@/lib/labels";
 import { Notice, PageHeader, Pagination, Pill, StatusBadge, Thumb } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
@@ -22,7 +23,7 @@ export const maxDuration = 300;
 
 const PER_PAGE = 100;
 
-const FILTER_KEYS = ["sklep", "lokalizacja", "status", "umowa", "wlasciciel", "komisant", "forma", "rozmiar", "cena_od", "cena_do", "zakup_od", "zakup_do", "od", "do", "imei"];
+const FILTER_KEYS = ["sklep", "lokalizacja", "status", "umowa", "wlasciciel", "komisant", "forma", "rozmiar", "cena_od", "cena_do", "zakup_od", "zakup_do", "od", "do", "imei", "kat"];
 
 function sortOptions(prices: boolean) {
   return [
@@ -62,19 +63,28 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
   const filters: UnitFilters = {
     q: sp.q, sklep: sp.sklep, lokalizacja: sp.lokalizacja, status: MAGAZYN_STATUSES.includes(sp.status ?? "") ? sp.status : undefined, umowa: sp.umowa, wlasciciel: sp.wlasciciel, komisant: sp.komisant,
     forma: sp.forma, rozmiar: sp.rozmiar, cena_od: sp.cena_od, cena_do: sp.cena_do, zakup_od: sp.zakup_od, zakup_do: sp.zakup_do,
-    od: sp.od, do: sp.do, imei: sp.imei, sort: sp.sort, kier: sp.kier,
+    od: sp.od, do: sp.do, imei: sp.imei, kat: sp.kat, sort: sp.sort, kier: sp.kier,
   };
+  const pickedCats = parseCategories(sp.kat);
   const more = false;
 
-  const [{ rows, count }, { data: stores }, { data: locations }, { data: contracts }, { count: noContract }, { data: consignors }, { count: unusedContracts }] = await Promise.all([
-    queryUnits(supabase, filters, [(page - 1) * PER_PAGE, page * PER_PAGE - 1]),
+  const [unitsRes, { data: stores }, { data: locations }, { data: contracts }, { count: noContract }, { data: consignors }, { count: unusedContracts }, { data: cols }] = await Promise.all([
+    // Filtr kategorii bez SQL 58 – komunikat zamiast błędu strony.
+    queryUnits(supabase, filters, [(page - 1) * PER_PAGE, page * PER_PAGE - 1]).catch((e) => {
+      if (pickedCats.length) return { rows: [] as UnitRow[], count: 0, catError: true };
+      throw e;
+    }),
     supabase.from("stores").select("id, name").order("name"),
     supabase.from("locations").select("id, name, store_id").eq("active", true).order("name"),
     supabase.from("contracts").select("id, type, counterparty, contract_date").order("created_at", { ascending: false }).limit(200),
     supabase.from("units").select("id", { count: "exact", head: true }).is("contract_id", null).in("status", ["in_stock", "in_transit", "reserved"]),
     supabase.from("consignors").select("id, name").order("name"),
     supabase.from("contracts_unused").select("id", { count: "exact", head: true }),
+    supabase.from("shop_collections").select("title").gt("products_count", 0).limit(2000),
   ]);
+  const { rows, count } = unitsRes;
+  const catError = "catError" in unitsRes;
+  const categories = [...new Set([...(cols ?? []).map((c) => (c.title as string).trim()), ...pickedCats])].sort((a, b) => a.localeCompare(b, "pl"));
 
   // Etap umów widocznych sztuk (zielony / pomarańczowy).
   const contractIds = [...new Set(rows.map((r) => r.contract_id).filter((x): x is string => !!x))];
@@ -150,6 +160,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
       {sp.ok && <div className="mb-4"><Notice tone="ok">{sp.ok}</Notice></div>}
       {sp.zmiany && <ChangesPreview id={sp.zmiany} />}
       {sp.blad && <div className="mb-4"><Notice tone="error">{sp.blad}</Notice></div>}
+      {catError && <div className="mb-4"><Notice tone="error">Filtr kategorii wymaga SQL 58 w Supabase (kolekcje ze Shopify).</Notice></div>}
 
       <ListToolbar
         q={sp.q}
@@ -158,7 +169,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
         active={activeFilters(sp, FILTER_KEYS)}
         defaultOpen={more}
         resetHref={`/magazyn${sp.q ? `?q=${encodeURIComponent(sp.q)}` : ""}`}
-        chips={filterChips("/magazyn", filterParams, {
+        chips={[...filterChips("/magazyn", filterParams, {
           q: (v) => `„${v}”`,
           sklep: (v) => storeName.get(v) ?? null,
           lokalizacja: (v) => locations?.find((l) => l.id === v)?.name ?? null,
@@ -175,8 +186,19 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
           zakup_do: (v) => `zakup do ${v} zł`,
           od: (v) => `przyjęta od ${v}`,
           do: (v) => `przyjęta do ${v}`,
-        })}
+        }), ...pickedCats.map((c) => {
+          // Każda kategoria osobno – „×” usuwa tylko ją.
+          const rest = new URLSearchParams(Object.entries(filterParams).filter(([k]) => k !== "strona"));
+          const left = pickedCats.filter((x) => x !== c);
+          if (left.length) rest.set("kat", left.join("|")); else rest.delete("kat");
+          return { label: c, href: `/magazyn${rest.size ? `?${rest}` : ""}` };
+        })]}
       >
+        {categories.length > 0 && (
+          <FilterField label="Kategorie (kolekcje Shopify)" wide group>
+            <CategoryPicker key={sp.kat ?? ""} name="kat" options={categories} defaultValue={pickedCats} />
+          </FilterField>
+        )}
         <FilterField label="Sklep">
           <select className="input" name="sklep" defaultValue={sp.sklep ?? ""}>
             <option value="">Wszystkie sklepy</option>

@@ -1,6 +1,6 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { lowestPriceDefinitions, omnibusMetafields, readMetafields } from "@/lib/integrations/shopify";
+import { collectionByHandle, lowestPriceDefinitions, omnibusMetafields, productsInCollection, readMetafields } from "@/lib/integrations/shopify";
 
 /** Definicje metapola „Lowest price” (Omnibus Insight) w sklepie – pamiętane 6 godzin. */
 const defsCache = new Map<string, { at: number; defs: Awaited<ReturnType<typeof lowestPriceDefinitions>> }>();
@@ -26,6 +26,8 @@ export type PriceTag = {
   identifier?: string | null;
   /** Metka produktu (Stan produktu + metka): bez rozmiaru, kod PR… prowadzi do rozmiarów produktu. */
   productTag?: boolean;
+  /** Metka sztuki z cenami (produkt spoza kolekcji „Nowości Buty”): cena rozmiaru, cena przed obniżką, Omnibus i ramka rozmiaru. */
+  showPrices?: boolean;
 };
 
 type TagSource = { id: string; code: string; identifier: string | null; variant_id: string; variant: { option: string; product_id: string; product: { title: string; style_sku: string | null } }; location: { store_id: string; store: { name: string; code: string; shopify_domain: string | null } } };
@@ -129,8 +131,65 @@ export async function priceTags(db: SupabaseClient, unitIds: string[]) {
   const { data: units } = await db.from("units")
     .select("id, code, identifier, variant_id, variant:variants(option, product_id, product:products(title, style_sku)), location:locations(store_id, store:stores(name, code, shopify_domain))")
     .in("id", unitIds.slice(0, 200)).order("number");
-  // Metki sztuk (Magazyn): bez cen i Omnibusa – tylko sklep, nazwa, rozmiar, IMEI i kod.
-  return buildTags(db, (units ?? []) as unknown as TagSource[], false);
+  const list = (units ?? []) as unknown as TagSource[];
+  // Nowe buty (kolekcja „Nowości Buty” w Shopify): metka bez cen – sklep, nazwa, rozmiar, IMEI i kod.
+  // Reszta (używane, ubrania, akcesoria…): cena tego rozmiaru, cena przed obniżką i najniższa z 30 dni.
+  const isNew = await newShoes(db, list);
+  const plain = list.filter((u) => isNew(u.variant.product_id, u.location.store_id));
+  const priced = list.filter((u) => !isNew(u.variant.product_id, u.location.store_id));
+  const [a, b] = await Promise.all([
+    plain.length ? buildTags(db, plain, false) : Promise.resolve([]),
+    priced.length ? buildTags(db, priced, true, true) : Promise.resolve([]),
+  ]);
+  const byId = new Map([...a, ...b.map((t) => ({ ...t, showPrices: true }))].map((t) => [t.unitId, t]));
+  return list.map((u) => byId.get(u.id)!).filter(Boolean);
+}
+
+const NEW_SHOES = /^nowo[sś]ci\s*buty$/i;
+const newShoesGid = new Map<string, { at: number; gid: string | null }>();
+
+/** Kolekcja „Nowości Buty” sklepu: z pobranych kolekcji (SQL 58), a gdy ich nie ma – ze Shopify po adresie. */
+async function newShoesCollection(db: SupabaseClient, store: { id: string; code: string; domain: string }) {
+  const hit = newShoesGid.get(store.id);
+  if (hit && Date.now() - hit.at < 3600_000) return hit.gid;
+  let gid: string | null = null;
+  const { data, error } = await db.from("shop_collections").select("gid, title, handle").eq("store_id", store.id);
+  if (!error && data?.length) gid = (data.find((c) => c.handle === "nowosci-buty") ?? data.find((c) => NEW_SHOES.test(String(c.title).trim())))?.gid as string ?? null;
+  else gid = (await collectionByHandle(store.domain, store.code, "nowosci-buty"))?.id ?? null;
+  newShoesGid.set(store.id, { at: Date.now(), gid });
+  return gid;
+}
+
+/**
+ * Czy produkt jest w kolekcji „Nowości Buty” sklepu sztuki – sprawdzane na żywo w Shopify (nowe produkty trafiają
+ * do kolekcji od razu), a przy błędzie – z kolekcji zapisanych w aplikacji. Gdy nic nie wiadomo – jak dotąd (bez cen).
+ */
+async function newShoes(db: SupabaseClient, list: TagSource[]): Promise<(productId: string, storeId: string) => boolean> {
+  const productIds = [...new Set(list.map((u) => u.variant.product_id))];
+  if (!productIds.length) return () => false;
+  const [links, prods] = await Promise.all([
+    chunked<{ product_id: string; store_id: string; shopify_product_id: string | null }>(productIds, 100, (part) => db.from("product_store_links").select("product_id, store_id, shopify_product_id").in("product_id", part).limit(5000)),
+    chunked<{ id: string; collections?: string[] | null }>(productIds, 100, (part) => db.from("products").select("*").in("id", part)),
+  ]);
+  const fromDb = new Map(prods.map((p) => [p.id, Array.isArray(p.collections) && p.collections.length ? p.collections.some((c) => NEW_SHOES.test(c.trim())) : null]));
+  const answer = new Map<string, boolean | null>(); // productId|storeId
+  const stores = new Map<string, { id: string; code: string; domain: string | null }>();
+  for (const u of list) stores.set(u.location.store_id, { id: u.location.store_id, code: u.location.store.code, domain: u.location.store.shopify_domain });
+  await Promise.all([...stores.values()].map(async (st) => {
+    const keys = productIds.filter((pid) => list.some((u) => u.variant.product_id === pid && u.location.store_id === st.id));
+    if (!st.domain) { for (const pid of keys) answer.set(`${pid}|${st.id}`, null); return; }
+    try {
+      const gid = await newShoesCollection(db, { id: st.id, code: st.code, domain: st.domain });
+      if (!gid) { for (const pid of keys) answer.set(`${pid}|${st.id}`, false); return; } // sklep bez tej kolekcji (np. Telefoniki)
+      const gidOf = new Map(keys.map((pid) => [pid, links.find((l) => l.product_id === pid && l.store_id === st.id)?.shopify_product_id ?? null]));
+      const inside = await productsInCollection(st.domain, st.code, gid, [...gidOf.values()].filter((g): g is string => !!g));
+      // Produkt bez odpowiednika w tym sklepie – według zapisanych kolekcji.
+      for (const pid of keys) answer.set(`${pid}|${st.id}`, gidOf.get(pid) ? inside.has(gidOf.get(pid)!) : fromDb.get(pid) ?? null);
+    } catch {
+      for (const pid of keys) answer.set(`${pid}|${st.id}`, fromDb.get(pid) ?? null);
+    }
+  }));
+  return (pid, sid) => answer.get(`${pid}|${sid}`) ?? true;
 }
 
 /** Zapytania po wielu id w paczkach (limit długości adresu i 1000 wierszy na odpowiedź). */
@@ -166,7 +225,8 @@ export async function productPriceTags(db: SupabaseClient, productIds: string[],
   return (await buildTags(db, list)).map((t) => ({ ...t, productTag: true }));
 }
 
-async function buildTags(db: SupabaseClient, list: TagSource[], withPrices = true) {
+/** `perUnit` – ceny tylko rozmiaru sztuki (metka sztuki); bez – zakres po wszystkich rozmiarach (metka produktu). */
+async function buildTags(db: SupabaseClient, list: TagSource[], withPrices = true, perUnit = false) {
   const productIds = [...new Set(list.map((u) => u.variant.product_id))];
   const variants = await chunked<{ id: string; product_id: string }>(productIds, 50, (part) => db.from("variants").select("id, product_id").in("product_id", part).limit(5000));
   const variantIds = (variants ?? []).map((v) => v.id as string);
@@ -221,7 +281,8 @@ async function buildTags(db: SupabaseClient, list: TagSource[], withPrices = tru
     const u = list.find((x) => x.variant.product_id === pid && x.location.store_id === sid)!;
     const handle = (plinks ?? []).find((p) => p.product_id === pid && p.store_id === sid)?.handle as string | undefined;
     if (!handle || !u.location.store.shopify_domain) continue;
-    const vids = byProduct.get(pid) ?? [];
+    // Metka sztuki: tylko rozmiary drukowanych sztuk.
+    const vids = perUnit ? [...new Set(list.filter((x) => x.variant.product_id === pid && x.location.store_id === sid).map((x) => x.variant_id))] : byProduct.get(pid) ?? [];
     for (const l of linkRows.filter((x) => x.store_id === sid && vids.includes(x.variant_id) && x.price !== null).slice(0, 20)) {
       jobs.push({ key: `${sid}|${l.variant_id}`, domain: u.location.store.shopify_domain, handle, gid: l.shopify_variant_id });
     }
@@ -231,7 +292,7 @@ async function buildTags(db: SupabaseClient, list: TagSource[], withPrices = tru
 
   return list.map((u): PriceTag & { omnibusFields: string[]; historyComplete: boolean } => {
     const storeId = u.location.store_id;
-    const vids = byProduct.get(u.variant.product_id) ?? [u.variant_id];
+    const vids = perUnit ? [u.variant_id] : byProduct.get(u.variant.product_id) ?? [u.variant_id];
     const inStore = linkRows.filter((l) => l.store_id === storeId && vids.includes(l.variant_id) && l.price !== null);
     const price = range(inStore.map((l) => Number(l.price)));
     const promoRows = inStore.filter((l) => l.compare_at_price !== null && Number(l.compare_at_price) > Number(l.price));

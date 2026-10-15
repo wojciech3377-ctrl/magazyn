@@ -17,6 +17,7 @@ export type UnitFilters = {
   od?: string; // data przyjęcia od (YYYY-MM-DD)
   do?: string;
   imei?: string; // "jest" | "brak"
+  kat?: string; // kategorie (kolekcje Shopify) rozdzielone „|” – sztuki z produktów w którejkolwiek z nich
   sort?: string;
   kier?: string; // asc | desc
 };
@@ -99,6 +100,8 @@ export async function queryUnits(db: SupabaseClient, f: UnitFilters, range?: [nu
   if (f.rozmiar?.trim()) query = query.ilike("option", `${f.rozmiar.trim().replace(/[%,()*\\]/g, "")}%`);
   if (f.imei === "jest") query = query.not("identifier", "is", null);
   if (f.imei === "brak") query = query.is("identifier", null);
+  const cats = parseCategories(f.kat);
+  if (cats.length) query = query.overlaps("collections", `{${cats.map((c) => `"${c.replace(/["\\]/g, "\\$&")}"`).join(",")}}`);
   const [cOd, cDo, zOd, zDo] = [num(f.cena_od), num(f.cena_do), num(f.zakup_od), num(f.zakup_do)];
   if (cOd !== null) query = query.gte("shop_price", cOd);
   if (cDo !== null) query = query.lte("shop_price", cDo);
@@ -136,6 +139,11 @@ export async function queryUnits(db: SupabaseClient, f: UnitFilters, range?: [nu
     },
   }));
   return { rows, count: count ?? 0 };
+}
+
+/** Kategorie z parametru adresu („Nowości Buty|Bluzy”). */
+export function parseCategories(v: string | undefined) {
+  return [...new Set((v ?? "").split("|").map((x) => x.trim()).filter(Boolean))].slice(0, 30);
 }
 
 /** Warianty pasujące do tekstu: nazwa produktu, SKU modelu, SKU ze sklepu lub z Base, EAN. */

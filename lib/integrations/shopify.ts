@@ -507,3 +507,43 @@ export async function readMetafields(domain: string, storeCode: string, productG
     variants: new Map((data.product?.variants.nodes ?? []).map((v) => [v.id, vals(v, "v")])),
   };
 }
+
+/** Wszystkie kolekcje sklepu (kategorie) – po 250. */
+export async function listCollections(domain: string, storeCode: string) {
+  type N = { id: string; title: string; handle: string };
+  const out: N[] = [];
+  let after: string | null = null;
+  for (let page = 0; page < 40; page++) {
+    const data: { collections: { nodes: N[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } } } = await shopifyGraphql(domain, storeCode,
+      `query($after: String) { collections(first: 250, after: $after) { nodes { id title handle } pageInfo { hasNextPage endCursor } } }`, { after });
+    out.push(...data.collections.nodes);
+    if (!data.collections.pageInfo.hasNextPage) break;
+    after = data.collections.pageInfo.endCursor;
+  }
+  return out;
+}
+
+/** Jedna strona (250) produktów kolekcji – same identyfikatory. `null` = kolekcji już nie ma. */
+export async function collectionProductPage(domain: string, storeCode: string, collectionGid: string, after: string | null) {
+  const data = await shopifyGraphql<{ collection: { products: { nodes: { id: string }[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } } } | null }>(domain, storeCode,
+    `query($id: ID!, $after: String) { collection(id: $id) { products(first: 250, after: $after) { nodes { id } pageInfo { hasNextPage endCursor } } } }`, { id: collectionGid, after });
+  return data.collection?.products ?? null;
+}
+
+/** Kolekcja po adresie (handle), np. „nowosci-buty”. */
+export async function collectionByHandle(domain: string, storeCode: string, handle: string) {
+  const data = await shopifyGraphql<{ collectionByIdentifier: { id: string; title: string } | null }>(domain, storeCode,
+    `query($h: String!) { collectionByIdentifier(identifier: { handle: $h }) { id title } }`, { h: handle });
+  return data.collectionByIdentifier;
+}
+
+/** Które z podanych produktów są teraz w kolekcji (na żywo, po 100 na zapytanie). */
+export async function productsInCollection(domain: string, storeCode: string, collectionGid: string, productGids: string[]) {
+  const inside = new Set<string>();
+  for (let i = 0; i < productGids.length; i += 100) {
+    const data = await shopifyGraphql<{ nodes: ({ id: string; inCollection: boolean } | null)[] }>(domain, storeCode,
+      `query($ids: [ID!]!, $c: ID!) { nodes(ids: $ids) { ... on Product { id inCollection(id: $c) } } }`, { ids: productGids.slice(i, i + 100), c: collectionGid });
+    for (const n of data.nodes) if (n?.inCollection) inside.add(n.id);
+  }
+  return inside;
+}

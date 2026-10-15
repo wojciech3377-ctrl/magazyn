@@ -7,6 +7,7 @@ import { redirect } from "next/navigation";
 import { pickDefaultStore } from "@/lib/orders/default-store";
 import { PageHeader, Thumb } from "@/components/ui";
 import { SearchInput } from "@/components/SearchInput";
+import { UNIT_STATUS } from "@/lib/labels";
 import { ProductTagsForm, type ProductRow } from "./ProductTagsForm";
 
 export const metadata = { title: "Stan produktu + metka" };
@@ -32,14 +33,23 @@ export default async function ProductTagsPage({ searchParams }: { searchParams: 
   const sp = await searchParams;
   const { supabase } = await requireProfile();
   const db = createAdminClient();
-  const [{ data: stores }, { data: ordersCfg }] = await Promise.all([
-    supabase.from("stores").select("id, name").order("name"),
-    db.from("app_settings").select("value").eq("key", "orders").maybeSingle(),
-  ]);
-  const storeList = (stores ?? []) as { id: string; name: string }[];
-  const storeId = storeList.some((s) => s.id === sp.sklep) ? sp.sklep! : pickDefaultStore(ordersCfg?.value, storeList);
   if (sp.q && parseProductTagCode(sp.q) !== null) redirect(`/magazyn/produkt/${encodeURIComponent(sp.q.trim().toUpperCase())}`);
   const q = (sp.q ?? "").trim().replace(/[,()*%\\]/g, " ").trim().slice(0, 80);
+  // Kod sztuki (S000123, także krócej: S123) – produkt tej sztuki z katalogu, ze wszystkimi rozmiarami.
+  const unitNo = /^S0*(\d{1,6})$/i.exec(q)?.[1];
+  type ScannedUnit = { code: string; status: string; variant: { option: string; product_id: string } | null; location: { name: string; store_id: string } | null };
+  const [{ data: stores }, { data: ordersCfg }, scanned] = await Promise.all([
+    supabase.from("stores").select("id, name").order("name"),
+    db.from("app_settings").select("value").eq("key", "orders").maybeSingle(),
+    unitNo
+      ? supabase.from("units").select("code, status, variant:variants(option, product_id), location:locations(name, store_id)").eq("code", `S${unitNo.padStart(6, "0")}`).maybeSingle().then((r) => r.data as unknown as ScannedUnit | null)
+      : Promise.resolve(null),
+  ]);
+  const storeList = (stores ?? []) as { id: string; name: string }[];
+  // Sklep: wybrany, a przy kodzie sztuki – sklep, w którym leży sztuka (cena na metce z tego sklepu).
+  const storeId = storeList.some((s) => s.id === sp.sklep) ? sp.sklep!
+    : scanned?.location && storeList.some((s) => s.id === scanned.location!.store_id) ? scanned.location.store_id
+    : pickDefaultStore(ordersCfg?.value, storeList);
   const tylkoNaStanie = sp.wszystkie !== "1";
 
   // Produkty: wyszukane (nazwa, SKU, EAN) albo – bez wyszukiwania – te, które mają sztuki na stanie.
@@ -58,7 +68,7 @@ export default async function ProductTagsPage({ searchParams }: { searchParams: 
   type StockRow = { variant: { product_id: string } | null; location: { store_id: string } | null };
   type LinkRow = { product_id: string };
   const [found, stock, links] = await Promise.all([
-    q.length >= 2 ? searchIds() : Promise.resolve([] as string[]),
+    scanned?.variant ? Promise.resolve([scanned.variant.product_id]) : q.length >= 2 ? searchIds() : Promise.resolve([] as string[]),
     allPages<StockRow>((from, to) =>
       supabase.from("units").select("variant:variants(product_id), location:locations(store_id)").eq("status", "in_stock").order("id").range(from, to) as unknown as PromiseLike<{ data: StockRow[] | null }>),
     // Produkty sklepu (do „brak w tym sklepie” i listy bez sztuk na stanie).
@@ -81,7 +91,7 @@ export default async function ProductTagsPage({ searchParams }: { searchParams: 
   } else if (q.length < 2) {
     productIds = [...new Set([...linkedIds, ...anywhere.keys()])];
     capped = productIds.length > MAX_ROWS;
-  } else if (tylkoNaStanie) productIds = productIds.filter((id) => (anywhere.get(id) ?? 0) > 0);
+  } else if (tylkoNaStanie && !scanned?.variant) productIds = productIds.filter((id) => (anywhere.get(id) ?? 0) > 0);
 
   const rows: ProductRow[] = [];
   const chunks = await Promise.all(Array.from({ length: Math.ceil(productIds.length / 200) }, (_, i) =>
@@ -111,7 +121,7 @@ export default async function ProductTagsPage({ searchParams }: { searchParams: 
       <form className="card mb-4 flex flex-wrap items-end gap-3 p-4" method="get">
         <div className="min-w-64 flex-1">
           <label className="label" htmlFor="q">Szukaj produktu</label>
-          <SearchInput id="q" name="q" defaultValue={sp.q ?? ""} placeholder="Nazwa, SKU, EAN albo kod PR…" />
+          <SearchInput id="q" name="q" defaultValue={sp.q ?? ""} placeholder="Nazwa, SKU, EAN, kod sztuki S… albo PR…" />
         </div>
         <div>
           <label className="label" htmlFor="sklep">Sklep (cena na metce)</label>
@@ -120,6 +130,14 @@ export default async function ProductTagsPage({ searchParams }: { searchParams: 
         <label className="flex items-center gap-2 pb-2 text-sm text-muted"><input type="checkbox" name="wszystkie" value="1" defaultChecked={!tylkoNaStanie} /> także bez sztuk na stanie</label>
         <button className="btn">Szukaj</button>
       </form>
+      {scanned?.variant && rows[0] && (
+        <p className="card mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 p-3 text-sm">
+          <span>Sztuka <span className="font-mono font-semibold">{scanned.code}</span> · rozmiar <b>{scanned.variant.option}</b> · {UNIT_STATUS[scanned.status] ?? scanned.status}{scanned.location ? ` · ${scanned.location.name}` : ""}</span>
+          {rows[0].code
+            ? <Link className="text-accent hover:underline" href={`/magazyn/produkt/${rows[0].code}`}>Wszystkie rozmiary tego produktu →</Link>
+            : <Link className="text-accent hover:underline" href={qs({ q: rows[0].sku ?? rows[0].title })}>Szukaj po SKU modelu →</Link>}
+        </p>
+      )}
       {!rows.length ? (
         <p className="card p-8 text-center text-sm text-muted">{q.length >= 2 ? `Nie znaleziono „${q}”.` : "Brak produktów ze sztukami na stanie w tym sklepie."} <Link className="text-accent hover:underline" href={qs({ wszystkie: "1" })}>Pokaż wszystkie</Link></p>
       ) : (

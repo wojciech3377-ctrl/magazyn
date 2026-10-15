@@ -126,8 +126,8 @@ export async function renderPriceTags(tags: PriceTag[]) {
       page.drawText(line, { x: PAD_X, y, size: 7, font: bold });
     }
 
-    // Metka sztuki (Magazyn): bez cen – duża ramka z rozmiarem / wariantem, IMEI obok, kod kreskowy.
-    if (!t.productTag) {
+    // Metka sztuki (Magazyn) nowych butów: bez cen – duża ramka z rozmiarem / wariantem, IMEI obok, kod kreskowy.
+    if (!t.productTag && !t.showPrices) {
       const val = t.option || "–";
       const vs = fitSize(bold, val, 13, 26 * MM, 7);
       const bw = Math.max(13 * MM, bold.widthOfTextAtSize(val, vs) + 4 * MM);
@@ -157,7 +157,8 @@ export async function renderPriceTags(tags: PriceTag[]) {
     }
 
     // Metka sklepowa (produkt): cena od najtańszego do najdroższego rozmiaru, cena przed obniżką, Omnibus – bez rozmiaru.
-    const withBox = false;
+    // Metka sztuki z cenami (spoza „Nowości Buty”): cena tego rozmiaru i ramka z rozmiarem po prawej.
+    const withBox = !t.productTag;
     const sizeVal = t.option || "–";
     const sv = fitSize(bold, sizeVal, 9.5, 18 * MM, 6);
     const boxW = withBox ? Math.max(9.5 * MM, bold.widthOfTextAtSize(sizeVal, sv) + 3.2 * MM) : 0;
