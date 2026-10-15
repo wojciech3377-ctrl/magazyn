@@ -5,7 +5,7 @@ import { requireProfile } from "@/lib/auth";
 import { CONTRACT_TYPE, dateOnly, money } from "@/lib/labels";
 import { Field, Notice, PageHeader, StatusBadge } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
-import { acceptContract, attachUnits, decideConsignorInvoice, cancelContract, deleteContract, detachUnit, markPaid, rejectContract, replaceFile, retryFinalize, sendSigningEmail, updateContractMeta } from "../actions";
+import { acceptContract, addContractItem, removeContractItem, attachUnits, decideConsignorInvoice, cancelContract, deleteContract, detachUnit, markPaid, rejectContract, replaceFile, retryFinalize, sendSigningEmail, updateContractMeta } from "../actions";
 import { appUrl } from "@/lib/app-url";
 import { mailConfigured } from "@/lib/mail";
 import { contractTotal, formatMoney } from "@/lib/contracts/purchase";
@@ -123,13 +123,41 @@ export default async function ContractPage({ params, searchParams }: { params: P
               {c.consignor && <Field label="Komisant">{(c.consignor as { name: string }).name}</Field>}
             </div>
             {c.notes && <p className="mt-3 text-sm text-muted">{c.notes}</p>}
-            {!c.template && (c.items ?? []).length > 0 && (
+            {!c.template && (
               <div className="mt-3 border-t border-line pt-3">
-                <div className="label">Rzeczy z katalogu na umowie</div>
-                <ul className="flex flex-wrap gap-1.5">
-                  {(c.items as { title: string; option: string }[]).map((i, k) => <li key={k} className="rounded-full border border-accent/30 bg-accent-soft px-2.5 py-0.5 text-sm">{i.title} · <b>{i.option}</b></li>)}
-                </ul>
-                <p className="mt-1.5 text-xs text-muted">Gdy rzecz przyjdzie do magazynu, dopnij jej sztukę poniżej (kod albo IMEI).</p>
+                <div className="label">Przedmioty faktury</div>
+                {(c.items ?? []).length > 0 ? (
+                  <div className="overflow-x-auto">
+                    <table className="table text-sm">
+                      <thead><tr><th>Przedmiot</th><th>Rozmiar</th><th className="text-right">Ilość</th>{profile.can_see_prices && <th className="text-right">Cena / szt.</th>}<th /></tr></thead>
+                      <tbody>
+                        {(c.items as { title: string; option?: string; qty?: number; price?: number | string; unit_id?: string; variant_id?: string; manual?: boolean }[]).map((i, k) => (
+                          <tr key={k}>
+                            <td>{i.title}{!i.manual && !i.unit_id && i.variant_id && <span className="ml-1 text-xs text-muted">(z katalogu – dopnij sztukę poniżej)</span>}</td>
+                            <td className="font-medium">{i.option || "–"}</td>
+                            <td className="text-right tabular-nums">{Number(i.qty ?? 1)}</td>
+                            {profile.can_see_prices && <td className="text-right tabular-nums">{Number(i.price ?? 0) > 0 ? formatMoney(Number(i.price), c.currency ?? "PLN") : "–"}</td>}
+                            <td className="text-right">{!i.unit_id && (
+                              <form action={removeContractItem}>
+                                <input type="hidden" name="id" value={c.id} />
+                                <input type="hidden" name="idx" value={k} />
+                                <button className="text-xs text-bad hover:underline">usuń</button>
+                              </form>
+                            )}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : <p className="text-sm text-muted">Brak – możesz wpisać, co jest na fakturze (nie jest wymagane).</p>}
+                <form action={addContractItem} className="mt-2 flex flex-wrap items-end gap-2">
+                  <input type="hidden" name="id" value={c.id} />
+                  <input className="input min-w-48 flex-1" name="title" placeholder="Nazwa przedmiotu" maxLength={120} aria-label="Nazwa przedmiotu" required />
+                  <input className="input w-24" name="option" placeholder="Rozmiar" maxLength={40} aria-label="Rozmiar" />
+                  <input className="input w-20" name="qty" defaultValue="1" inputMode="numeric" aria-label="Ilość" />
+                  {profile.can_see_prices && <input className="input w-28" name="price" placeholder="Cena / szt." inputMode="decimal" aria-label="Cena za sztukę" />}
+                  <SubmitButton className="btn-secondary" pendingText="…">Dodaj</SubmitButton>
+                </form>
               </div>
             )}
           </section>}

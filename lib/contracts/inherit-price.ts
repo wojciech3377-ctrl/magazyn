@@ -84,7 +84,8 @@ export async function inheritContractPrice(db: SupabaseClient, contractId: strin
 /** Kwota z umowy dla każdej sztuki (bez zapisu): pozycja tej sztuki, pozycja tego rozmiaru, a przy jednej rzeczy – kwota umowy. */
 export function expectedPrices(ct: Pick<C, "amount" | "items" | "amount_per_item"> & { type?: string | null }, units: Pick<U, "id" | "variant_id">[]) {
   // Pozycje bez ceny (0 – np. rzeczy z katalogu dodane do skanu umowy) nic nie mówią o kwocie.
-  const items = (ct.items ?? []).filter((i) => (num(i.price) ?? 0) > 0);
+  // Przedmioty faktury wpisane ręcznie (bez sztuki i rozmiaru z katalogu) to tylko opis – nie ustalają kwot sztuk.
+  const items = (ct.items ?? []).filter((i) => (num(i.price) ?? 0) > 0 && (i.unit_id || i.variant_id));
   const used = new Set<number>();
   const expected = new Map<string, number>();
   for (const u of units) {

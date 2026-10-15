@@ -6,11 +6,34 @@ import { useEffect, useMemo, useRef, useState } from "react";
  * Wybór kilku kategorii (kolekcji ze Shopify) naraz – rozwijana lista z wyszukiwarką i polami wyboru.
  * Lista rozwija się w miejscu (panel filtrów ucina wyskakujące okienka). Do formularza trafia jedno pole `name` z nazwami połączonymi znakiem „|”.
  */
-export function CategoryPicker({ name, options, defaultValue = [] }: { name: string; options: string[]; defaultValue?: string[] }) {
+export function CategoryPicker({ name, options, defaultValue = [], storeField }: {
+  name: string;
+  /** Kategorie z listą sklepów, w których są (pusta lista – pokazuj zawsze). */
+  options: { title: string; stores: string[] }[];
+  defaultValue?: string[];
+  /** Nazwa pola wyboru sklepu w tym samym formularzu – lista pokazuje tylko kategorie wybranego sklepu. */
+  storeField?: string;
+}) {
   const [picked, setPicked] = useState<string[]>(defaultValue);
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
+  const [store, setStore] = useState("");
   const box = useRef<HTMLDivElement>(null);
+  // Sklep wybrany w formularzu (także przed wysłaniem) – zmiana sklepu odznacza kategorie innego sklepu.
+  useEffect(() => {
+    const form = box.current?.closest("form");
+    const field = storeField ? (form?.elements.namedItem(storeField) as HTMLSelectElement | null) : null;
+    if (!field) return;
+    const sync = () => {
+      const v = field.value;
+      setStore(v);
+      if (v) setPicked((p) => p.filter((t) => { const o = options.find((x) => x.title === t); return !o || !o.stores.length || o.stores.includes(v); }));
+    };
+    setStore(field.value);
+    field.addEventListener("change", sync);
+    return () => field.removeEventListener("change", sync);
+  }, [storeField, options]);
+  const inStore = useMemo(() => options.filter((o) => !store || !o.stores.length || o.stores.includes(store)).map((o) => o.title), [options, store]);
   useEffect(() => {
     if (!open) return;
     const close = (e: MouseEvent) => { if (box.current && !box.current.contains(e.target as Node)) setOpen(false); };
@@ -20,8 +43,8 @@ export function CategoryPicker({ name, options, defaultValue = [] }: { name: str
   }, [open]);
   const shown = useMemo(() => {
     const t = q.trim().toLowerCase();
-    return t ? options.filter((o) => o.toLowerCase().includes(t)) : options;
-  }, [q, options]);
+    return t ? inStore.filter((o) => o.toLowerCase().includes(t)) : inStore;
+  }, [q, inStore]);
   const toggle = (o: string) => setPicked((p) => (p.includes(o) ? p.filter((x) => x !== o) : [...p, o]));
 
   return (

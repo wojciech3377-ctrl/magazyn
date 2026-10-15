@@ -6,6 +6,7 @@ import { ContractFileInput } from "@/components/ContractFileInput";
 import { VariantPick } from "@/components/VariantPick";
 import { ContractItemsPicker } from "./ContractItemsPicker";
 import { DateField } from "@/components/DateField";
+import { InvoiceItemsInput } from "./InvoiceItemsInput";
 
 export function ContractForm({ consignors, defaultUnits, canSeePrices, returnTo = "", saleId = null, saleLabel = null, pickVariantStore = null }: { consignors: { id: string; name: string }[]; defaultUnits: string; canSeePrices: boolean; returnTo?: string; saleId?: string | null; saleLabel?: string | null; pickVariantStore?: string | null }) {
   const [state, action, pending] = useActionState(createContract, null);
@@ -75,6 +76,7 @@ export function ContractForm({ consignors, defaultUnits, canSeePrices, returnTo 
       )}
       <ContractFileInput label="Plik (PDF lub zdjęcie)" />
       <ContractItemsPicker defaultCodes={defaultUnits.split(/[\s,]+/).filter(Boolean)} />
+      <InvoiceItemsInput canSeePrices={canSeePrices} />
       <div className="md:col-span-2">
         <label className="label" htmlFor="notes">Notatki</label>
         <input className="input" id="notes" name="notes" />

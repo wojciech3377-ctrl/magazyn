@@ -80,11 +80,18 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
     supabase.from("units").select("id", { count: "exact", head: true }).is("contract_id", null).in("status", ["in_stock", "in_transit", "reserved"]),
     supabase.from("consignors").select("id, name").order("name"),
     supabase.from("contracts_unused").select("id", { count: "exact", head: true }),
-    supabase.from("shop_collections").select("title").gt("products_count", 0).limit(2000),
+    supabase.from("shop_collections").select("title, store_id").gt("products_count", 0).limit(2000),
   ]);
   const { rows, count } = unitsRes;
   const catError = "catError" in unitsRes;
-  const categories = [...new Set([...(cols ?? []).map((c) => (c.title as string).trim()), ...pickedCats])].sort((a, b) => a.localeCompare(b, "pl"));
+  // Kategorie z ich sklepami – lista w filtrze pokazuje tylko kategorie sklepu wybranego w polu „Sklep”.
+  const catStores = new Map<string, Set<string>>();
+  for (const c of cols ?? []) {
+    const t = (c.title as string).trim();
+    catStores.set(t, (catStores.get(t) ?? new Set()).add(c.store_id as string));
+  }
+  for (const t of pickedCats) if (!catStores.has(t)) catStores.set(t, new Set());
+  const categories = [...catStores.entries()].map(([title, st]) => ({ title, stores: [...st] })).sort((a, b) => a.title.localeCompare(b.title, "pl"));
 
   // Etap umów widocznych sztuk (zielony / pomarańczowy).
   const contractIds = [...new Set(rows.map((r) => r.contract_id).filter((x): x is string => !!x))];
@@ -194,17 +201,17 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
           return { label: c, href: `/magazyn${rest.size ? `?${rest}` : ""}` };
         })]}
       >
-        {categories.length > 0 && (
-          <FilterField label="Kategorie (kolekcje Shopify)" wide group>
-            <CategoryPicker key={sp.kat ?? ""} name="kat" options={categories} defaultValue={pickedCats} />
-          </FilterField>
-        )}
         <FilterField label="Sklep">
           <select className="input" name="sklep" defaultValue={sp.sklep ?? ""}>
             <option value="">Wszystkie sklepy</option>
             {stores?.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         </FilterField>
+        {categories.length > 0 && (
+          <FilterField label="Kategorie (kolekcje Shopify)" wide group>
+            <CategoryPicker key={`${sp.kat ?? ""}|${sp.sklep ?? ""}`} name="kat" options={categories} defaultValue={pickedCats} storeField="sklep" />
+          </FilterField>
+        )}
         <FilterField label="Lokalizacja">
           <select className="input" name="lokalizacja" defaultValue={sp.lokalizacja ?? ""}>
             <option value="">Wszystkie lokalizacje</option>

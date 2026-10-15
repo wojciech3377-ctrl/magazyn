@@ -7,7 +7,6 @@ import { errorMessage } from "@/lib/errors";
 import type { LineItem } from "@/lib/sync/shop-orders";
 import { parseSizes } from "@/lib/wtb-group";
 import { dropUnusedWtbPhotos, storeWtbPhoto } from "@/lib/wtb-photo";
-import { reusedProducts } from "@/lib/queries/reused";
 
 const SQL57 = "Aby zapisać znacznik USED, uruchom w Supabase (SQL Editor) plik 0057_wtb_used.sql.";
 const usedErr = (m: string) => (/\bused\b/.test(m) ? SQL57 : m);
@@ -113,10 +112,8 @@ export async function addOrderToWtb(_: WtbAddState, fd: FormData): Promise<WtbAd
       source: "order", order_id: order.id, order_line_id: l.id, note: `z zamówienia ${order.name}`, created_by: profile.id,
     };
   });
-  // Produkty z tagiem „reused” w Shopify – od razu ze znacznikiem USED.
-  const isUsed = await reusedProducts(supabase, rows.map((r) => r.product_id).filter((x): x is string => !!x));
-  const withUsed = rows.map((r) => (r.product_id && isUsed(r.product_id) ? { ...r, used: true } : r));
-  const { error } = await supabase.from("wtb_items").insert(withUsed);
+  // USED / NEW ustawia się ręcznie (bez automatu z tagu „reused”) – z zamówienia trafiają jako NEW.
+  const { error } = await supabase.from("wtb_items").insert(rows);
   if (error) return { error: usedErr(errorMessage(error)) };
   revalidatePath("/wtb");
   return { ok: rows.length === 1 ? "Dodano do WTB." : `Dodano ${rows.length} produkty do WTB.` };
@@ -141,8 +138,8 @@ export async function addFromCatalog(_: WtbAddState, fd: FormData): Promise<WtbA
   } catch (e) {
     return { error: errorMessage(e) };
   }
-  // USED: zaznaczone w formularzu albo produkt ma w Shopify tag „reused”.
-  const used = fd.get("used") === "1" || (await reusedProducts(supabase, [p.id as string]))(p.id as string);
+  // USED: tylko zaznaczone w formularzu.
+  const used = fd.get("used") === "1";
   const rows = (variants.length ? variants : [null]).map((v) => ({
     title: p.title, size: v?.option ?? null, sku: p.style_sku, image_url: photo ?? p.image_url, product_id: p.id, variant_id: v?.id ?? null,
     source: "catalog", note, created_by: profile.id, ...(used ? { used: true } : {}),

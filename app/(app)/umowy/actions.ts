@@ -55,6 +55,8 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
     } catch {
       catalogItems = [];
     }
+    // Przedmioty faktury wpisane ręcznie (opis – bez sztuk i bez wpływu na kwoty zakupu).
+    const manualItems = parseManualItems(formData.get("manual_items"));
     const docNumber = String(formData.get("doc_number") ?? "").trim().slice(0, 60) || null;
     const perItem = formData.get("amount_per_item") === "1";
     const vatForm = ["vat_margin", "vat_23"].includes(String(formData.get("vat_form"))) ? String(formData.get("vat_form")) : null;
@@ -74,7 +76,7 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
     };
     const { data, error } = await supabase.from("contracts").insert({
       ...payload,
-      ...(catalogItems.length ? { items: catalogItems } : {}),
+      ...(catalogItems.length || manualItems.length ? { items: [...catalogItems, ...manualItems] } : {}),
     }).select("id").single();
     if (error && /amount_per_item/.test(error.message)) throw new Error("Aby zapisać „kwota za każdą rzecz”, uruchom w Supabase (SQL Editor) plik 0055_contract_amount_per_item.sql.");
     if (error && /vat_form/.test(error.message)) throw new Error("Aby zapisać formę VAT umowy, uruchom w Supabase (SQL Editor) plik 0056_contract_vat_form.sql.");
@@ -123,6 +125,52 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
     redirect(`${returnTo}${returnTo.includes("?") ? "&" : "?"}ok=${encodeURIComponent(["Umowa zapisana i przypięta.", okNote].filter(Boolean).join(" "))}`);
   }
   redirect(`/umowy/${id}${note || (okNote ? `?ok=${encodeURIComponent(okNote)}` : "")}`);
+}
+
+type ManualItem = { title: string; option: string; qty: number; price: number; manual: true };
+
+/** Przedmioty faktury z formularza (JSON): nazwa, rozmiar, ilość, cena za sztukę. */
+function parseManualItems(v: FormDataEntryValue | null): ManualItem[] {
+  try {
+    const raw = JSON.parse(String(v ?? "[]")) as { title?: unknown; option?: unknown; qty?: unknown; price?: unknown }[];
+    return (Array.isArray(raw) ? raw : []).slice(0, 100).map((r) => ({
+      title: String(r.title ?? "").trim().slice(0, 120),
+      option: String(r.option ?? "").trim().slice(0, 40),
+      qty: Math.min(9999, Math.max(1, Math.floor(Number(r.qty) || 1))),
+      price: (() => { try { return parseAmount(String(r.price ?? "")) ?? 0; } catch { return 0; } })(),
+      manual: true as const,
+    })).filter((r) => r.title);
+  } catch {
+    return [];
+  }
+}
+
+/** Dodanie przedmiotu faktury na stronie umowy (skan / faktura). */
+export async function addContractItem(formData: FormData) {
+  const { supabase, profile } = await requireSection("umowy", "dostawa");
+  const id = String(formData.get("id") ?? "");
+  const [item] = parseManualItems(JSON.stringify([{ title: formData.get("title"), option: formData.get("option"), qty: formData.get("qty"), price: profile.can_see_prices ? formData.get("price") : 0 }]));
+  if (!item) redirect(`/umowy/${id}?blad=${encodeURIComponent("Wpisz nazwę przedmiotu.")}`);
+  const { data: c } = await supabase.from("contracts").select("items, template").eq("id", id).maybeSingle();
+  if (!c || c.template) redirect(`/umowy/${id}`);
+  const { error } = await supabase.from("contracts").update({ items: [...((c.items ?? []) as unknown[]), item] }).eq("id", id);
+  if (error) redirect(`/umowy/${id}?blad=${encodeURIComponent(error.message)}`);
+  revalidatePath(`/umowy/${id}`);
+  redirect(`/umowy/${id}`);
+}
+
+/** Usunięcie pozycji z przedmiotów faktury (tylko wpisanych ręcznie albo z katalogu bez sztuki). */
+export async function removeContractItem(formData: FormData) {
+  const { supabase } = await requireSection("umowy", "dostawa");
+  const id = String(formData.get("id") ?? "");
+  const idx = Number(formData.get("idx"));
+  const { data: c } = await supabase.from("contracts").select("items, template").eq("id", id).maybeSingle();
+  const items = (c?.items ?? []) as { unit_id?: string }[];
+  if (!c || c.template || !Number.isInteger(idx) || idx < 0 || idx >= items.length || items[idx].unit_id) redirect(`/umowy/${id}`);
+  const { error } = await supabase.from("contracts").update({ items: items.filter((_, k) => k !== idx) }).eq("id", id);
+  if (error) redirect(`/umowy/${id}?blad=${encodeURIComponent(error.message)}`);
+  revalidatePath(`/umowy/${id}`);
+  redirect(`/umowy/${id}`);
 }
 
 export async function attachUnits(formData: FormData) {
