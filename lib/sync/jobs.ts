@@ -10,6 +10,7 @@ import { runAutoCatalog } from "@/lib/sync/auto-catalog";
 import { ksefConfigured } from "@/lib/ksef/client";
 import { notifyConsignorSales } from "@/lib/consignment-notify";
 import { runLiveSync } from "@/lib/sync/live";
+import { fastJobIssue, syncIssues, type Issue } from "@/lib/issues";
 
 async function run(db: SupabaseClient, job: string, fn: () => Promise<unknown>, logOk = true) {
   try {
@@ -61,10 +62,14 @@ export async function runFastJobs(db: SupabaseClient) {
 export async function runSlowJobs(db: SupabaseClient) {
   try {
     const r = await runAutoCatalog(db);
-    if (r) await db.from("sync_log").insert({ job: "auto-catalog", ok: true, message: JSON.stringify(r) });
+    if (r) {
+      await db.from("sync_log").insert({ job: "auto-catalog", ok: true, message: JSON.stringify(r) });
+      await syncIssues(db, "auto-catalog-run", []);
+    }
     return { ok: true, result: r ?? "za wcześnie (co 15 min)" };
   } catch (e) {
     await db.from("sync_log").insert({ job: "auto-catalog", ok: false, message: errorMessage(e) });
+    await syncIssues(db, "auto-catalog-run", [{ key: "przebieg", title: "Automat katalogu i stanów przerwał pracę", detail: errorMessage(e), hint: "Katalog, stany i kategorie nie odświeżają się. Spróbuj „Sprawdź nowe produkty i stany” w Magazynie; gdy błąd wraca – zgłoś go." }]);
     return { ok: false, error: errorMessage(e) };
   }
 }

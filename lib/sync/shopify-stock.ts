@@ -117,6 +117,8 @@ export async function reconcileFromShopify(db: SupabaseClient, opts: { force?: b
   for (const s of stores) {
     const mapped = locs.filter((l) => l.store_id === s.id && l.active && l.shopify_location_id);
     if (!mapped.length) { results[s.name] = "brak lokalizacji Shopify przy lokalizacjach aplikacji"; continue; }
+    // Błąd jednego sklepu (np. „za dużo na automat”) nie zatrzymuje drugiego – trafia do wyniku i „Błędów automatu”.
+    try {
     const links = await trackedLinks(db, s.id);
     const variantOf = new Map(links.map((l) => [l.shopify_inventory_item_id, l.variant_id]));
     // Ten sam rozmiar w dwóch produktach Shopify (duplikat) – liczymy większy stan, nie sumę.
@@ -151,6 +153,9 @@ export async function reconcileFromShopify(db: SupabaseClient, opts: { force?: b
     // Stan ze Shopify przy rozmiarze (Katalog) – tylko zmienione.
     const rows = [...perItem.entries()].map(([item, qty]) => ({ item, qty }));
     for (let i = 0; i < rows.length; i += 2000) await db.rpc("set_shopify_qty", { p_store_id: s.id, p_rows: rows.slice(i, i + 2000) }).then(() => null, () => null);
+    } catch (e) {
+      results[s.name] = `błąd: ${e instanceof Error ? e.message : String((e as { message?: string })?.message ?? e)}`;
+    }
   }
   return results;
 }

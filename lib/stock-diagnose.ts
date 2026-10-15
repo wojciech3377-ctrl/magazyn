@@ -16,7 +16,15 @@ export type DiagRow = {
 
 type Q = { products: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: { id: string; title: string; status: string; tags: string[]; variants: { nodes: { id: string; title: string; sku: string | null; inventoryItem: { id: string; tracked: boolean; inventoryLevels: { nodes: { location: { id: string; name: string }; quantities: { quantity: number }[] }[] } } | null }[] } }[] } };
 
-export async function diagnoseStock(db: SupabaseClient, text: string): Promise<{ rows: DiagRow[]; errors: string[] }> {
+export async function diagnoseStock(db: SupabaseClient, input: string): Promise<{ rows: DiagRow[]; errors: string[] }> {
+  // Kod sztuki (S011056) → produkt tej sztuki (wyszukanie w Shopify po nazwie).
+  let text = input;
+  const no = /^S0*(\d{1,6})$/i.exec(input.trim())?.[1];
+  if (no) {
+    const { data: u } = await db.from("units").select("variant:variants(product:products(title))").eq("code", `S${no.padStart(6, "0")}`).maybeSingle();
+    const title = (u?.variant as unknown as { product: { title: string } } | null)?.product.title;
+    if (title) text = `title:"${title.replace(/"/g, "")}"`;
+  }
   const { data: stores } = await db.from("stores").select("id, name, code, shopify_domain").not("shopify_domain", "is", null);
   const { data: locs } = await db.from("locations").select("id, name, store_id, active, shopify_location_id");
   const rows: DiagRow[] = [];

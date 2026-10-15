@@ -372,3 +372,13 @@ export async function saveOrdersDefaultStore(formData: FormData) {
   if (error) return done(error.message, "blad");
   await done("Zapisano domyślny sklep w Zamówieniach.");
 }
+
+/** „Ukryj” błąd automatu – wróci, jeśli zniknie i pojawi się ponownie. */
+export async function dismissIssue(formData: FormData) {
+  await requireAdmin();
+  const key = String(formData.get("key") ?? "").slice(0, 200);
+  const back = String(formData.get("back") ?? "/ustawienia");
+  if (key) await createAdminClient().from("app_issues").update({ dismissed_at: new Date().toISOString() }).eq("key", key);
+  revalidatePath("/", "layout");
+  redirect(back.startsWith("/ustawienia") ? back : "/ustawienia");
+}

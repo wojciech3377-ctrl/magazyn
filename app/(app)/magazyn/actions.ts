@@ -280,7 +280,10 @@ export async function runAutoCatalogNow() {
       : products
         ? `Katalog Shopify aktualny – od ostatniego sprawdzenia zmieniło się ${products} ${products === 1 ? "produkt" : "produktów"}`
         : "Katalog Shopify aktualny – od ostatniego sprawdzenia nic się nie zmieniło";
-    msg = `${catalogMsg}. Stany wszystkich rozmiarów porównane z Shopify – ${stockMsg.replace(/^ze stanów Shopify: /, "")}.`;
+    msg = r?.stock && "error" in r.stock && r.stock.error
+      ? `${catalogMsg}. Porównanie stanów nie powiodło się: ${r.stock.error}`
+      : `${catalogMsg}. Stany wszystkich rozmiarów porównane z Shopify – ${stockMsg.replace(/^ze stanów Shopify: /, "")}.`;
+    if (r?.catalogError) { ok = false; msg = `Odczyt katalogu Shopify nie powiódł się: ${r.catalogError}. ${msg}`; }
     await db.from("sync_log").insert({ job: "auto-catalog", ok: true, message: JSON.stringify(r) });
     const changes = await changesSince(db, since).catch(() => null);
     if (changes) {
@@ -295,4 +298,21 @@ export async function runAutoCatalogNow() {
   }
   revalidatePath("/magazyn");
   redirect(`/magazyn?${changesId ? `zmiany=${changesId}&` : ""}${ok ? "ok" : "blad"}=${encodeURIComponent(msg)}`);
+}
+
+/** Karta sztuki → „Wyrównaj ten rozmiar do Shopify teraz” (administrator). */
+export async function alignUnitNow(formData: FormData) {
+  await requireAdmin();
+  const id = String(formData.get("id") ?? "");
+  const go = (k: "ok" | "blad", m: string) => redirect(`/magazyn/${id}?shopify=1&${k}=${encodeURIComponent(m)}#shopify`);
+  let text: string;
+  try {
+    const { alignUnitVariant } = await import("@/lib/unit-stock");
+    const r = await alignUnitVariant(createAdminClient(), id);
+    text = `Wyrównano do Shopify: dodano ${r.created ?? 0}, usunięto ${r.removed ?? 0}, wycofano ${r.withdrawn ?? 0}${r.kept ? `, zostaje ${r.kept} (komis albo ruch w ostatnich 30 min)` : ""}.`;
+  } catch (e) {
+    return go("blad", errorMessage(e));
+  }
+  revalidatePath("/magazyn");
+  return go("ok", text);
 }

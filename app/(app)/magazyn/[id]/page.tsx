@@ -9,7 +9,9 @@ import { describeEvent, type HistoryEvent } from "@/lib/history";
 import { CONTRACT_TYPE, dateOnly, dateTime, EVENT_TYPE, money, PURCHASE_FORM, SALE_STATUS, UNIT_STATUS } from "@/lib/labels";
 import { Field, Notice, PageHeader, Pill, StatusBadge } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
-import { changeStatus, deleteUnit, updateUnit } from "../actions";
+import { alignUnitNow, changeStatus, deleteUnit, updateUnit } from "../actions";
+import { diagnoseUnitStock } from "@/lib/unit-stock";
+import { errorMessage } from "@/lib/errors";
 import { expectedPrices } from "@/lib/contracts/inherit-price";
 
 const NEXT_STATUS: Record<string, { to: string; label: string; danger?: boolean }[]> = {
@@ -49,6 +51,8 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
   const ownPrice = u.owner_type === "consignment" ? u.payout_amount : u.purchase_price;
   const priceDiff = fromContract !== undefined && ownPrice !== null && ownPrice !== undefined && Math.abs(Number(ownPrice) - fromContract) >= 0.005;
 
+  // „Sprawdź stan w Shopify” – na żywo, tylko na żądanie (zapytanie do Shopify).
+  const shopDiag = sp.shopify === "1" ? await diagnoseUnitStock(createAdminClient(), u.id).catch((e) => ({ levels: [], reasons: [], product: null, canAlign: false, error: errorMessage(e) })) : null;
   const images = await productImages(createAdminClient(), u.variant.product.id, u.location.store_id, u.variant.product.image_url).catch(() => []);
   let fileUrl: string | null = null;
   if (contract?.file_path) {
@@ -93,6 +97,44 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
               {profile.can_see_prices && <Field label="Cena zakupu">{u.purchase_price === null ? "–" : inCur(Number(u.purchase_price))}</Field>}
               {profile.can_see_prices && u.owner_type === "consignment" && <Field label="Cena w komisie">{u.payout_amount === null ? "–" : inCur(Number(u.payout_amount))}</Field>}
             </div>
+          </section>
+
+          <section id="shopify" className="card p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="h2">Stan w Shopify</h2>
+              <Link className="btn-secondary px-3 py-1.5 text-sm" href={`/magazyn/${u.id}?shopify=1#shopify`} scroll={false}>{shopDiag ? "Sprawdź ponownie" : "Sprawdź stan w Shopify"}</Link>
+            </div>
+            {!shopDiag && <p className="mt-1 text-sm text-muted">Pokaże stan tego rozmiaru w Shopify na żywo i wyjaśni, dlaczego sztuka jest (albo nie jest) w magazynie.</p>}
+            {shopDiag?.error && <p className="mt-2 text-sm text-bad">{shopDiag.error}</p>}
+            {shopDiag && shopDiag.levels.length > 0 && (
+              <div className="mt-3 overflow-x-auto">
+                <table className="table text-sm">
+                  <thead><tr><th>Lokalizacja Shopify</th><th className="text-right">Dostępne</th><th className="text-right">W zamówieniach</th><th className="text-right">Na stanie w aplikacji</th></tr></thead>
+                  <tbody>
+                    {shopDiag.levels.map((l) => (
+                      <tr key={l.location} className={l.mine ? "bg-sky-50" : ""}>
+                        <td>{l.location}{l.mine && <span className="ml-1 text-xs text-muted">(lokalizacja tej sztuki)</span>}{!l.online && <span className="ml-1 text-xs text-warn">nie sprzedaje online</span>}{!l.mapped && <span className="ml-1 text-xs text-muted">nieprzypisana w aplikacji</span>}</td>
+                        <td className="text-right tabular-nums">{l.available}</td>
+                        <td className="text-right tabular-nums">{l.committed}</td>
+                        <td className="text-right tabular-nums">{l.app ?? "–"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {shopDiag.product && <p className="mt-1 text-xs text-muted">Produkt w Shopify: {shopDiag.product.status === "ACTIVE" ? "aktywny" : shopDiag.product.status === "DRAFT" ? "wersja robocza" : shopDiag.product.status === "ARCHIVED" ? "zarchiwizowany" : shopDiag.product.status}{shopDiag.product.url ? <> · <a className="text-accent hover:underline" href={shopDiag.product.url} target="_blank" rel="noreferrer">strona w sklepie</a></> : " · nieopublikowany w sklepie internetowym"}</p>}
+              </div>
+            )}
+            {shopDiag && shopDiag.reasons.length > 0 && (
+              <ul className="mt-3 space-y-1.5 text-sm">
+                {shopDiag.reasons.map((r, k) => <li key={k} className={r.tone === "bad" ? "text-bad" : r.tone === "warn" ? "text-warn" : ""}>• {r.text}</li>)}
+              </ul>
+            )}
+            {shopDiag?.canAlign && profile.role === "admin" && (
+              <form action={alignUnitNow} className="mt-3">
+                <input type="hidden" name="id" value={u.id} />
+                <SubmitButton className="btn-secondary" pendingText="Wyrównuję…">Wyrównaj ten rozmiar do Shopify teraz</SubmitButton>
+              </form>
+            )}
           </section>
 
           <section className="card p-4">

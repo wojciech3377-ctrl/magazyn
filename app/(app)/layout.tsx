@@ -3,6 +3,7 @@ import { can, SECTIONS } from "@/lib/permissions";
 import { Nav } from "./Nav";
 import { TableLabels } from "@/components/TableLabels";
 import { LivePoller } from "./LiveSync";
+import { openIssues } from "@/lib/issues";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 /** Zgłoszenia komisantów czekające na nas: nowe zgłoszenia rzeczy i zlecenia wysyłki do komisanta. */
@@ -53,6 +54,15 @@ async function badges() {
   return value;
 }
 
+/** Błędy automatu (SQL 61) – czerwony licznik przy Ustawieniach (tylko administrator), pamiętany 20 s. */
+let issuesCache: { at: number; n: number } | null = null;
+async function automationIssues() {
+  if (issuesCache && Date.now() - issuesCache.at < 20_000) return issuesCache.n;
+  const n = await openIssues(createAdminClient()).then((l) => l.length).catch(() => 0);
+  issuesCache = { at: Date.now(), n };
+  return n;
+}
+
 /** Otwarte zadania osoby (przypisane do niej albo do wszystkich). */
 async function myOpenTasks(db: Awaited<ReturnType<typeof requireProfile>>["supabase"], userId: string) {
   try {
@@ -65,7 +75,9 @@ async function myOpenTasks(db: Awaited<ReturnType<typeof requireProfile>>["supab
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const { supabase, profile } = await requireProfile();
-  const [[alerts, delivery, newOrders], todo] = await Promise.all([badges(), myOpenTasks(supabase, profile.id)]);
+  const [[alerts, delivery, newOrders], todo, issues] = await Promise.all([
+    badges(), myOpenTasks(supabase, profile.id), profile.role === "admin" ? automationIssues() : Promise.resolve(0),
+  ]);
   // Menu: działy z uprawnień (Faktury są zakładką w Sprzedaży), Ustawienia i Pracownicy – administrator.
   const allowed = [
     "/do-zrobienia",
@@ -83,6 +95,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           ...(can(profile, "sprzedaz") ? { "/sprzedaz": [{ n: newOrders, tone: "orange" as const, title: "Nowe zamówienia" }] } : {}),
           "/komisanci": [{ n: alerts, tone: "red", title: "Zgłoszenia komisantów do obsłużenia" }],
           "/dostawa": [{ n: delivery.accept, tone: "green", title: "Do akceptacji" }, { n: delivery.transit, tone: "orange", title: "W drodze" }],
+          "/ustawienia": [{ n: issues, tone: "red", title: "Błędy automatu – szczegóły w Ustawieniach" }],
         }}
       />
       <main className="app-main min-w-0 px-4 pb-[calc(5.5rem+env(safe-area-inset-bottom))] pt-[max(1rem,env(safe-area-inset-top))] sm:px-6 lg:ml-64 lg:px-8 lg:py-7 print:m-0 print:p-0">

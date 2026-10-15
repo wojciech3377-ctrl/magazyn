@@ -10,9 +10,10 @@ import { getBuyerSignature, getCompany } from "@/lib/contracts/settings";
 import { getSmtpSettings, mailConfig } from "@/lib/mail";
 import { ContractSettings } from "./ContractSettings";
 import { FiscalSettings } from "./FiscalSettings";
-import { addExclusion, deleteExclusion, disconnectFurgonetka, purgeExcluded, purgeNonShopify, registerWebhooks, runStockNow, saveSmtp, saveInvoiceSettings, saveLocation, saveSender, saveShopifyLocation, saveStockMaster, saveStore, checkOmnibus, saveOrdersDefaultStore, fixProductStockNow } from "./actions";
+import { addExclusion, deleteExclusion, disconnectFurgonetka, purgeExcluded, purgeNonShopify, registerWebhooks, runStockNow, saveSmtp, saveInvoiceSettings, saveLocation, saveSender, saveShopifyLocation, saveStockMaster, saveStore, checkOmnibus, saveOrdersDefaultStore, fixProductStockNow, dismissIssue } from "./actions";
 import { compareStock, getStockMaster, planPushToShopify, shopifyLocations, type ShopifyLocation } from "@/lib/sync/shopify-stock";
 import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/furgonetka";
+import { openIssues } from "@/lib/issues";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getSender } from "@/lib/orders/sender";
 import { appUrl } from "@/lib/app-url";
@@ -107,6 +108,8 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
     [`KSeF (${ksefEnv()})`, ksefConfigured()],
   ] as [string, boolean][];
   const missing = envStatus.filter(([, ok]) => !ok).length;
+  const issues = isAdmin ? await openIssues(createAdminClient()) : [];
+  const fmt = (d: string) => new Date(d).toLocaleString("pl-PL", { timeZone: "Europe/Warsaw", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 
   return (
     <>
@@ -114,6 +117,36 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
       {sp.ok && <div className="mb-4"><Notice tone="ok">{sp.ok}</Notice></div>}
       {sp.blad && <div className="mb-4"><Notice tone="error">{sp.blad}</Notice></div>}
       {!isAdmin && <Notice>Ustawienia zmienia administrator.</Notice>}
+
+      {issues.length > 0 && (
+        <section id="bledy" className="card mb-5 border-rose-300 p-4">
+          <h2 className="h2 mb-1 flex items-center gap-2">
+            <span className="rounded-full bg-bad px-2 text-sm text-white tabular-nums">{issues.length}</span>
+            Błędy automatu
+          </h2>
+          <p className="mb-3 text-sm text-muted">Automat (katalog, stany, zamówienia) czegoś nie zrobił. Błąd znika sam, gdy kolejny przebieg już go nie widzi.</p>
+          <ul className="divide-y divide-line">
+            {issues.map((i) => (
+              <li key={i.key} className="py-3">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <p className="font-medium text-bad">{i.title}</p>
+                  <form action={dismissIssue}>
+                    <input type="hidden" name="key" value={i.key} />
+                    <input type="hidden" name="back" value={`/ustawienia?zakladka=${tab}`} />
+                    <button className="text-xs text-muted hover:text-ink hover:underline" title="Ukryj, dopóki się nie rozwiąże i nie wróci">ukryj</button>
+                  </form>
+                </div>
+                {i.hint && <p className="mt-1 text-sm"><b>Co to znaczy i co zrobić:</b> {i.hint}</p>}
+                {i.detail && <p className="mt-1 break-words font-mono text-xs text-muted">{i.detail}</p>}
+                <p className="mt-1 text-xs text-muted">
+                  od {fmt(i.first_seen_at)} · ostatnio {fmt(i.last_seen_at)}{i.count > 1 ? ` · ${i.count}× z rzędu` : ""}
+                  {i.href && <> · <Link className="text-accent hover:underline" href={i.href}>przejdź</Link></>}
+                </p>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {isAdmin && (
         <div className="flex flex-col gap-5 md:flex-row md:items-start">
