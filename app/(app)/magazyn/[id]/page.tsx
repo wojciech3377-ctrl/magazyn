@@ -90,8 +90,8 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
               <Field label="Cena w sklepie">{money(u.variant.links.find((l) => l.store_id === u.location.store_id && l.price !== null)?.price ?? u.variant.links.find((l) => l.price !== null)?.price ?? null)}</Field>
               <Field label="Forma sprzedaży">{PURCHASE_FORM[u.purchase_form]}</Field>
               <Field label="Właściciel">{u.owner_type === "consignment" ? `komis · ${u.consignor?.name}` : "własna"}</Field>
-              {profile.can_see_prices && <Field label="Cena zakupu">{money(u.purchase_price)}</Field>}
-              {profile.can_see_prices && u.owner_type === "consignment" && <Field label="Cena w komisie">{money(u.payout_amount)}</Field>}
+              {profile.can_see_prices && <Field label="Cena zakupu">{u.purchase_price === null ? "–" : inCur(Number(u.purchase_price))}</Field>}
+              {profile.can_see_prices && u.owner_type === "consignment" && <Field label="Cena w komisie">{u.payout_amount === null ? "–" : inCur(Number(u.payout_amount))}</Field>}
             </div>
           </section>
 
@@ -138,12 +138,18 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
               {profile.can_see_prices && (
                 <>
                   <div>
-                    <label className="label" htmlFor="purchase_price">Cena zakupu (zł)</label>
-                    <input className="input" id="purchase_price" name="purchase_price" inputMode="decimal" defaultValue={u.purchase_price ?? ""} />
+                    <label className="label" htmlFor="purchase_price">Cena zakupu</label>
+                    <span className="relative block">
+                      <input className="input pr-12 tabular-nums" id="purchase_price" name="purchase_price" inputMode="decimal" defaultValue={u.purchase_price ?? ""} />
+                      <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted">{cur ?? "zł"}</span>
+                    </span>
                   </div>
                   <div>
-                    <label className="label" htmlFor="payout_amount">Cena w komisie (zł)</label>
-                    <input className="input" id="payout_amount" name="payout_amount" inputMode="decimal" defaultValue={u.payout_amount ?? ""} />
+                    <label className="label" htmlFor="payout_amount">Cena w komisie</label>
+                    <span className="relative block">
+                      <input className="input pr-12 tabular-nums" id="payout_amount" name="payout_amount" inputMode="decimal" defaultValue={u.payout_amount ?? ""} />
+                      <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted">{cur ?? "zł"}</span>
+                    </span>
                   </div>
                 </>
               )}

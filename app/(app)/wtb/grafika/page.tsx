@@ -10,7 +10,7 @@ export default async function WtbGrafikaPage({ searchParams }: { searchParams: P
   const { supabase } = await requireProfile();
   const raw = sp.ids;
   const ids = (Array.isArray(raw) ? raw : raw ? raw.split(",") : []).filter((x) => /^[0-9a-f-]{36}$/i.test(x)).slice(0, 200);
-  let query = supabase.from("wtb_items").select("id, title, size, sku, image_url, product_id");
+  let query = supabase.from("wtb_items").select("*");
   query = ids.length ? query.in("id", ids) : query.eq("status", "active");
   const { data } = await query.order("created_at");
   const found = new Set((data ?? []).map((d) => d.id as string));

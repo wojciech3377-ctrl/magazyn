@@ -14,7 +14,7 @@ const PAD = 40;
 export const WTB_PER_PAGE = 30;
 const sheetSize = (n: number) => (n <= 16 ? { W: 1080, H: 1350 } : n <= 25 ? { W: 1500, H: 1650 } : { W: 1800, H: 1800 });
 
-export type WtbItem = { title: string; size: string | null; sku: string | null; image: string | null };
+export type WtbItem = { title: string; size: string | null; sku: string | null; image: string | null; used?: boolean };
 
 let fontCache: { regular: ArrayBuffer; bold: ArrayBuffer } | null = null;
 const toArrayBuffer = (b: Buffer) => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
@@ -92,7 +92,10 @@ export async function renderWtbSheet(items: (WtbItem & { img: string | null })[]
                 border: single ? "none" : "3px solid #e6e6e6", borderRadius: 18, padding: single ? 0 : cols >= 3 ? 10 : 16, overflow: "hidden",
               }}
             >
-              <div style={{ display: "flex", flex: 1, alignItems: "center", justifyContent: "center", minHeight: 0 }}>
+              <div style={{ display: "flex", flex: 1, alignItems: "center", justifyContent: "center", minHeight: 0, position: "relative" }}>
+                {it.used && (
+                  <div style={{ display: "flex", position: "absolute", top: single ? 12 : 4, left: single ? 12 : 4, background: "#0b0b0b", color: "#ffffff", fontSize: single ? 34 : cols >= 5 ? 14 : cols >= 3 ? 17 : 22, fontWeight: 700, letterSpacing: 2, padding: single ? "6px 18px" : "3px 9px", borderRadius: 8 }}>USED</div>
+                )}
                 {it.img ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={it.img} alt="" width={cellW} height={Math.max(40, cellH - footer)} style={{ width: "100%", height: Math.max(40, cellH - footer), objectFit: "contain" }} />
@@ -103,7 +106,7 @@ export async function renderWtbSheet(items: (WtbItem & { img: string | null })[]
               <div style={{ display: "flex", fontSize: titleFont, fontWeight: 700, color: "#111111", lineHeight: 1.2, height: single ? "auto" : titleFont * 2.45, maxHeight: titleFont * 2.45, overflow: "hidden", marginTop: 8 }}>{it.title}</div>
               {single ? (
                 <div style={{ display: "flex", gap: 24, marginTop: 24 }}>
-                  <Box label={it.size?.includes(", ") ? "ROZMIARY" : "ROZMIAR"} value={it.size ?? "–"} />
+                  <Box label={it.size?.includes(" / ") ? "ROZMIARY" : "ROZMIAR"} value={it.size ?? "–"} />
                   <Box label="SKU" value={it.sku ?? "–"} grow />
                 </div>
               ) : (

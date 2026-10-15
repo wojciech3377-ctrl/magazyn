@@ -21,6 +21,8 @@ import { ReceiptButton } from "@/components/ReceiptButton";
 import { fiscalPrinterReady } from "@/lib/fiscal/jobs";
 import type { JobView } from "../receipt-actions";
 import { refreshOrder } from "./actions";
+import { PickupPanel } from "./PickupPanel";
+import { isPersonalPickup } from "@/lib/orders/status";
 
 type Address = { name: string | null; company: string | null; address1: string | null; address2: string | null; city: string | null; zip: string | null; countryCodeV2: string | null; phone: string | null } | null;
 
@@ -220,6 +222,9 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
         )}
       </section>
 
+      {isPersonalPickup(order.shipping_method) && !par && status !== "cancelled" && status !== "delivered" && (
+        <PickupPanel orderId={order.id} ready={fulfillments.some((f) => (f.displayStatus ?? "").toUpperCase() === "READY_FOR_PICKUP")} />
+      )}
       <section id="etykieta" className="card mt-5 p-4">
         <h2 className="h2 mb-3">Etykieta</h2>
         {status === "cancelled" ? (

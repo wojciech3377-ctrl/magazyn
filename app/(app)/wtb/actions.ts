@@ -7,6 +7,10 @@ import { errorMessage } from "@/lib/errors";
 import type { LineItem } from "@/lib/sync/shop-orders";
 import { parseSizes } from "@/lib/wtb-group";
 import { dropUnusedWtbPhotos, storeWtbPhoto } from "@/lib/wtb-photo";
+import { reusedProducts } from "@/lib/queries/reused";
+
+const SQL57 = "Aby zapisać znacznik USED, uruchom w Supabase (SQL Editor) plik 0057_wtb_used.sql.";
+const usedErr = (m: string) => (/\bused\b/.test(m) ? SQL57 : m);
 
 export type WtbAddState = { ok?: string; error?: string } | null;
 export type CatalogResult = { productId: string; title: string; sku: string | null; image: string | null; variants: { id: string; option: string }[] };
@@ -109,8 +113,11 @@ export async function addOrderToWtb(_: WtbAddState, fd: FormData): Promise<WtbAd
       source: "order", order_id: order.id, order_line_id: l.id, note: `z zamówienia ${order.name}`, created_by: profile.id,
     };
   });
-  const { error } = await supabase.from("wtb_items").insert(rows);
-  if (error) return { error: errorMessage(error) };
+  // Produkty z tagiem „reused” w Shopify – od razu ze znacznikiem USED.
+  const isUsed = await reusedProducts(supabase, rows.map((r) => r.product_id).filter((x): x is string => !!x));
+  const withUsed = rows.map((r) => (r.product_id && isUsed(r.product_id) ? { ...r, used: true } : r));
+  const { error } = await supabase.from("wtb_items").insert(withUsed);
+  if (error) return { error: usedErr(errorMessage(error)) };
   revalidatePath("/wtb");
   return { ok: rows.length === 1 ? "Dodano do WTB." : `Dodano ${rows.length} produkty do WTB.` };
 }
@@ -134,14 +141,16 @@ export async function addFromCatalog(_: WtbAddState, fd: FormData): Promise<WtbA
   } catch (e) {
     return { error: errorMessage(e) };
   }
+  // USED: zaznaczone w formularzu albo produkt ma w Shopify tag „reused”.
+  const used = fd.get("used") === "1" || (await reusedProducts(supabase, [p.id as string]))(p.id as string);
   const rows = (variants.length ? variants : [null]).map((v) => ({
     title: p.title, size: v?.option ?? null, sku: p.style_sku, image_url: photo ?? p.image_url, product_id: p.id, variant_id: v?.id ?? null,
-    source: "catalog", note, created_by: profile.id,
+    source: "catalog", note, created_by: profile.id, ...(used ? { used: true } : {}),
   }));
   const { error } = await supabase.from("wtb_items").insert(rows);
   if (error) {
     await dropUnusedWtbPhotos([photo]);
-    return { error: errorMessage(error) };
+    return { error: usedErr(errorMessage(error)) };
   }
   // Własne zdjęcie dotyczy całej karty modelu – także rozmiarów dodanych wcześniej.
   if (photo) {
@@ -167,11 +176,12 @@ export async function addManual(_: WtbAddState, fd: FormData): Promise<WtbAddSta
   } catch (e) {
     return { error: errorMessage(e) };
   }
-  const rows = (sizes.length ? sizes : [null]).map((size) => ({ title, size, sku, note, image_url: photo, source: "manual", created_by: profile.id }));
+  const used = fd.get("used") === "1";
+  const rows = (sizes.length ? sizes : [null]).map((size) => ({ title, size, sku, note, image_url: photo, source: "manual", created_by: profile.id, ...(used ? { used: true } : {}) }));
   const { error } = await supabase.from("wtb_items").insert(rows);
   if (error) {
     await dropUnusedWtbPhotos([photo]);
-    return { error: errorMessage(error) };
+    return { error: usedErr(errorMessage(error)) };
   }
   revalidatePath("/wtb");
   return { ok: rows.length === 1 ? "Dodano do WTB." : `Dodano ${rows.length} pozycji do WTB.` };
@@ -232,14 +242,17 @@ export async function editWtbGroup(fd: FormData) {
     await supabase.from("wtb_items").update({ size: add.shift(), variant_id: null }).eq("id", r.id);
   }
   const base = list[0];
-  let error = (await supabase.from("wtb_items").update({ title, sku }).in("id", list.map((i) => i.id as string))).error;
+  const used = fd.get("used") === "1";
+  let error = (await supabase.from("wtb_items").update({ title, sku, used }).in("id", list.map((i) => i.id as string))).error;
+  // Bez SQL 57 (brak kolumny „used”) – zapis bez znacznika.
+  if (error && /\bused\b/.test(error.message)) error = (await supabase.from("wtb_items").update({ title, sku }).in("id", list.map((i) => i.id as string))).error;
   if (!error && remove.length) error = (await supabase.from("wtb_items").update({ status: "cancelled", closed_at: new Date().toISOString() }).in("id", remove.map((i) => i.id as string))).error;
   if (!error && add.length) {
     // Rozmiar z katalogu, gdy model jest w katalogu.
     const { data: vs } = base.product_id ? await supabase.from("variants").select("id, option").eq("product_id", base.product_id) : { data: [] };
     const vOf = new Map((vs ?? []).map((v) => [norm(v.option as string), v.id as string]));
     error = (await supabase.from("wtb_items").insert(add.map((size) => ({
-      title, sku, size, image_url: base.image_url, product_id: base.product_id, variant_id: vOf.get(norm(size)) ?? null,
+      title, sku, size, image_url: base.image_url, product_id: base.product_id, variant_id: vOf.get(norm(size)) ?? null, ...(used ? { used: true } : {}),
       source: base.source === "manual" ? "manual" : "catalog", note: base.source === "manual" || base.source === "catalog" ? base.note : null, created_by: profile.id,
     })))).error;
   }

@@ -104,13 +104,22 @@ export default async function ContractPage({ params, searchParams }: { params: P
                 <span>Kwota za <b>każdą rzecz</b> – każda przypięta rzecz dostaje tę kwotę zakupu</span>
               </label>
             )}
+            <div>
+              <label className="label" htmlFor="vat_form">Forma VAT</label>
+              <select id="vat_form" className="input w-40" name="vat_form" defaultValue={c.vat_form ?? ""}>
+                <option value="vat_margin">FV marża</option>
+                <option value="vat_23">FV 23%</option>
+                <option value="">bez określenia</option>
+              </select>
+            </div>
             <SubmitButton className="btn-secondary">Zapisz</SubmitButton>
           </form>
           {!c.template && <section className="card p-4">
             <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
               <Field label="Typ">{CONTRACT_TYPE[c.type]}</Field>
               <Field label="Data">{dateOnly(c.contract_date)}</Field>
-              {profile.can_see_prices && <Field label="Kwota">{money(c.amount)}</Field>}
+              {profile.can_see_prices && <Field label={c.amount_per_item ? "Kwota za rzecz" : "Kwota"}>{c.amount === null ? "–" : c.currency && c.currency !== "PLN" ? `${Number(c.amount).toFixed(2).replace(".", ",")} ${c.currency}` : money(c.amount)}</Field>}
+              <Field label="Forma VAT">{c.vat_form === "vat_23" ? "FV 23%" : c.vat_form === "vat_margin" ? "FV marża" : "–"}</Field>
               {c.consignor && <Field label="Komisant">{(c.consignor as { name: string }).name}</Field>}
             </div>
             {c.notes && <p className="mt-3 text-sm text-muted">{c.notes}</p>}

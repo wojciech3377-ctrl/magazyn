@@ -106,7 +106,10 @@ export function computeOrderStatus(o: OrderForStatus, shipments: ShipmentLike[])
 
   // „Gotowe do odbioru” (odbiór osobisty) nie liczy się jako wysłane – zamówienie czeka, aż klient je odbierze.
   const done = (o.fulfillments ?? []).filter((f) => !/cancel|error|failure/i.test(f.status) && (f.displayStatus ?? "").toUpperCase() !== "READY_FOR_PICKUP");
-  if (!done.length) return { status: "new", detail: null };
+  if (!done.length) {
+    const ready = (o.fulfillments ?? []).some((f) => !/cancel|error|failure/i.test(f.status) && (f.displayStatus ?? "").toUpperCase() === "READY_FOR_PICKUP");
+    return { status: "new", detail: ready ? "gotowe do odbioru" : null };
+  }
   const shown = done.map((f) => (f.displayStatus ?? "").toUpperCase());
   if (shown.some((d) => ["FAILURE", "ATTEMPTED_DELIVERY", "NOT_DELIVERED"].includes(d))) return { status: "problem", detail: "Shopify: problem z doręczeniem" };
   if (shown.every((d) => d === "DELIVERED" || d === "PICKED_UP")) return { status: "delivered", detail: null };

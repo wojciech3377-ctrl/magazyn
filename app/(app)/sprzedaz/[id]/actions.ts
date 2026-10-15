@@ -8,7 +8,7 @@ import type { LineItem } from "@/lib/sync/shop-orders";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { accountServices, calculatePrices, cancelPackages, createPackage, deletePackage, furgonetkaConnection, getPackage, orderPackages, type Address, type NewPackage } from "@/lib/integrations/furgonetka";
 import { isShopifyOrder } from "@/lib/orders/par-order";
-import { cancelShopifyOrder, fulfillWithTracking, getOrder, refundShopifyLines, type CancelReason } from "@/lib/integrations/shopify";
+import { cancelShopifyOrder, fulfillWithTracking, getOrder, markPickedUp, markReadyForPickup, refundShopifyLines, type CancelReason } from "@/lib/integrations/shopify";
 import { carrierOf, getSender, lockerOnly, LOCKER_SIZES, SERVICE_LABEL, toPoint, type ServiceKey } from "@/lib/orders/sender";
 import { refreshOrderStatus, saveShopifyOrders, syncFurgonetkaShipments } from "@/lib/sync/shop-orders";
 
@@ -389,3 +389,28 @@ export async function returnOrderAction(_: OrderOpState, fd: FormData): Promise<
   return { ok: `Zwrot zapisany.${summary}`, notes };
 }
 
+
+/** Odbiór osobisty: „Gotowe do odbioru” (Shopify wysyła e-mail klientowi) albo „Klient odebrał”. */
+export async function pickupAction(_: OrderOpState, fd: FormData): Promise<OrderOpState> {
+  await requireSection("sprzedaz");
+  const db = createAdminClient();
+  const order = await loadOrder(str(fd, "id"));
+  if (!order) return { error: "Nie ma takiego zamówienia." };
+  if (!order.store?.shopify_domain || !isShopifyOrder(order.shopify_order_id)) return { error: "To zamówienie nie jest ze Shopify." };
+  const step = str(fd, "step");
+  try {
+    const note = step === "picked"
+      ? await markPickedUp(order.store.shopify_domain, order.store.code, order.shopify_order_id)
+      : await markReadyForPickup(order.store.shopify_domain, order.store.code, order.shopify_order_id);
+    if (note) return { error: note };
+    const fresh = await getOrder(order.store.shopify_domain, order.store.code, order.shopify_order_id);
+    if (fresh) await saveShopifyOrders(db, order.store_id, [fresh]);
+    await refreshOrderStatus(db, [order.id]);
+  } catch (e) {
+    const m = errorMessage(e);
+    return { error: /access|scope|permission|denied/i.test(m) ? `${m} – aplikacja w Shopify potrzebuje uprawnienia „write_merchant_managed_fulfillment_orders” (Dev Dashboard → aplikacja → Konfiguracja → zakresy).` : m };
+  }
+  revalidatePath(`/sprzedaz/${order.id}`);
+  revalidatePath("/sprzedaz");
+  return { ok: step === "picked" ? "Zamówienie oznaczone jako odebrane." : "Gotowe do odbioru – Shopify wysłał klientowi e-mail." };
+}

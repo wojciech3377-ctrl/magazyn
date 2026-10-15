@@ -15,6 +15,7 @@ import { Barcode } from "@/app/etykiety/Barcode";
 import { FilterField, ListToolbar } from "@/components/ListToolbar";
 import { BulkBar } from "@/components/BulkBar";
 import { activeFilters, filterChips } from "@/lib/list-params";
+import { ChangesPreview } from "./ChangesPreview";
 
 // Przycisk „Sprawdź nowe produkty i stany” czyta cały katalog Shopify – potrzebuje dłuższego czasu.
 export const maxDuration = 300;
@@ -147,6 +148,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
       />
 
       {sp.ok && <div className="mb-4"><Notice tone="ok">{sp.ok}</Notice></div>}
+      {sp.zmiany && <ChangesPreview id={sp.zmiany} />}
       {sp.blad && <div className="mb-4"><Notice tone="error">{sp.blad}</Notice></div>}
 
       <ListToolbar
@@ -308,7 +310,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
                     {u.owner_type === "consignment" ? (
                       <>
                         <Link href={`/magazyn?wlasciciel=consignment&komisant=${u.consignor?.id}`} className="line-clamp-2 break-words text-sm font-medium leading-tight text-accent hover:underline" title={u.consignor?.name}>{u.consignor?.name}</Link>
-                        {profile.can_see_prices && u.payout_amount !== null && <span className="block text-xs text-muted">w komisie {money(u.payout_amount)}</span>}
+                        {profile.can_see_prices && u.payout_amount !== null && <span className="block text-xs text-muted">w komisie {(() => { const ct = u.contract_id ? contractById.get(u.contract_id) : null; return ct?.currency && ct.currency !== "PLN" ? `${Number(u.payout_amount).toFixed(2)} ${ct.currency}` : money(u.payout_amount); })()}</span>}
                       </>
                     ) : (
                       <span className="text-sm text-muted max-md:text-xs">– {OWNER_TYPE.own}</span>

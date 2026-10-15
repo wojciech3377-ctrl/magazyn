@@ -9,6 +9,7 @@ import { adjustStock, type StockChange } from "@/lib/stock";
 import { parseAmount } from "@/lib/contracts/upload";
 import { errorMessage } from "@/lib/errors";
 import { inheritContractPrice, priceMessage } from "@/lib/contracts/inherit-price";
+import { changesSince } from "@/lib/sync/changes";
 
 /** Statusy liczone w stanie magazynu (Shopify). */
 const COUNTED = ["in_stock", "reserved"];
@@ -262,6 +263,9 @@ export async function runAutoCatalogNow() {
   const db = createAdminClient();
   let msg: string;
   let ok = true;
+  // Chwila startu – po odczycie podgląd tego, co się od niej zmieniło (zapisany w dzienniku, link w komunikacie).
+  const since = new Date(Date.now() - 2000).toISOString();
+  let changesId: string | null = null;
   try {
     const r = await runAutoCatalog(db, true);
     const sum = (vals: unknown[], key: "created" | "changed" | "removed" | "waiting" | "withdrawn") => vals.reduce<number>((n, x) => n + (typeof x === "object" && x && key in x ? Number((x as Record<string, unknown>)[key]) || 0 : 0), 0);
@@ -278,6 +282,11 @@ export async function runAutoCatalogNow() {
         : "Katalog Shopify aktualny – od ostatniego sprawdzenia nic się nie zmieniło";
     msg = `${catalogMsg}. Stany wszystkich rozmiarów porównane z Shopify – ${stockMsg.replace(/^ze stanów Shopify: /, "")}.`;
     await db.from("sync_log").insert({ job: "auto-catalog", ok: true, message: JSON.stringify(r) });
+    const changes = await changesSince(db, since).catch(() => null);
+    if (changes) {
+      const { data: log } = await db.from("sync_log").insert({ job: "auto-catalog-changes", ok: true, message: JSON.stringify(changes) }).select("id").single();
+      changesId = log?.id != null ? String(log.id) : null;
+    }
   } catch (e) {
     ok = false;
     msg = errorMessage(e);
@@ -285,5 +294,5 @@ export async function runAutoCatalogNow() {
     if (/za dużo na automat/.test(msg)) msg += " Jeśli to zamierzone, wyrównaj stan w Ustawienia → Stany magazynowe („Wyrównaj do Shopify teraz”).";
   }
   revalidatePath("/magazyn");
-  redirect(`/magazyn?${ok ? "ok" : "blad"}=${encodeURIComponent(msg)}`);
+  redirect(`/magazyn?${changesId ? `zmiany=${changesId}&` : ""}${ok ? "ok" : "blad"}=${encodeURIComponent(msg)}`);
 }

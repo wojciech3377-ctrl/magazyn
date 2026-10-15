@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { requireProfile } from "@/lib/auth";
 import { imageData, renderWtbSheet, wtbPages } from "@/lib/wtb";
-import { groupWtb } from "@/lib/wtb-group";
+import { groupWtb, joinSizes } from "@/lib/wtb-group";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -13,7 +13,7 @@ export async function GET(req: NextRequest) {
   const { supabase } = await requireProfile();
   const sp = req.nextUrl.searchParams;
   const ids = (sp.get("ids") ?? "").split(",").filter((x) => UUID.test(x)).slice(0, 200);
-  let query = supabase.from("wtb_items").select("id, title, size, sku, image_url, product_id, created_at");
+  let query = supabase.from("wtb_items").select("*");
   query = ids.length ? query.in("id", ids) : query.eq("status", "active");
   const { data } = await query.order("created_at");
   const rows = ids.length ? ids.map((id) => data?.find((d) => d.id === id)).filter((x): x is NonNullable<typeof x> => !!x) : data ?? [];
@@ -26,7 +26,7 @@ export async function GET(req: NextRequest) {
   const width = items.length === 1 ? 1200 : items.length <= 4 ? 700 : 450;
   const imgs = await Promise.all(items.map((it) => imageData(it.image_url, width)));
   return renderWtbSheet(
-    items.map((g, i) => ({ title: g.title, size: g.sizes.join(", ") || null, sku: g.sku, image: g.image_url, img: imgs[i] })),
+    items.map((g, i) => ({ title: g.title, size: joinSizes(g.sizes) || null, sku: g.sku, image: g.image_url, img: imgs[i], used: g.used })),
     { page, pages: pages.length, download: sp.get("pobierz") === "1" },
   );
 }

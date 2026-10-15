@@ -14,6 +14,7 @@ export function ContractForm({ consignors, defaultUnits, canSeePrices, returnTo 
     <form action={action} className="card grid max-w-3xl gap-3 p-4 md:grid-cols-2">
       <input type="hidden" name="returnTo" value={returnTo} />
       {saleId && <input type="hidden" name="sale_id" value={saleId} />}
+      {!saleId && <CopiesCounter />}
       {saleLabel && <p className="rounded-md bg-sky-50 p-2 text-sm md:col-span-2">Umowa do sprzedanego przedmiotu: <b>{saleLabel}</b>. Przedmiot dostanie sztukę w magazynie (sprzedaną) z tą umową; kwota umowy = cena zakupu.</p>}
       {saleLabel && pickVariantStore !== null && <div className="md:col-span-2"><VariantPick name="variant_id" storeId={pickVariantStore} label="Pozycja nie jest powiązana z katalogiem – wybierz produkt i rozmiar" /></div>}
       <div>
@@ -23,6 +24,14 @@ export function ContractForm({ consignors, defaultUnits, canSeePrices, returnTo 
           <option value="consignment">umowa komisowa</option>
           <option value="invoice">FV zakupu</option>
           <option value="other">inna</option>
+        </select>
+      </div>
+      <div>
+        <label className="label" htmlFor="vat_form">Forma VAT</label>
+        <select className="input" id="vat_form" name="vat_form" defaultValue="vat_margin">
+          <option value="vat_margin">FV marża – tylko do rzeczy z VAT marża</option>
+          <option value="vat_23">FV 23% – tylko do rzeczy z 23%</option>
+          <option value="">bez określenia</option>
         </select>
       </div>
       <div>
@@ -73,5 +82,22 @@ export function ContractForm({ consignors, defaultUnits, canSeePrices, returnTo 
       {state?.error && <p className="text-sm text-bad md:col-span-2">{state.error}</p>}
       <div className="md:col-span-2"><button className="btn" disabled={pending}>{pending ? "Zapisuję…" : "Zapisz umowę"}</button></div>
     </form>
+  );
+}
+
+/** Ile jednakowych umów z tym samym plikiem utworzyć (rzeczy trafią tylko do pierwszej). */
+function CopiesCounter() {
+  const [n, setN] = useState(1);
+  const set = (v: number) => setN(Math.min(50, Math.max(1, Math.floor(v) || 1)));
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-xl border border-line bg-slate-50 p-3 md:col-span-2">
+      <span className="text-sm font-medium">Ile takich samych umów utworzyć?</span>
+      <span className="inline-flex items-center rounded-lg border border-line bg-white">
+        <button type="button" className="h-9 w-9 text-lg text-muted hover:text-ink" onClick={() => set(n - 1)} aria-label="Mniej">−</button>
+        <input name="copies" value={n} onChange={(e) => set(Number(e.target.value))} inputMode="numeric" aria-label="Liczba umów" className="h-9 w-12 border-x border-line text-center tabular-nums outline-none" />
+        <button type="button" className="h-9 w-9 text-lg text-muted hover:text-ink" onClick={() => set(n + 1)} aria-label="Więcej">+</button>
+      </span>
+      <span className="text-xs text-muted">{n > 1 ? `Powstanie ${n} umów z tym samym plikiem i danymi. Rzeczy wybrane niżej trafią tylko do pierwszej.` : "Jedna umowa."}</span>
+    </div>
   );
 }

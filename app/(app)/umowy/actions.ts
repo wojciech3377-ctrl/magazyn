@@ -23,7 +23,9 @@ async function attachByCodes(supabase: Awaited<ReturnType<typeof requireSection>
   );
   const found = units ?? [];
   if (found.length) {
-    await supabase.from("units").update({ contract_id: contractId }).in("id", found.map((u) => u.id));
+    // Forma VAT umowy niezgodna z którąś sztuką – baza odrzuca całość z opisem (nic nie zostaje przypięte).
+    const { error } = await supabase.from("units").update({ contract_id: contractId }).in("id", found.map((u) => u.id));
+    if (error) throw new Error(error.message);
     await supabase.from("unit_events").insert(found.map((u) => ({ unit_id: u.id, type: "contract", data: { contract_id: contractId } })));
   }
   const hit = new Set(found.flatMap((u) => [u.code, (u.identifier ?? "").toUpperCase()]));
@@ -55,12 +57,13 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
     }
     const docNumber = String(formData.get("doc_number") ?? "").trim().slice(0, 60) || null;
     const perItem = formData.get("amount_per_item") === "1";
-    const { data, error } = await supabase.from("contracts").insert({
+    const vatForm = ["vat_margin", "vat_23"].includes(String(formData.get("vat_form"))) ? String(formData.get("vat_form")) : null;
+    const payload = {
       ...(perItem ? { amount_per_item: true } : {}),
+      ...(vatForm ? { vat_form: vatForm } : {}),
       type,
       counterparty,
       doc_number: docNumber,
-      ...(catalogItems.length ? { items: catalogItems } : {}),
       consignor_id: type === "consignment" ? String(formData.get("consignor_id") ?? "") || null : null,
       contract_date: String(formData.get("contract_date") ?? "") || null,
       amount: parseAmount(formData.get("amount")),
@@ -68,12 +71,28 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
       notes: String(formData.get("notes") ?? "").trim() || null,
       file_path: file?.path ?? null,
       file_name: file?.name ?? null,
+    };
+    const { data, error } = await supabase.from("contracts").insert({
+      ...payload,
+      ...(catalogItems.length ? { items: catalogItems } : {}),
     }).select("id").single();
     if (error && /amount_per_item/.test(error.message)) throw new Error("Aby zapisać „kwota za każdą rzecz”, uruchom w Supabase (SQL Editor) plik 0055_contract_amount_per_item.sql.");
+    if (error && /vat_form/.test(error.message)) throw new Error("Aby zapisać formę VAT umowy, uruchom w Supabase (SQL Editor) plik 0056_contract_vat_form.sql.");
     if (error) throw error;
     id = data.id;
     // Numer nie wpisany → odczyt z pliku PDF (klucz serwera – plik w prywatnym magazynie).
     if (!docNumber) await fillContractNumber(createAdminClient(), id);
+    // Kilka jednakowych umów z tym samym plikiem (np. jedna faktura na kilka osobnych umów). Rzeczy, sprzedaż
+    // i pozycje z katalogu trafiają tylko do pierwszej.
+    const copies = Math.min(50, Math.max(1, Math.floor(Number(formData.get("copies") ?? 1)) || 1));
+    if (copies > 1) {
+      const { data: first } = await supabase.from("contracts").select("doc_number").eq("id", id).single();
+      const { data: made, error: copyErr } = await supabase.from("contracts")
+        .insert(Array.from({ length: copies - 1 }, () => ({ ...payload, doc_number: first?.doc_number ?? payload.doc_number }))).select("id");
+      okNote = copyErr
+        ? `Utworzono 1 umowę – kopii nie udało się zapisać: ${copyErr.message}`
+        : `Utworzono ${1 + (made?.length ?? 0)} jednakowych umów z tym samym plikiem. Rzeczy przypięte tylko do tej (pierwszej) – pozostałe są na liście niewykorzystanych.`;
+    }
     const saleId = String(formData.get("sale_id") ?? "");
     if (saleId) {
       // Kwota zakupu sztuki – z umowy, według tej samej reguły co przy przypinaniu (faktura: nie cała kwota).
@@ -81,13 +100,19 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
       if (attachErr) note = `?blad=${encodeURIComponent(`Umowa zapisana, ale nie przypięta do sprzedaży: ${attachErr.message}`)}`;
       else if (newUnit) {
         const pm = priceMessage(await inheritContractPrice(supabase, id, [newUnit as string]));
-        if (pm) okNote = pm;
+        if (pm) okNote = [okNote, pm].filter(Boolean).join(" ");
       }
     }
-    const r = await attachByCodes(supabase, id, String(formData.get("units") ?? ""));
+    // Umowa już zapisana – błąd przypinania (np. inna forma VAT) nie może jej cofnąć, tylko trafia do komunikatu.
+    let attachError = "";
+    const r = await attachByCodes(supabase, id, String(formData.get("units") ?? "")).catch((e: unknown) => {
+      attachError = errorMessage(e);
+      return { attached: 0, missing: [] as string[], price: { updated: [], problems: [], notes: [] } as PriceResult };
+    });
     const pm = priceMessage(r.price);
-    if (r.missing.length || r.price.problems.length) note = `?blad=${encodeURIComponent([r.missing.length ? `Nie znaleziono sztuk: ${r.missing.join(", ")}.` : "Umowa zapisana i przypięta.", pm].filter(Boolean).join(" "))}`;
-    else if (pm) okNote = pm;
+    if (attachError) note = `?blad=${encodeURIComponent([okNote || "Umowa zapisana.", `Rzeczy NIE zostały przypięte: ${attachError}`].join(" "))}`;
+    else if (r.missing.length || r.price.problems.length) note = `?blad=${encodeURIComponent([r.missing.length ? `Nie znaleziono sztuk: ${r.missing.join(", ")}.` : "Umowa zapisana i przypięta.", pm].filter(Boolean).join(" "))}`;
+    else if (pm) okNote = [okNote, pm].filter(Boolean).join(" ");
   } catch (e) {
     return { error: e instanceof Error ? e.message : String((e as { message?: string }).message ?? e) };
   }
@@ -103,7 +128,12 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
 export async function attachUnits(formData: FormData) {
   const { supabase } = await requireSection("umowy", "dostawa");
   const id = String(formData.get("id"));
-  const r = await attachByCodes(supabase, id, String(formData.get("units") ?? ""));
+  let r: Awaited<ReturnType<typeof attachByCodes>>;
+  try {
+    r = await attachByCodes(supabase, id, String(formData.get("units") ?? ""));
+  } catch (e) {
+    redirect(`/umowy/${id}?blad=${encodeURIComponent(errorMessage(e))}`);
+  }
   revalidatePath(`/umowy/${id}`);
   const pm = priceMessage(r.price);
   const text = [`Przypięto ${r.attached} szt.`, r.missing.length ? `Nie znaleziono: ${r.missing.join(", ")}.` : "", pm].filter(Boolean).join(" ");
@@ -158,7 +188,11 @@ export async function deleteContract(formData: FormData) {
   await supabase.from("units").update({ contract_id: null }).eq("contract_id", id);
   const { error } = await supabase.from("contracts").delete().eq("id", id);
   if (error) redirect(`/umowy/${id}?blad=${encodeURIComponent(error.message)}`);
-  if (c?.file_path) await supabase.storage.from("contracts").remove([c.file_path]);
+  // Plik usuwamy tylko, gdy nie używa go żadna inna umowa (kopie z tym samym skanem).
+  if (c?.file_path) {
+    const { count: shared } = await supabase.from("contracts").select("id", { count: "exact", head: true }).eq("file_path", c.file_path);
+    if (!shared) await supabase.storage.from("contracts").remove([c.file_path]);
+  }
   revalidatePath("/umowy");
   redirect("/umowy");
 }
@@ -324,6 +358,7 @@ export async function updateContractMeta(formData: FormData) {
   const patch: Record<string, unknown> = {
     doc_number: String(formData.get("doc_number") ?? "").trim().slice(0, 60) || null,
     ...(currency ? { currency: ["PLN", "EUR"].includes(currency) ? currency : null } : {}),
+    ...(formData.has("vat_form") ? { vat_form: ["vat_margin", "vat_23"].includes(String(formData.get("vat_form"))) ? String(formData.get("vat_form")) : null } : {}),
   };
   // Kwota i „za każdą rzecz” – tylko gdy pola są w formularzu (osoba widzi ceny).
   if (formData.has("amount")) {

@@ -48,11 +48,11 @@ export function GroupCheck({ label }: { label: string }) {
 }
 
 /** Edycja modelu w okienku na środku ekranu (nie rozpycha i nie zasłania innych kart). */
-export function WtbEditDialog({ formId, title, sku, sizes }: { formId: string; title: string; sku: string | null; sizes: string[] }) {
+export function WtbEditDialog({ formId, title, sku, sizes, used = false }: { formId: string; title: string; sku: string | null; sizes: string[]; used?: boolean }) {
   const ref = useRef<HTMLDialogElement>(null);
   return (
     <>
-      <button type="button" className="text-xs text-accent hover:underline" onClick={() => ref.current?.showModal()}>Zmień nazwę / rozmiary</button>
+      <button type="button" className="text-xs text-accent hover:underline" onClick={() => ref.current?.showModal()}>Zmień nazwę / rozmiary / USED</button>
       <dialog ref={ref} className="w-[min(92vw,28rem)] rounded-xl border border-line p-0 shadow-xl backdrop:bg-black/40" onClick={(e) => { if (e.target === ref.current) ref.current?.close(); }}>
         <div className="space-y-3 p-4">
           <div className="flex items-center justify-between">
@@ -68,6 +68,10 @@ export function WtbEditDialog({ formId, title, sku, sizes }: { formId: string; t
           <label className="block text-sm"><span className="label">Rozmiary (oddziel przecinkiem)</span>
             <input className="input" name="sizes" form={formId} defaultValue={sizes.join(", ")} placeholder="np. 40, 41, 42,5" />
             <span className="mt-1 block text-xs text-muted">Usunięty rozmiar zniknie z listy, dopisany pojawi się na tej karcie.</span>
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" name="used" value="1" form={formId} defaultChecked={used} />
+            <span><b>USED</b> – szukamy używanych (znacznik na karcie i na grafice)</span>
           </label>
           <div className="flex justify-end gap-2">
             <button type="button" className="btn-secondary" onClick={() => ref.current?.close()}>Anuluj</button>

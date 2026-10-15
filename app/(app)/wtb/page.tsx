@@ -6,7 +6,7 @@ import { SelectAll } from "@/components/SelectAll";
 import { WtbAdd } from "./WtbAdd";
 import { editWtbGroup, updateWtb } from "./actions";
 import { GroupCheck, WtbTile, WtbCopyList, WtbEditDialog, WtbPhotoButton } from "./WtbControls";
-import { groupWtb } from "@/lib/wtb-group";
+import { groupWtb, joinSizes } from "@/lib/wtb-group";
 import { isWtbPhoto, wtbDisplayUrls } from "@/lib/wtb-photo";
 
 const TABS = [
@@ -19,7 +19,7 @@ export default async function WtbPage({ searchParams }: { searchParams: Promise<
   const { supabase } = await requireProfile();
   const tab = TABS.find((t) => t.key === (sp.widok ?? "")) ?? TABS[0];
   const [{ data: items }, ...counts] = await Promise.all([
-    supabase.from("wtb_items").select("id, title, size, sku, image_url, note, source, order_id, product_id, created_at, closed_at").eq("status", tab.status)
+    supabase.from("wtb_items").select("*").eq("status", tab.status)
       .order(tab.status === "active" ? "created_at" : "closed_at", { ascending: tab.status === "active" }).limit(500),
     ...TABS.map((t) => supabase.from("wtb_items").select("id", { count: "exact", head: true }).eq("status", t.status)),
   ]);
@@ -57,7 +57,7 @@ export default async function WtbPage({ searchParams }: { searchParams: Promise<
 
       {active && groups.length > 0 && (
         <div className="mb-5">
-          <WtbCopyList lines={groups.flatMap((g) => (g.items.length ? g.items : []).map((it) => [g.title, g.sku, it.size].filter((x) => x && String(x).trim()).join(" - ")))} />
+          <WtbCopyList lines={groups.map((g) => [g.used ? `${g.title} (USED)` : g.title, g.sku, joinSizes(g.sizes)].filter((x) => x && String(x).trim()).join(" - "))} />
         </div>
       )}
 
@@ -97,11 +97,12 @@ export default async function WtbPage({ searchParams }: { searchParams: Promise<
                     <GroupCheck label={g.title} />
                     <span className="text-xs text-muted">{dateOnly(active ? first.created_at : first.closed_at)}</span>
                   </div>
-                  <div className="my-2 flex h-32 items-center justify-center">
+                  <div className="relative my-2 flex h-32 items-center justify-center">
+                    {g.used && <span className="absolute left-0 top-0 rounded bg-ink px-2 py-0.5 text-xs font-bold tracking-wider text-white shadow">USED</span>}
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     {g.image_url && shown.get(g.image_url) ? <img src={shown.get(g.image_url)} alt="" className="max-h-32 object-contain" loading="lazy" /> : <span className="text-xs text-muted">brak zdjęcia</span>}
                   </div>
-                  <div className="line-clamp-2 text-sm font-medium">{g.title}</div>
+                  <div className="line-clamp-2 text-sm font-medium">{g.used && <span className="mr-1.5 inline-block rounded bg-ink px-1.5 py-px align-middle text-[10px] font-bold tracking-wider text-white">USED</span>}{g.title}</div>
                   {g.sku && <div className="truncate font-mono text-xs text-muted">{g.sku}</div>}
                   <div className="mt-2 flex flex-wrap gap-1" role="group" aria-label={`Rozmiary: ${g.title}`}>
                     {g.items.map((it) => (
@@ -116,7 +117,7 @@ export default async function WtbPage({ searchParams }: { searchParams: Promise<
                   ))}
                   {active && (
                     <div className="mt-2 flex flex-col items-start gap-0.5 border-t border-line pt-1">
-                      <WtbEditDialog formId={`wtb-edit-${g.items[0].id}`} title={g.title} sku={g.sku} sizes={g.items.map((i) => i.size ?? "").filter(Boolean)} />
+                      <WtbEditDialog formId={`wtb-edit-${g.items[0].id}`} title={g.title} sku={g.sku} used={g.used} sizes={g.items.map((i) => i.size ?? "").filter(Boolean)} />
                       <WtbPhotoButton ids={g.ids} custom={isWtbPhoto(g.image_url)} label={g.title} />
                     </div>
                   )}

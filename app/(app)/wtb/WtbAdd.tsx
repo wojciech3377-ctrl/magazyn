@@ -114,6 +114,7 @@ function FromCatalog() {
       </div>
       <input className="input max-w-xl" name="note" placeholder="Notatka (opcjonalnie, np. maks. cena) – nie trafia na grafikę" />
       <PhotoField hint="Własne zdjęcie (opcjonalnie) – zamiast zdjęcia z katalogu" />
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" name="used" value="1" /> <b>USED</b> – szukamy używanych (produkty z tagiem „reused” dostają znacznik same)</label>
       {state?.error && <p className="text-sm text-bad">{state.error}</p>}
       <button className="btn" disabled={pending || (!sizes.length && picked.variants.length > 0)}>
         {pending ? "Dodaję…" : sizes.length > 1 ? `Dodaj ${sizes.length} rozmiary` : "Dodaj do WTB"}
@@ -139,6 +140,7 @@ function Manual() {
       <div><label className="label" htmlFor="w-sizes">Rozmiary</label><input id="w-sizes" className="input" name="sizes" placeholder="np. 42, 42.5, 43" /></div>
       <div><label className="label" htmlFor="w-sku">SKU</label><input id="w-sku" className="input font-mono" name="sku" placeholder="np. CT5053-001" /></div>
       <div className="md:col-span-3"><PhotoField hint="Zdjęcie (opcjonalnie) – z telefonu albo z dysku, trafia na grafikę" /></div>
+      <label className="flex items-center gap-2 text-sm md:col-span-3"><input type="checkbox" name="used" value="1" /> <b>USED</b> – szukamy używanych (znacznik na karcie i na grafice)</label>
       <div className="md:col-span-2"><input className="input" name="note" placeholder="Notatka (opcjonalnie) – nie trafia na grafikę" aria-label="Notatka" /></div>
       <div className="flex items-center gap-3">
         <button className="btn" disabled={pending}>{pending ? "Dodaję…" : "Dodaj do WTB"}</button>

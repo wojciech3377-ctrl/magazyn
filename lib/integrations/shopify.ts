@@ -291,6 +291,54 @@ export async function fulfillWithTracking(
   return null;
 }
 
+/** Otwarte pozycje do realizacji (fulfillment orders) zamówienia – z rodzajem dostawy (PICK_UP = odbiór osobisty). */
+async function openFulfillmentOrders(domain: string, storeCode: string, orderId: string) {
+  const fo = await shopifyGraphql<{ order: { fulfillmentOrders: { nodes: { id: string; status: string; deliveryMethod: { methodType: string } | null }[] } } | null }>(
+    domain,
+    storeCode,
+    `query($id: ID!) { order(id: $id) { fulfillmentOrders(first: 10) { nodes { id status deliveryMethod { methodType } } } } }`,
+    { id: orderId },
+  );
+  return (fo.order?.fulfillmentOrders.nodes ?? []).filter((n) => n.status === "OPEN" || n.status === "IN_PROGRESS");
+}
+
+/**
+ * Odbiór osobisty: „Gotowe do odbioru” w Shopify – Shopify sam wysyła klientowi e-mail (powiadomienie „Gotowe do odbioru”).
+ * Wymaga uprawnienia aplikacji write_merchant_managed_fulfillment_orders.
+ */
+export async function markReadyForPickup(domain: string, storeCode: string, orderId: string) {
+  const open = await openFulfillmentOrders(domain, storeCode, orderId);
+  const pickup = open.filter((n) => n.deliveryMethod?.methodType === "PICK_UP");
+  if (!open.length) return "W Shopify nie ma otwartych pozycji – zamówienie jest już zrealizowane albo anulowane.";
+  if (!pickup.length) return "W Shopify to zamówienie nie ma dostawy „odbiór osobisty” – zmień sposób dostawy w Shopify albo użyj etykiety.";
+  const data = await shopifyGraphql<{ fulfillmentOrderLineItemsPreparedForPickup: { userErrors: { message: string }[] } }>(
+    domain,
+    storeCode,
+    `mutation($input: FulfillmentOrderLineItemsPreparedForPickupInput!) {
+      fulfillmentOrderLineItemsPreparedForPickup(input: $input) { userErrors { field message } }
+    }`,
+    { input: { lineItemsByFulfillmentOrder: pickup.map((n) => ({ fulfillmentOrderId: n.id })) } },
+  );
+  const err = data.fulfillmentOrderLineItemsPreparedForPickup.userErrors.map((e) => e.message).join("; ");
+  if (err) throw new Error(`Shopify: ${err}`);
+  return null;
+}
+
+/** Odbiór osobisty: klient odebrał – realizacja w Shopify bez numeru przesyłki (bez dodatkowego e-maila). */
+export async function markPickedUp(domain: string, storeCode: string, orderId: string) {
+  const open = await openFulfillmentOrders(domain, storeCode, orderId);
+  if (!open.length) return "W Shopify nie ma otwartych pozycji – zamówienie jest już zrealizowane.";
+  const data = await shopifyGraphql<{ fulfillmentCreate: { userErrors: { message: string }[] } }>(
+    domain,
+    storeCode,
+    `mutation($f: FulfillmentInput!) { fulfillmentCreate(fulfillment: $f) { fulfillment { id } userErrors { field message } } }`,
+    { f: { lineItemsByFulfillmentOrder: open.map((n) => ({ fulfillmentOrderId: n.id })), notifyCustomer: false } },
+  );
+  const err = data.fulfillmentCreate.userErrors.map((e) => e.message).join("; ");
+  if (err) throw new Error(`Shopify: ${err}`);
+  return null;
+}
+
 export type CancelReason = "CUSTOMER" | "DECLINED" | "FRAUD" | "INVENTORY" | "OTHER" | "STAFF";
 
 /**
