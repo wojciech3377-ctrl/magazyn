@@ -2,6 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { requireSection } from "@/lib/auth";
+import { contractTakenError } from "@/lib/contracts/free";
 import { fillContractNumber } from "@/lib/contracts/docnumber";
 import { findVariantIds } from "@/lib/queries/units";
 import { adjustStock } from "@/lib/stock";
@@ -72,6 +73,8 @@ export async function createDelivery(_: unknown, formData: FormData): Promise<{ 
     if (contractMode === "existing") {
       contractId = String(formData.get("contract_id") ?? "") || null;
       if (!contractId) return { error: "Wybierz umowę z listy." };
+      const taken = await contractTakenError(supabase, contractId, lines.reduce((n, l) => n + l.quantity, 0));
+      if (taken) return { error: taken };
     }
     if (contractMode === "new") {
       const counterparty = String(formData.get("counterparty") ?? "").trim();

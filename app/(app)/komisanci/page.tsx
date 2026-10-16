@@ -1,3 +1,4 @@
+import { searchWords, wordsOr } from "@/lib/search";
 import Link from "next/link";
 import { requireProfile } from "@/lib/auth";
 import { money } from "@/lib/labels";
@@ -17,7 +18,8 @@ export default async function KomisanciPage({ searchParams }: { searchParams: Pr
   const db = createAdminClient();
   const text = (sp.q ?? "").replace(/[%,()*\\]/g, " ").trim();
   let cq = supabase.from("consignors").select("*").order("name");
-  if (text) cq = cq.or(`name.ilike.%${text}%,email.ilike.%${text}%,phone.ilike.%${text}%`);
+  const qex = wordsOr(["name", "email", "phone"], searchWords(text));
+  if (qex) cq = cq.or(qex);
   if (sp.konto === "tak") cq = cq.not("user_id", "is", null);
   if (sp.konto === "nie") cq = cq.is("user_id", null);
   const [{ data: allConsignors }, { data: open }, fee, { data: intakes }] = await Promise.all([

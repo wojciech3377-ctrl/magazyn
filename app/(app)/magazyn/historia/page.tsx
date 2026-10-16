@@ -1,3 +1,4 @@
+import { searchWords, wordsOr } from "@/lib/search";
 import Link from "next/link";
 import { FilterField, ListToolbar } from "@/components/ListToolbar";
 import { filterChips } from "@/lib/list-params";
@@ -26,7 +27,7 @@ export default async function HistoryPage({ searchParams }: { searchParams: Prom
 
   let unitIds: string[] | null = null;
   if (q) {
-    let uq = supabase.from("units_list").select("id").or(`code.ilike.%${q}%,identifier.ilike.%${q}%,title.ilike.%${q}%,style_sku.ilike.%${q}%,consignor_name.ilike.%${q}%`).limit(300);
+    let uq = supabase.from("units_list").select("id").or(wordsOr(["code", "identifier", "title", "style_sku", "consignor_name"], searchWords(q)) ?? "id.is.null").limit(300);
     if (owner) uq = uq.eq("owner_type", owner);
     const { data } = await uq;
     unitIds = (data ?? []).map((u) => u.id as string);

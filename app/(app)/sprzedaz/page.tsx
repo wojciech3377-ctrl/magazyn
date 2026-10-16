@@ -1,3 +1,4 @@
+import { searchWords, wordsOr } from "@/lib/search";
 import { warsawDayRange } from "@/lib/month";
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -85,7 +86,8 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
   // Nieopłacone: czeka na płatność (bez pobrań; anulowane i zwrócone to nie „nieopłacone”).
   if (sp.platnosc === "nieoplacone") query = query.in("financial_status", ["PENDING", "AUTHORIZED", "PARTIALLY_PAID", "EXPIRED"]).eq("cod", false).is("cancelled_at", null);
   const q = (sp.q ?? "").replace(/[%,()#*]/g, "").trim();
-  if (q) query = query.or(`number.ilike.%${q}%,customer_name.ilike.%${q}%,email.ilike.%${q}%`);
+  const qex = wordsOr(["number", "customer_name", "email", "phone"], searchWords(q));
+  if (qex) query = query.or(qex);
 
   const [{ data: orders, count }, counts, { count: problems }, { data: logs }] = await Promise.all([
     query,
@@ -346,7 +348,8 @@ async function SaleLines({ sp, page }: { sp: Record<string, string | undefined>;
   if (status === "no_unit") query = query.eq("status", status).not("order.status", "in", `(${[...FINISHED].join(",")})`);
   else if (status) query = query.eq("status", status);
   else query = query.neq("status", "unmatched");
-  if (sp.q) query = query.ilike("order_ref", `%${sp.q.replace(/[%,()]/g, "")}%`);
+  const saleQ = wordsOr(["order_ref", "product_name"], searchWords(sp.q));
+  if (saleQ) query = query.or(saleQ);
 
   const [{ data: sales, count }, { data: lastSync }] = await Promise.all([
     query,
@@ -474,15 +477,16 @@ async function PosList({ page, q, sp }: { page: number; q: string; sp: Record<st
   const text = q.replace(/[%,()*\\]/g, " ").trim();
   if (text) {
     // Szukanie po nazwie przedmiotu, SKU, kodzie sztuki, IMEI, numerze sprzedaży albo kliencie.
+    const words = searchWords(text);
     const { data: units } = await supabase.from("units_list").select("id")
-      .or(`title.ilike.%${text}%,style_sku.ilike.%${text}%,code.ilike.%${text}%,identifier.ilike.%${text}%,base_sku.ilike.%${text}%`).limit(300);
+      .or(wordsOr(["title", "style_sku", "code", "identifier", "base_sku"], words)!).limit(300);
     const unitIds = (units ?? []).map((u) => u.id as string);
     const [{ data: items }, { data: named }] = await Promise.all([
       unitIds.length ? supabase.from("pos_order_items").select("order_id").in("unit_id", unitIds).limit(500) : Promise.resolve({ data: [] as { order_id: string }[] }),
-      supabase.from("pos_order_items").select("order_id").ilike("name", `%${text}%`).limit(200),
+      supabase.from("pos_order_items").select("order_id").or(wordsOr(["name"], words)!).limit(200),
     ]);
     const orderIds = [...new Set([...(items ?? []), ...(named ?? [])].map((i) => i.order_id as string))];
-    query = query.or([`code.ilike.%${text}%`, `customer.ilike.%${text}%`, ...(orderIds.length ? [`id.in.(${orderIds.slice(0, 150).join(",")})`] : [])].join(","));
+    query = query.or(wordsOr(["code", "customer"], words, orderIds.length ? [`id.in.(${orderIds.slice(0, 150).join(",")})`] : [])!);
   }
   const { data, count } = await query;
   // Numery wydrukowanych paragonów fiskalnych (z drukarki).

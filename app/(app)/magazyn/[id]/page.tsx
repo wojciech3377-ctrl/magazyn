@@ -1,3 +1,5 @@
+import { freeContracts } from "@/lib/contracts/free";
+import { OwnerFields } from "./OwnerFields";
 import Link from "next/link";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { productImages } from "@/lib/product-images";
@@ -41,7 +43,8 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
   const [{ data: events }, { data: sales }, { data: contracts }, { data: consignors }, { data: contract }, { data: mates }, { data: prodFlags }, images, shopDiag] = await Promise.all([
     supabase.from("unit_events").select("id, type, data, created_at").eq("unit_id", id).order("created_at", { ascending: false }),
     supabase.from("sales").select("id, order_ref, status, sold_at, product_name").eq("unit_id", id).order("sold_at", { ascending: false }),
-    supabase.from("contracts").select("id, counterparty, contract_date").order("created_at", { ascending: false }).limit(200),
+    // Tylko wolne umowy (zajęta – ma już swoją rzecz) i ta przypięta do tej sztuki.
+    freeContracts(supabase, { keep: [u.contract_id] }).then((data) => ({ data })),
     supabase.from("consignors").select("id, name").order("name"),
     u.contract_id ? supabase.from("contracts").select("*").eq("id", u.contract_id).single() : Promise.resolve({ data: null }),
     // Kwota z umowy dla tej sztuki – porównanie z kwotą zakupu w magazynie.
@@ -165,20 +168,7 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
                 <label className="label" htmlFor="shelf">Regał / półka</label>
                 <input className="input" id="shelf" name="shelf" defaultValue={u.shelf ?? ""} />
               </div>
-              <div>
-                <label className="label" htmlFor="owner_type">Właściciel</label>
-                <select className="input" id="owner_type" name="owner_type" defaultValue={u.owner_type}>
-                  <option value="own">własna</option>
-                  <option value="consignment">komis</option>
-                </select>
-              </div>
-              <div>
-                <label className="label" htmlFor="consignor_id">Komisant (dla komisu)</label>
-                <select className="input" id="consignor_id" name="consignor_id" defaultValue={u.consignor?.id ?? ""}>
-                  <option value="">–</option>
-                  {consignors?.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
-              </div>
+              <OwnerFields ownerType={u.owner_type} consignorId={u.consignor?.id ?? null} consignors={(consignors ?? []) as { id: string; name: string }[]} />
               <div>
                 <label className="label" htmlFor="purchase_form">Forma sprzedaży</label>
                 <select className="input" id="purchase_form" name="purchase_form" defaultValue={u.purchase_form}>
@@ -190,7 +180,7 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
                 <label className="label" htmlFor="contract_id">Umowa</label>
                 <select className="input" id="contract_id" name="contract_id" defaultValue={u.contract_id ?? ""}>
                   <option value="">brak umowy</option>
-                  {contracts?.map((c) => <option key={c.id} value={c.id}>{c.counterparty}{c.contract_date ? ` · ${dateOnly(c.contract_date)}` : ""}</option>)}
+                  {contracts?.map((c) => <option key={c.id} value={c.id}>{c.label}{c.contract_date ? ` · ${dateOnly(c.contract_date)}` : ""}</option>)}
                 </select>
               </div>
               {profile.can_see_prices && (

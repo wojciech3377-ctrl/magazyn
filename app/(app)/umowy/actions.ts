@@ -1,5 +1,7 @@
 "use server";
 
+import { contractTakenError } from "@/lib/contracts/free";
+import { searchWords, wordsOr } from "@/lib/search";
 import { revalidatePath } from "next/cache";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { redirect } from "next/navigation";
@@ -459,8 +461,9 @@ export async function assignContractToUnit(formData: FormData) {
   const back = `/umowy/${contractId}/przypisz`;
   const { data: c } = await supabase.from("contracts").select("id, amount, status").eq("id", contractId).maybeSingle();
   if (!c || ["cancelled", "rejected", "sent"].includes(c.status as string)) redirect(`${back}?blad=${encodeURIComponent("Ta umowa jest anulowana, czeka na podpis albo nie istnieje.")}`);
-  const { count: already } = await supabase.from("units").select("id", { count: "exact", head: true }).eq("contract_id", contractId);
-  void already;
+  // Umowa zajęta przez inną rzecz – nie przypinamy drugiej.
+  const taken = await contractTakenError(supabase, contractId, 1, [unitId]);
+  if (taken) redirect(`${back}?blad=${encodeURIComponent(taken)}`);
   const { data: u } = await supabase.from("units").select("id, code, purchase_price, owner_type, status").eq("id", unitId).maybeSingle();
   if (!u || u.owner_type !== "own" || !["in_stock", "reserved", "in_transit", "sold", "shipped"].includes(u.status as string)) redirect(`${back}?blad=${encodeURIComponent("Tej sztuki nie można powiązać z umową (komis, wycofana albo oddana).")}`);
   const { data: updated, error } = await supabase.from("units").update({ contract_id: contractId }).eq("id", unitId).is("contract_id", null).select("id");
@@ -559,11 +562,8 @@ export async function searchUnitsWithoutContract(q: string): Promise<NoContractU
   const text = q.trim().replace(/[,()*%\\]/g, " ").trim();
   let query = supabase.from("units_list").select("id, code, identifier, title, option, status, store_name, image_url, product_id, store_id")
     .is("contract_id", null).in("status", ["in_stock", "reserved", "in_transit"]).order("received_at", { ascending: false }).limit(30);
-  if (text.length >= 2) {
-    for (const w of text.split(/\s+/).slice(0, 4)) {
-      query = query.or(`title.ilike.%${w}%,code.ilike.%${w}%,identifier.ilike.%${w}%,style_sku.ilike.%${w}%,option.ilike.${w}`);
-    }
-  }
+  const ex = text.length >= 2 ? wordsOr(["title", "code", "identifier", "style_sku", "option"], searchWords(text)) : null;
+  if (ex) query = query.or(ex);
   const { data } = await query;
   const used = await reusedProducts(supabase, (data ?? []).map((u) => u.product_id as string));
   return (data ?? []).map((u) => ({

@@ -1,5 +1,6 @@
 "use server";
 
+import { searchWords, wordsOr } from "@/lib/search";
 import { revalidatePath } from "next/cache";
 import { createParShippingOrder, type ParShipping } from "@/lib/orders/par-order";
 import { redirect } from "next/navigation";
@@ -320,7 +321,9 @@ export async function searchCustomersAction(q: string): Promise<CustomerHit[]> {
   const { supabase } = await requireSection("faktury");
   const text = q.trim().replace(/[,()*%\\]/g, " ").trim();
   let query = supabase.from("customers").select("id, name, company, nip, address1, address2, country, email").order("updated_at", { ascending: false }).limit(8);
-  if (text) query = query.or(`name.ilike.%${text}%,nip.ilike.%${onlyDigits(text) || text}%,email.ilike.%${text}%`);
+  const digits = onlyDigits(text);
+  const ex = wordsOr(["name", "company", "email"], searchWords(text), digits.length >= 3 ? [`nip.ilike.*${digits}*`] : []);
+  if (text && ex) query = query.or(ex);
   const { data } = await query;
   return (data ?? []) as CustomerHit[];
 }
@@ -352,13 +355,11 @@ export async function searchInvoiceItemsAction(q: string): Promise<InvoiceItemHi
   const { supabase } = await requireSection("faktury");
   const text = q.trim().replace(/[,()*%\\]/g, " ").trim();
   if (text.length < 2) return [];
-  const like = `%${text}%`;
   const variantIds = await findVariantIds(supabase, text);
-  const unitOr = [`code.ilike.${like}`, `identifier.ilike.${like}`, `title.ilike.${like}`, `style_sku.ilike.${like}`];
-  if (variantIds.length) unitOr.push(`variant_id.in.(${variantIds.slice(0, 150).join(",")})`);
+  const unitOr = wordsOr(["code", "identifier", "title", "style_sku"], searchWords(text), variantIds.length ? [`variant_id.in.(${variantIds.slice(0, 150).join(",")})`] : []);
   const { data: units } = await supabase.from("units_list")
     .select("id, code, identifier, title, option, shop_price, purchase_form, variant_id")
-    .eq("status", "in_stock").or(unitOr.join(",")).order("received_at", { ascending: true }).limit(10);
+    .eq("status", "in_stock").or(unitOr ?? "id.is.null").order("received_at", { ascending: true }).limit(10);
   const hits: InvoiceItemHit[] = (units ?? []).map((u) => ({
     key: `u:${u.id}`,
     name: `${u.title} ${u.option}${u.identifier ? ` (IMEI/SN ${u.identifier})` : ""}`.trim(),

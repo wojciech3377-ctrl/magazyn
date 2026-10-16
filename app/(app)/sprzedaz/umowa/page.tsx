@@ -1,3 +1,4 @@
+import { searchWords, wordsOr } from "@/lib/search";
 import Link from "next/link";
 import { SearchInput } from "@/components/SearchInput";
 import { notFound, redirect } from "next/navigation";
@@ -55,7 +56,8 @@ export default async function AttachContractPage({ searchParams }: { searchParam
   const q = (sp.q ?? "").replace(/[%,()*\\]/g, " ").trim();
   let query = supabase.from("contract_overview_unused").select("id, number, counterparty, amount, currency, contract_date, created_at, status, template, items")
     .order("created_at", { ascending: false }).limit(60);
-  if (q) query = query.or([`counterparty.ilike.%${q}%`, `items_text.ilike.%${q}%`, ...(/^\d+$/.test(q) ? [`number.eq.${q}`] : [])].join(","));
+  const qex = wordsOr(["counterparty", "items_text"], searchWords(q), /^\d+$/.test(q) ? [`number.eq.${q}`] : []);
+  if (q && qex) query = query.or(qex);
   const { data: candidates } = await query;
   const ids = (candidates ?? []).map((c) => c.id as string);
   const { data: bound } = ids.length ? await supabase.from("contracts").select("id, sale_id, doc_number").in("id", ids) : { data: [] };

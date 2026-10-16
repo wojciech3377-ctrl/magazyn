@@ -1,3 +1,4 @@
+import { searchWords, wordsOr } from "@/lib/search";
 import Link from "next/link";
 import { FilterField, ListToolbar } from "@/components/ListToolbar";
 import { activeFilters, filterChips } from "@/lib/list-params";
@@ -62,7 +63,9 @@ export default async function UmowyPage({ searchParams }: { searchParams: Promis
   if (active.categories.length) query = query.in("category", [...active.categories]);
   // „Magazyn umów”: umowy, z którymi żadna rzecz nie jest w magazynie, nie jest sprzedana ani w drodze.
   const { count: unusedCount } = await supabase.from("contracts_unused").select("id", { count: "exact", head: true });
-  if (sp.q) query = query.ilike("counterparty", `%${sp.q.replace(/[%,()]/g, "")}%`);
+  const qWords = searchWords(sp.q);
+  const qex = wordsOr(["counterparty"], qWords, qWords.length === 1 && /^\d+$/.test(qWords[0]) ? [`number.eq.${qWords[0]}`] : []);
+  if (qex) query = query.or(qex);
   if (sp.typ) query = query.eq("type", sp.typ);
   if (sp.plik === "brak") query = query.is("file_path", null);
   if (sp.oplacona === "tak") query = query.not("paid_at", "is", null);

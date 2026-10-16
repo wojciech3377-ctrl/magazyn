@@ -1,3 +1,5 @@
+import { searchWords, wordsOr } from "@/lib/search";
+import { warsawDayRange } from "@/lib/month";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export type UnitFilters = {
@@ -109,16 +111,18 @@ export async function queryUnits(db: SupabaseClient, f: UnitFilters, range?: [nu
   if (cDo !== null) query = query.lte("shop_price", cDo);
   if (zOd !== null) query = query.gte("purchase_price", zOd);
   if (zDo !== null) query = query.lte("purchase_price", zDo);
-  if (day(f.od)) query = query.gte("received_at", `${f.od}T00:00:00+02:00`);
-  if (day(f.do)) query = query.lte("received_at", `${f.do}T23:59:59+02:00`);
+  // Czas polski (zimą +01:00, latem +02:00).
+  const odR = warsawDayRange(f.od), doR = warsawDayRange(f.do);
+  if (odR) query = query.gte("received_at", odR.from);
+  if (doR) query = query.lt("received_at", doR.to);
 
-  const q = f.q?.trim();
-  if (q) {
-    const safe = q.replace(/[,()*%\\]/g, " ").trim();
-    const variantIds = await findVariantIds(db, safe);
-    const ors = [`code.ilike.%${safe}%`, `identifier.ilike.%${safe}%`, `title.ilike.%${safe}%`, `style_sku.ilike.%${safe}%`, `base_sku.ilike.%${safe}%`];
-    if (variantIds.length) ors.push(`variant_id.in.(${variantIds.slice(0, 150).join(",")})`);
-    query = query.or(ors.join(","));
+  const words = searchWords(f.q);
+  if (words.length) {
+    // Każde słowo w którymś polu (kod, IMEI, nazwa, SKU, komisant) – w dowolnej kolejności.
+    const variantIds = await findVariantIds(db, words.join(" "));
+    const expr = wordsOr(["code", "identifier", "title", "style_sku", "base_sku", "consignor_name"], words,
+      variantIds.length ? [`variant_id.in.(${variantIds.slice(0, 150).join(",")})`] : []);
+    if (expr) query = query.or(expr);
   }
 
   const sort = UNIT_SORTS[f.sort ?? ""] ?? UNIT_SORTS.przyjeta;
@@ -150,11 +154,13 @@ export function parseCategories(v: string | undefined) {
 
 /** Warianty pasujące do tekstu: nazwa produktu, SKU modelu, SKU ze sklepu lub z Base, EAN. */
 export async function findVariantIds(db: SupabaseClient, text: string) {
-  const like = `%${text}%`;
+  // Słowa w dowolnej kolejności i miejscu nazwy („jordan mocha” → „Air Jordan 1 … Mocha”).
+  const words = searchWords(text);
+  if (!words.length) return [];
   const [products, links, variants] = await Promise.all([
-    db.from("products").select("id").or(`title.ilike.${like},style_sku.ilike.${like}`).limit(200),
-    db.from("variant_store_links").select("variant_id").or(`sku.ilike.${like},base_sku.ilike.${like}`).limit(300),
-    db.from("variants").select("id").eq("ean", text).limit(50),
+    db.from("products").select("id").or(wordsOr(["title", "style_sku"], words)!).order("updated_at", { ascending: false }).limit(200),
+    db.from("variant_store_links").select("variant_id").or(wordsOr(["sku", "base_sku"], words)!).limit(300),
+    db.from("variants").select("id").eq("ean", words.join(" ")).limit(50),
   ]);
   const ids = new Set<string>();
   for (const l of links.data ?? []) ids.add(l.variant_id as string);

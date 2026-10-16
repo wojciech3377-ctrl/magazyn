@@ -1,5 +1,6 @@
 "use server";
 
+import { contractTakenError } from "@/lib/contracts/free";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { runAutoCatalog } from "@/lib/sync/auto-catalog";
 import { revalidatePath } from "next/cache";
@@ -64,6 +65,10 @@ export async function bulkAction(formData: FormData) {
 
   if (action === "contract") {
     const contractId = String(formData.get("contract_id") ?? "") || null;
+    if (contractId) {
+      const taken = await contractTakenError(supabase, contractId, ids.length, ids);
+      if (taken) back(returnTo, taken, "error");
+    }
     const { error: e } = await supabase.from("units").update({ contract_id: contractId }).in("id", ids);
     if (e) back(returnTo, e.message, "error");
     await supabase.from("unit_events").insert(ids.map((id) => ({ unit_id: id, type: "contract", data: { contract_id: contractId } })));
@@ -138,7 +143,9 @@ export async function updateUnit(formData: FormData) {
   const { supabase, profile } = await requireSection("magazyn");
   const id = String(formData.get("id"));
   const path = `/magazyn/${id}`;
-  const ownerType = String(formData.get("owner_type") ?? "own");
+  const pickedConsignor = String(formData.get("consignor_id") ?? "");
+  // Wybrany komisant = rzecz komisowa (wcześniej przy „Właściciel: własna” wybór komisanta był po cichu pomijany).
+  const ownerType = pickedConsignor ? "consignment" : String(formData.get("owner_type") ?? "own") === "consignment" ? "consignment" : "own";
   const patch: Record<string, unknown> = {
     identifier: String(formData.get("identifier") ?? "").trim().toUpperCase() || null,
     shelf: String(formData.get("shelf") ?? "").trim() || null,
@@ -157,6 +164,11 @@ export async function updateUnit(formData: FormData) {
     }
   }
   if (ownerType === "consignment" && !patch.consignor_id) back(path, "Wybierz komisanta.", "error");
+  // Umowa zajęta przez inną rzecz – nie przypinamy jej drugi raz.
+  if (patch.contract_id) {
+    const taken = await contractTakenError(supabase, patch.contract_id as string, 1, [id]);
+    if (taken) back(path, taken, "error");
+  }
 
   const { data: before } = await supabase.from("units").select("*").eq("id", id).single();
   const { error } = await supabase.from("units").update(patch).eq("id", id);

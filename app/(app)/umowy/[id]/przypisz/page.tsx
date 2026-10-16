@@ -1,3 +1,4 @@
+import { searchWords, wordsOr } from "@/lib/search";
 import Link from "next/link";
 import { SearchInput } from "@/components/SearchInput";
 import { notFound } from "next/navigation";
@@ -26,11 +27,13 @@ export default async function AssignContractPage({ params, searchParams }: { par
     let query = supabase.from("units_list").select("id, code, title, option, status, identifier, location_name, received_at, sold_at")
       .is("contract_id", null).eq("owner_type", "own").in("status", ["in_stock", "reserved", "in_transit", "sold", "shipped"])
       .order("received_at", { ascending: false }).limit(60);
-    if (q) query = query.or(`title.ilike.%${q}%,code.ilike.%${q}%,identifier.ilike.%${q}%,style_sku.ilike.%${q}%,base_sku.ilike.%${q}%,option.ilike.%${q}%`);
+    const ex = wordsOr(["title", "code", "identifier", "style_sku", "base_sku", "option"], searchWords(q));
+    if (ex) query = query.or(ex);
     units = ((await query).data ?? []) as typeof units;
   } else {
     let query = supabase.from("orders").select("id, name, ordered_at, customer_name, line_items, store:stores(name)").is("cancelled_at", null).order("ordered_at", { ascending: false }).limit(40);
-    if (q) query = query.or(`number.ilike.%${q.replace(/^#/, "")}%,customer_name.ilike.%${q}%,email.ilike.%${q}%`);
+    const ex = wordsOr(["number", "customer_name", "email"], searchWords(q.replace(/^#/, "")));
+    if (ex) query = query.or(ex);
     orders = ((await query).data ?? []) as unknown as typeof orders;
     const ids = orders.map((o) => o.id);
     const [{ data: sales }, { data: links }] = await Promise.all([

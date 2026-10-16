@@ -1,3 +1,4 @@
+import { freeContracts } from "@/lib/contracts/free";
 import { requireProfile } from "@/lib/auth";
 import { dateOnly } from "@/lib/labels";
 import Link from "next/link";
@@ -34,7 +35,7 @@ export default async function DostawaPage({ searchParams }: { searchParams: Prom
     supabase.from("stores").select("id, name").order("name"),
     supabase.from("locations").select("id, name, store_id, base_warehouse_id").eq("active", true).order("name"),
     supabase.from("consignors").select("id, name").order("name"),
-    supabase.from("contracts").select("id, counterparty, contract_date").order("created_at", { ascending: false }).limit(300),
+    freeContracts(supabase).then((data) => ({ data })),
   ]);
   return (
     <>
@@ -45,7 +46,7 @@ export default async function DostawaPage({ searchParams }: { searchParams: Prom
         stores={stores ?? []}
         locations={locations ?? []}
         consignors={consignors ?? []}
-        contracts={(contracts ?? []).map((c) => ({ id: c.id, label: `${c.counterparty}${c.contract_date ? ` · ${dateOnly(c.contract_date)}` : ""}` }))}
+        contracts={(contracts ?? []).map((c) => ({ id: c.id, label: `${c.label}${c.contract_date ? ` · ${dateOnly(c.contract_date)}` : ""}` }))}
         canSeePrices={profile.can_see_prices}
         defaultConsignorId={sp.komisant && (consignors ?? []).some((c) => c.id === sp.komisant) ? sp.komisant : undefined}
         defaultInTransit={sp.w_drodze === "1"}

@@ -1,3 +1,4 @@
+import { freeContracts } from "@/lib/contracts/free";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { requireProfile } from "@/lib/auth";
@@ -76,7 +77,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
     }),
     supabase.from("stores").select("id, name").order("name"),
     supabase.from("locations").select("id, name, store_id").eq("active", true).order("name"),
-    supabase.from("contracts").select("id, type, counterparty, contract_date").order("created_at", { ascending: false }).limit(200),
+    freeContracts(supabase).then((data) => ({ data })),
     supabase.from("units").select("id", { count: "exact", head: true }).is("contract_id", null).in("status", ["in_stock", "in_transit", "reserved"]),
     supabase.from("consignors").select("id, name").order("name"),
     supabase.from("contracts_unused").select("id", { count: "exact", head: true }),
@@ -408,7 +409,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
           <div className="flex w-full items-end gap-2 md:w-auto">
             <select className="input min-w-0 flex-1 md:w-64 md:flex-none" name="contract_id" defaultValue="">
               <option value="">Odepnij umowę / wybierz umowę…</option>
-              {contracts?.map((c) => <option key={c.id} value={c.id}>{c.counterparty}{c.contract_date ? ` · ${dateOnly(c.contract_date)}` : ""}</option>)}
+              {contracts?.map((c) => <option key={c.id} value={c.id}>{c.label}{c.contract_date ? ` · ${dateOnly(c.contract_date)}` : ""}</option>)}
             </select>
             <SubmitButton className="btn-secondary" name="action" value="contract">Przypnij umowę</SubmitButton>
           </div>

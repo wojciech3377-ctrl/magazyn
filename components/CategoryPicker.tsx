@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { matchesWords, searchWords } from "@/lib/search";
 
 /**
  * Wybór kilku kategorii (kolekcji ze Shopify) naraz – rozwijana lista z wyszukiwarką i polami wyboru.
@@ -42,8 +43,8 @@ export function CategoryPicker({ name, options, defaultValue = [], storeField }:
     return () => document.removeEventListener("click", close);
   }, [open]);
   const shown = useMemo(() => {
-    const t = q.trim().toLowerCase();
-    return t ? inStore.filter((o) => o.toLowerCase().includes(t)) : inStore;
+    const words = searchWords(q);
+    return words.length ? inStore.filter((o) => matchesWords(o, words)) : inStore;
   }, [q, inStore]);
   const toggle = (o: string) => setPicked((p) => (p.includes(o) ? p.filter((x) => x !== o) : [...p, o]));
 
