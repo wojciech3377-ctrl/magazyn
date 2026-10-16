@@ -46,7 +46,12 @@ export const requireProfile = cache(async () => {
     const { data: consignor } = await createAdminClient().from("consignors").select("id").eq("user_id", userId).maybeSingle();
     redirect(consignor ? "/komis" : "/login?blad=konto");
   }
-  if (!profile.active) redirect("/login?blad=konto");
+  if (!profile.active) {
+    // Zablokowany pracownik, który jest też komisantem – zostaje mu panel komisanta.
+    const { createAdminClient } = await import("@/lib/supabase/admin");
+    const { data: consignor } = await createAdminClient().from("consignors").select("id").eq("user_id", userId).maybeSingle();
+    redirect(consignor ? "/komis" : "/login?blad=konto");
+  }
   profileCache.set(userId, { at: Date.now(), profile: profile as Profile });
   if (profileCache.size > 500) profileCache.delete(profileCache.keys().next().value!);
   return { supabase, profile: profile as Profile };

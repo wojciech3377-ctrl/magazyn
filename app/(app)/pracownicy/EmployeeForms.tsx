@@ -125,7 +125,7 @@ export function NewEmployee() {
               <div className="grid gap-3 sm:grid-cols-2">
                 <div><label className="label" htmlFor="ne-name">Imię i nazwisko</label><input id="ne-name" className="input" name="full_name" autoComplete="off" /></div>
                 <div><label className="label" htmlFor="ne-phone">Telefon (opcjonalnie)</label><input id="ne-phone" className="input" name="phone" inputMode="tel" autoComplete="off" /></div>
-                <div><label className="label" htmlFor="ne-email">E-mail (login)</label><input id="ne-email" className="input" type="email" name="email" required autoComplete="off" /></div>
+                <div><label className="label" htmlFor="ne-email">E-mail (login)</label><input id="ne-email" className="input" type="email" name="email" required autoComplete="off" /><p className="mt-1 text-xs text-muted">E-mail komisanta z kontem → to samo konto dostanie też dostęp pracownika (zostaje jego hasło).</p></div>
                 <PasswordField label="Hasło startowe" />
               </div>
               <RolePicker role={role} onChange={setRole} />

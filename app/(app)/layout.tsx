@@ -1,3 +1,4 @@
+import { isConsignorToo } from "@/lib/consignor-link";
 import { requireProfile } from "@/lib/auth";
 import { can, SECTIONS } from "@/lib/permissions";
 import { Nav } from "./Nav";
@@ -75,8 +76,9 @@ async function myOpenTasks(db: Awaited<ReturnType<typeof requireProfile>>["supab
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const { supabase, profile } = await requireProfile();
-  const [[alerts, delivery, newOrders], todo, issues] = await Promise.all([
+  const [[alerts, delivery, newOrders], todo, issues, ownConsignor] = await Promise.all([
     badges(), myOpenTasks(supabase, profile.id), profile.role === "admin" ? automationIssues() : Promise.resolve(0),
+    isConsignorToo(profile.id),
   ]);
   // Menu: działy z uprawnień (Faktury są zakładką w Sprzedaży), Ustawienia i Pracownicy – administrator.
   const allowed = [
@@ -90,6 +92,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       <Nav
         user={profile.full_name || profile.email || ""}
         allowed={allowed}
+        consignorPanel={ownConsignor}
         badges={{
           "/do-zrobienia": [{ n: todo, tone: "orange", title: "Twoje otwarte zadania" }],
           ...(can(profile, "sprzedaz") ? { "/sprzedaz": [{ n: newOrders, tone: "orange" as const, title: "Nowe zamówienia" }] } : {}),

@@ -29,10 +29,24 @@ export async function createEmployee(_: CreateState, fd: FormData): Promise<Crea
   const role = fd.get("role") === "admin" ? "admin" : "staff";
   const permissions = readPermissions(fd);
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { error: "Podaj poprawny e-mail – to login pracownika." };
-  if (password.length < 10) return { error: "Hasło startowe musi mieć co najmniej 10 znaków." };
   if (role === "staff" && !permissions.length) return { error: "Zaznacz co najmniej jeden dział, do którego pracownik ma mieć dostęp." };
 
   const admin = createAdminClient();
+  // Komisant z kontem może zostać też pracownikiem: to samo konto dostaje profil pracownika (hasło bez zmian).
+  const { data: cons } = await admin.from("consignors").select("user_id, name").ilike("email", email).not("user_id", "is", null).maybeSingle();
+  if (cons?.user_id) {
+    const { data: had } = await admin.from("profiles").select("id").eq("id", cons.user_id).maybeSingle();
+    if (had) return { error: "Konto z tym e-mailem już jest kontem pracownika." };
+    const { error: iErr } = await admin.from("profiles").insert({
+      id: cons.user_id, email, full_name: text(fd, "full_name"), phone: text(fd, "phone", 30), role, permissions,
+      can_see_prices: fd.get("can_see_prices") !== null, active: true,
+    });
+    forgetProfile();
+    if (iErr) return { error: iErr.message };
+    revalidatePath("/pracownicy");
+    return { ok: `${email} to konto komisanta ${cons.name} – dostało też dostęp pracownika. Loguje się swoim dotychczasowym hasłem (hasło startowe z formularza nie jest użyte).` };
+  }
+  if (password.length < 10) return { error: "Hasło startowe musi mieć co najmniej 10 znaków." };
   const { data, error } = await admin.auth.admin.createUser({ email, password, email_confirm: true, user_metadata: { full_name: text(fd, "full_name") } });
   if (error) return { error: /already|registered|exists/i.test(error.message) ? "Konto z tym e-mailem już istnieje." : error.message };
   const { error: pErr } = await admin.from("profiles").update({
@@ -88,6 +102,17 @@ export async function deleteEmployee(fd: FormData) {
   const id = String(fd.get("id"));
   if (id === profile.id) return done("Nie możesz usunąć własnego konta.", "blad", id);
   const admin = createAdminClient();
+  // Pracownik, który jest też komisantem: znika tylko dostęp pracownika, konto zostaje do panelu komisanta.
+  const { data: cons } = await admin.from("consignors").select("id").eq("user_id", id).maybeSingle();
+  if (cons) {
+    const { error } = await admin.from("profiles").delete().eq("id", id);
+    forgetProfile();
+    if (error) {
+      await admin.from("profiles").update({ active: false }).eq("id", id);
+      return done("Konto ma historię w aplikacji – dostęp pracownika zablokowany. Panel komisanta działa dalej.", "ok");
+    }
+    return done("Dostęp pracownika usunięty – konto zostaje jako konto komisanta.", "ok");
+  }
   try {
     const { error } = await admin.auth.admin.deleteUser(id);
     forgetProfile();

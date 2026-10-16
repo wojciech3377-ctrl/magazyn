@@ -11,16 +11,20 @@ async function consignorName() {
   try {
     const { data: auth } = await (await createClient()).auth.getClaims();
     const uid = auth?.claims?.sub;
-    if (!uid) return null;
-    const { data } = await createAdminClient().from("consignors").select("name").eq("user_id", uid).maybeSingle();
-    return (data?.name as string | undefined) ?? null;
+    if (!uid) return { name: null, staff: false };
+    const db = createAdminClient();
+    const [{ data }, { data: staff }] = await Promise.all([
+      db.from("consignors").select("name").eq("user_id", uid).maybeSingle(),
+      db.from("profiles").select("active").eq("id", uid).maybeSingle(),
+    ]);
+    return { name: (data?.name as string | undefined) ?? null, staff: !!staff?.active };
   } catch {
-    return null;
+    return { name: null, staff: false };
   }
 }
 
 export default async function KomisLayout({ children }: { children: React.ReactNode }) {
-  const name = await consignorName();
+  const { name, staff } = await consignorName();
   return (
     <div className="min-h-screen">
       <header className="sticky top-0 z-30 border-b border-line bg-white/90 backdrop-blur print:hidden">
@@ -30,6 +34,8 @@ export default async function KomisLayout({ children }: { children: React.ReactN
             <span className="truncate font-semibold tracking-tight">{name ? `Panel ${name}` : "Panel komisanta"}</span>
           </span>
           <div className="flex items-center gap-1">
+            {/* Komisant, który jest też pracownikiem – powrót do aplikacji. */}
+            {staff && <Link className="btn-ghost" href="/magazyn" title="Aplikacja pracownika"><Icon name="box" className="h-4 w-4" /><span className="hidden sm:inline">Aplikacja</span></Link>}
             <Link className="btn-ghost" href="/komis/haslo" title="Zmień hasło"><Icon name="key" className="h-4 w-4" /><span className="hidden sm:inline">Hasło</span></Link>
             <form action={signOut}><button className="btn-ghost"><Icon name="logout" className="h-4 w-4" /> Wyloguj</button></form>
           </div>

@@ -30,11 +30,15 @@ export async function signIn(_: unknown, formData: FormData) {
     return { error: `Logowanie nie działa (${error.code ?? error.status ?? "błąd"}). Spróbuj ponownie za chwilę.` };
   }
   await rateLimitReset(emailKey);
-  // Komisant trafia do swojego panelu.
+  // Komisant trafia do swojego panelu (pracownik, który jest też komisantem – do aplikacji; panel ma w menu).
   if (signed?.user) {
     const { createAdminClient } = await import("@/lib/supabase/admin");
-    const { data: consignor } = await createAdminClient().from("consignors").select("id").eq("user_id", signed.user.id).maybeSingle();
-    if (consignor) redirect(safeNext(next).startsWith("/komis") ? safeNext(next) : "/komis");
+    const admin = createAdminClient();
+    const [{ data: consignor }, { data: staff }] = await Promise.all([
+      admin.from("consignors").select("id").eq("user_id", signed.user.id).maybeSingle(),
+      admin.from("profiles").select("active").eq("id", signed.user.id).maybeSingle(),
+    ]);
+    if (consignor && !staff?.active) redirect(safeNext(next).startsWith("/komis") ? safeNext(next) : "/komis");
   }
   redirect(safeNext(next));
 }

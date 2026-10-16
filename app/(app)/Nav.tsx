@@ -45,7 +45,7 @@ const TONE = { red: "bg-red-500", green: "bg-emerald-500", orange: "bg-orange-50
 const TAB_BAR = ["/magazyn", "/kasa", "/sprzedaz", "/dostawa", "/wtb", "/katalog"];
 
 /** Menu boczne (komputer), wysuwane menu i dolny pasek (telefon). Tylko działy, do których osoba ma dostęp. */
-export function Nav({ badges = {}, user, allowed }: { badges?: Record<string, Badge[]>; user: string; allowed: string[] }) {
+export function Nav({ badges = {}, user, allowed, consignorPanel = false }: { badges?: Record<string, Badge[]>; user: string; allowed: string[]; consignorPanel?: boolean }) {
   const path = usePathname();
   const search = useSearchParams();
   const router = useRouter();
@@ -108,6 +108,12 @@ export function Nav({ badges = {}, user, allowed }: { badges?: Record<string, Ba
         ))}
       </nav>
       <div className="live-sync"><LiveSync /></div>
+      {/* Pracownik, który jest też komisantem – jego panel komisanta (te same dane logowania). */}
+      {consignorPanel && (
+        <Link href="/komis" className="mx-3 mt-2 flex items-center gap-2 rounded-lg border border-line px-3 py-2 text-sm text-slate-700 hover:border-accent hover:text-ink">
+          <Icon name="users" className="h-4 w-4" /> Mój komis (panel komisanta)
+        </Link>
+      )}
       <form action={signOut} className="user-box m-3 mt-2 flex items-center gap-2.5 rounded-xl border border-line bg-slate-50/80 p-2.5">
         <span className="user-initials flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-200 text-xs font-semibold text-slate-700">{initials || "?"}</span>
         <span className="user-name min-w-0 flex-1 truncate text-sm text-slate-700" title={user}>{user}</span>

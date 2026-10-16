@@ -1,5 +1,6 @@
 "use server";
 
+import { forgetConsignorLink } from "@/lib/consignor-link";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireAdmin, requireSection } from "@/lib/auth";
@@ -36,18 +37,34 @@ export async function saveConsignor(formData: FormData) {
 }
 
 /** Konto do panelu komisanta (logowanie e-mailem i hasłem startowym). */
+/** Konto pracownika (ma profil) – nie usuwamy go ani nie zmieniamy mu hasła z poziomu komisanta. */
+async function isStaffAccount(db: ReturnType<typeof createAdminClient>, userId: string) {
+  const { data } = await db.from("profiles").select("id").eq("id", userId).maybeSingle();
+  return !!data;
+}
+
 export async function createConsignorAccount(formData: FormData) {
   await requireAdmin();
   const id = s(formData, "id");
   const email = s(formData, "email").toLowerCase();
   const password = String(formData.get("password") ?? "");
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || password.length < 10) back(id, "Podaj e-mail i hasło startowe (min. 10 znaków).", false);
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) back(id, "Podaj e-mail komisanta.", false);
   const db = createAdminClient();
   const { data: c } = await db.from("consignors").select("id, user_id").eq("id", id).maybeSingle();
   if (!c) back(id, "Nie ma takiego komisanta.", false);
   if (c!.user_id) back(id, "Ten komisant ma już konto.", false);
-  const { data: staff } = await db.from("profiles").select("id").eq("email", email).maybeSingle();
-  if (staff) back(id, "Ten e-mail należy do konta pracownika – użyj innego adresu dla komisanta.", false);
+  // Pracownik może być też komisantem: to samo konto (ten sam e-mail i hasło) dostaje dostęp do panelu komisanta.
+  const { data: staff } = await db.from("profiles").select("id").ilike("email", email).maybeSingle();
+  if (staff) {
+    const { data: taken } = await db.from("consignors").select("name").eq("user_id", staff.id).neq("id", id).maybeSingle();
+    if (taken) back(id, `To konto pracownika jest już połączone z komisantem ${taken.name}.`, false);
+    await db.from("consignors").update({ user_id: staff.id, email }).eq("id", id);
+    await db.from("consignors").update({ must_change_password: false }).eq("id", id);
+    forgetConsignorLink(staff.id);
+    revalidatePath(`/komisanci/${id}`);
+    back(id, `Połączono z kontem pracownika ${email}. Po zalogowaniu swoim hasłem ma w menu „Mój komis” – panel komisanta (hasło startowe nie jest potrzebne).`);
+  }
+  if (password.length < 10) back(id, "Podaj hasło startowe (min. 10 znaków).", false);
   const { data, error } = await db.auth.admin.createUser({ email, password, email_confirm: true, user_metadata: { kind: "consignor", consignor_id: id } });
   if (error || !data.user) back(id, `Nie udało się utworzyć konta: ${error?.message ?? "błąd"}`, false);
   await db.from("consignors").update({ user_id: data.user!.id, email: email }).eq("id", id);
@@ -65,6 +82,9 @@ export async function removeConsignorAccount(formData: FormData) {
   const { data: c } = await db.from("consignors").select("user_id").eq("id", id).maybeSingle();
   if (!c?.user_id) back(id, "Komisant nie ma konta.", false);
   await db.from("consignors").update({ user_id: null }).eq("id", id);
+  forgetConsignorLink(c!.user_id as string);
+  // Konto pracownika zostaje – tylko traci dostęp do panelu komisanta.
+  if (await isStaffAccount(db, c!.user_id as string)) back(id, "Dostęp do panelu komisanta odebrany (konto pracownika zostaje).");
   const { error } = await db.auth.admin.deleteUser(c!.user_id as string);
   if (error) back(id, `Konto odpięte, ale nie usunięte: ${error.message}`, false);
   back(id, "Dostęp do panelu komisanta zablokowany (konto usunięte).");
@@ -78,6 +98,7 @@ export async function resetConsignorPassword(formData: FormData) {
   const db = createAdminClient();
   const { data: c } = await db.from("consignors").select("user_id").eq("id", id).maybeSingle();
   if (!c?.user_id) back(id, "Komisant nie ma konta.", false);
+  if (await isStaffAccount(db, c!.user_id as string)) back(id, "To konto pracownika – hasło zmienia się w Pracownicy (albo pracownik sam, w swoim profilu).", false);
   const { error } = await db.auth.admin.updateUserById(c!.user_id as string, { password });
   if (error) back(id, error.message, false);
   await db.from("consignors").update({ must_change_password: true }).eq("id", id);
@@ -212,7 +233,7 @@ export async function deleteConsignor(formData: FormData) {
   await db.from("contracts").update({ consignor_id: null }).eq("consignor_id", id);
   const { error } = await db.from("consignors").delete().eq("id", id);
   if (error) back(id, error.message, false);
-  if (c?.user_id) await db.auth.admin.deleteUser(c.user_id as string).catch(() => null);
+  if (c?.user_id && !(await isStaffAccount(db, c.user_id as string))) await db.auth.admin.deleteUser(c.user_id as string).catch(() => null);
   revalidatePath("/komisanci");
   redirect(`/komisanci?ok=${encodeURIComponent(`Komisant ${c?.name ?? ""} usunięty.`)}`);
 }

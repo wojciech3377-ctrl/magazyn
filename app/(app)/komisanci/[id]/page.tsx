@@ -34,6 +34,8 @@ export default async function ConsignorPage({ params, searchParams }: { params: 
   ]);
   if (!c) notFound();
   const consignor = c as Consignor;
+  // Konto komisanta, które jest też kontem pracownika (ten sam login).
+  const { data: staffAcc } = consignor?.user_id ? await db.from("profiles").select("full_name, email").eq("id", consignor.user_id).maybeSingle() : { data: null };
   const bal = balanceFrom(units, payouts ?? []);
   const nameOf = new Map(units.map((u) => [u.id, `${u.title} ${u.option} (${u.code})`]));
   // Numer umowy (tytuł przelewu) i rozliczenie każdej rzeczy.
@@ -192,7 +194,15 @@ export default async function ConsignorPage({ params, searchParams }: { params: 
           {isAdmin && (
             <section className="card space-y-2 p-4">
               <h2 className="h2">Konto w panelu komisanta</h2>
-              {consignor.user_id ? (
+              {consignor.user_id && staffAcc ? (
+                <>
+                  <p className="text-sm">Połączone z kontem pracownika <b>{staffAcc.full_name || staffAcc.email}</b>. Loguje się swoim hasłem pracownika; panel komisanta ma w menu („Mój komis”).</p>
+                  <form action={removeConsignorAccount}>
+                    <input type="hidden" name="id" value={id} />
+                    <SubmitButton className="text-sm text-bad hover:underline" pendingText="…">Odbierz dostęp do panelu komisanta (konto pracownika zostaje)</SubmitButton>
+                  </form>
+                </>
+              ) : consignor.user_id ? (
                 <>
                   <p className="text-sm">Konto aktywne{consignor.email ? `: ${consignor.email}` : ""}. Komisant loguje się na stronie aplikacji i widzi tylko swoje rzeczy.</p>
                   <form action={resetConsignorPassword} className="flex gap-2">
@@ -209,7 +219,8 @@ export default async function ConsignorPage({ params, searchParams }: { params: 
                 <form action={createConsignorAccount} className="space-y-2">
                   <input type="hidden" name="id" value={id} />
                   <input className="input" type="email" name="email" defaultValue={consignor.email ?? ""} placeholder="e-mail do logowania" aria-label="E-mail do logowania" required />
-                  <input className="input" type="text" name="password" placeholder="hasło startowe (min. 10 znaków)" autoComplete="off" aria-label="Hasło startowe" required />
+                  <input className="input" type="text" name="password" placeholder="hasło startowe (min. 10 znaków)" autoComplete="off" aria-label="Hasło startowe" />
+                  <p className="text-xs text-muted">Pracownik jako komisant: wpisz e-mail jego konta pracownika – konto zostanie połączone (hasło startowe niepotrzebne).</p>
                   <SubmitButton>Utwórz konto komisanta</SubmitButton>
                 </form>
               )}
