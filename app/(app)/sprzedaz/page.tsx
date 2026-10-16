@@ -566,7 +566,7 @@ async function PosList({ page, q, sp }: { page: number; q: string; sp: Record<st
                     <form action={deletePosOrder}>
                       <input type="hidden" name="id" value={o.id} />
                       <input type="hidden" name="back" value={`/sprzedaz?widok=stacjonarna${q ? `&q=${encodeURIComponent(q)}` : ""}`} />
-                      <ConfirmSubmit className="text-sm text-bad hover:underline" message={`Usunąć sprzedaż ${o.code}? Sztuki wrócą na stan. Wydrukowany paragon fiskalny zostaje w JPK.`}>Usuń</ConfirmSubmit>
+                      <ConfirmSubmit className="text-sm text-bad hover:underline" message={`Usunąć sprzedaż ${o.code}? Sztuki wrócą na stan, paragon PDF (jeśli jest) zostanie anulowany. Wydrukowany paragon fiskalny zostaje w JPK.`}>Usuń</ConfirmSubmit>
                     </form>
                   </td>
                 )}

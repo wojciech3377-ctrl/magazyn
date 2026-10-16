@@ -1,5 +1,6 @@
 "use server";
 
+import { PAR_PREFIX } from "@/lib/orders/par-order";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireAdmin, requireSection } from "@/lib/auth";
@@ -138,8 +139,20 @@ export async function deletePosOrder(formData: FormData) {
   // Paragon w drukarce (w kolejce / drukuje się) – usunięcie skasowałoby zadanie, a paragon i tak by wyszedł.
   const { count: printing } = await db.from("receipt_jobs").select("id", { count: "exact", head: true }).eq("pos_order_id", id).in("status", ["queued", "printing"]);
   if (printing) return go("blad", "Paragon tej sprzedaży czeka w drukarce albo właśnie się drukuje – poczekaj na wydruk (albo anuluj zadanie w Ustawieniach → Drukarka) i spróbuj ponownie.");
-  const { data: inv } = await db.from("invoices").select("number").eq("pos_order_id", id).not("status", "in", "(rejected,cancelled)").limit(1).maybeSingle();
+  const { data: docs } = await db.from("invoices").select("id, number, kind, order_id").eq("pos_order_id", id).not("status", "in", "(rejected,cancelled)");
+  const inv = (docs ?? []).find((d) => d.kind !== "receipt");
   if (inv) return go("blad", `Do tej sprzedaży jest faktura ${inv.number} – najpierw ją usuń albo skoryguj.`);
+  // Paragon PDF (PAR, bez paragonu fiskalnego, poza JPK) nie blokuje – jest anulowany razem ze sprzedażą.
+  // Wysyłka z paragonu: zamówienie znika razem z nim, chyba że ma już etykietę.
+  const pars = (docs ?? []).filter((d) => d.kind === "receipt");
+  const { data: parOrders } = pars.length
+    ? await db.from("orders").select("id").or([`shopify_order_id.in.(${pars.map((p) => `"${PAR_PREFIX}${p.id}"`).join(",")})`, ...pars.filter((p) => p.order_id).map((p) => `id.eq.${p.order_id}`)].join(","))
+    : { data: [] };
+  const parOrderIds = (parOrders ?? []).map((o) => o.id as string);
+  if (parOrderIds.length) {
+    const { data: ships } = await db.from("shipments").select("state").in("order_id", parOrderIds);
+    if ((ships ?? []).some((sh) => !/cancel/i.test(String(sh.state ?? "")))) return go("blad", "Ta sprzedaż ma wysyłkę z etykietą – najpierw anuluj przesyłkę w zamówieniu (Sprzedaż → Zamówienia), potem usuń sprzedaż.");
+  }
   const { data: items } = await db.from("pos_order_items").select("unit_id, status").eq("order_id", id);
   let unitIds = (items ?? []).filter((i) => i.status === "sold" && i.unit_id).map((i) => i.unit_id as string);
   // Sztuki utworzone tylko do „Dołącz umowę” przy pozycji wpisanej ręcznie – nigdy nie były na stanie:
@@ -159,6 +172,13 @@ export async function deletePosOrder(formData: FormData) {
     back1 = (data ?? []) as typeof back1;
     if (back1.length) await db.from("unit_events").insert(back1.map((u) => ({ unit_id: u.id, type: "status", data: { to: "in_stock", note: `sprzedaż ${o.code} usunięta` } })));
   }
+  if (pars.length) {
+    await db.from("invoices").update({ status: "cancelled", notes: `Anulowany – sprzedaż ${o.code} usunięta.` }).in("id", pars.map((p) => p.id));
+  }
+  if (parOrderIds.length) {
+    await db.from("sales").delete().in("order_id", parOrderIds);
+    await db.from("orders").delete().in("id", parOrderIds);
+  }
   const { error } = await db.from("pos_orders").delete().eq("id", id);
   if (error) return go("blad", errorMessage(error));
   const { adjustStock } = await import("@/lib/stock");
@@ -176,7 +196,7 @@ export async function deletePosOrder(formData: FormData) {
   });
   if (plus.length) await adjustStock(supabase, plus.map((u) => ({ variantId: u.variant_id, locationId: u.location_id, delta: 1 })));
   revalidatePath("/sprzedaz");
-  return go("ok", `Sprzedaż ${o.code} usunięta${back1.length ? `, ${back1.length} szt. wróciło na stan` : ""}.`);
+  return go("ok", `Sprzedaż ${o.code} usunięta${back1.length ? `, ${back1.length} szt. wróciło na stan` : ""}${pars.length ? `, paragon PDF ${pars.map((p) => p.number).join(", ")} anulowany` : ""}${parOrderIds.length ? ", zamówienie do wysyłki usunięte" : ""}.`);
 }
 
 const JPK_KEY = /^(o:[0-9a-f-]{36}:\d{1,3}:\d{1,3}|[pik]:[0-9a-f-]{36}|r:[0-9a-f-]{36}:\d{1,4})$/i;
