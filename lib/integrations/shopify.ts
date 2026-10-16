@@ -291,6 +291,36 @@ export async function fulfillWithTracking(
   return null;
 }
 
+/**
+ * Zamówienie oznaczone w Shopify jako wysłane bez numeru przesyłki (np. ręcznie) – dopisanie numeru do tej realizacji.
+ * true = dopisano, false = nie ma realizacji bez numeru.
+ */
+export async function addTrackingToFulfillment(
+  domain: string,
+  storeCode: string,
+  orderId: string,
+  tracking: { number: string; url: string | null; company: string },
+  notifyCustomer: boolean,
+) {
+  const o = await shopifyGraphql<{ order: { fulfillments: { id: string; status: string; trackingInfo: { number: string | null }[] }[] } | null }>(
+    domain, storeCode,
+    `query($id: ID!) { order(id: $id) { fulfillments(first: 10) { id status trackingInfo { number } } } }`,
+    { id: orderId },
+  );
+  const all = o.order?.fulfillments ?? [];
+  if (all.some((f) => f.trackingInfo.some((t) => t.number === tracking.number))) return true;
+  const bare = all.find((f) => f.status === "SUCCESS" && !f.trackingInfo.some((t) => t.number));
+  if (!bare) return false;
+  const data = await shopifyGraphql<{ fulfillmentTrackingInfoUpdate: { userErrors: { message: string }[] } }>(
+    domain, storeCode,
+    `mutation($id: ID!, $t: FulfillmentTrackingInput!, $n: Boolean) { fulfillmentTrackingInfoUpdate(fulfillmentId: $id, trackingInfoInput: $t, notifyCustomer: $n) { fulfillment { id } userErrors { field message } } }`,
+    { id: bare.id, t: { number: tracking.number, company: tracking.company, ...(tracking.url ? { url: tracking.url } : {}) }, n: notifyCustomer },
+  );
+  const err = data.fulfillmentTrackingInfoUpdate.userErrors.map((e) => e.message).join("; ");
+  if (err) throw new Error(`Shopify: ${err}`);
+  return true;
+}
+
 /** Otwarte pozycje do realizacji (fulfillment orders) zamówienia – z rodzajem dostawy (PICK_UP = odbiór osobisty). */
 async function openFulfillmentOrders(domain: string, storeCode: string, orderId: string) {
   const fo = await shopifyGraphql<{ order: { fulfillmentOrders: { nodes: { id: string; status: string; deliveryMethod: { methodType: string } | null }[] } } | null }>(

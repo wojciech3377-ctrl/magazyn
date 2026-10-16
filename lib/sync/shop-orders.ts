@@ -1,7 +1,7 @@
 import "server-only";
 import { allPages } from "@/lib/supabase/paging";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { ordersUpdatedSince, type ShopifyOrder } from "@/lib/integrations/shopify";
+import { addTrackingToFulfillment, fulfillWithTracking, getOrder, ordersUpdatedSince, type ShopifyOrder } from "@/lib/integrations/shopify";
 import { getPackage, listPackages, type FurgonetkaPackage } from "@/lib/integrations/furgonetka";
 import { computeOrderStatus, detectCod, detectPickupPoint, type Fulfillment, type OrderForStatus, type ShipmentLike } from "@/lib/orders/status";
 import { isExcluded, loadExclusions, type Exclusions } from "@/lib/services";
@@ -291,5 +291,64 @@ export async function syncFurgonetkaShipments(db: SupabaseClient, pages = 3) {
     if (error) throw error;
   }
   await refreshOrderStatus(db, [...touched]);
-  return { packages: rows.length, orders: touched.size };
+  const tracking = await pushPendingTracking(db).catch((e) => ({ error: errorMessage(e) }));
+  return { packages: rows.length, orders: touched.size, ...(tracking && (("sent" in tracking && tracking.sent) || "error" in tracking) ? { tracking } : {}) };
+}
+
+const PENDING = "ship_fulfill:";
+const carrierName = (service: string | null | undefined) => (/dpd/i.test(service ?? "") ? "DPD" : /dhl/i.test(service ?? "") ? "DHL" : /gls/i.test(service ?? "") ? "GLS" : /ups/i.test(service ?? "") ? "UPS" : /poczta|pocztex/i.test(service ?? "") ? "Poczta Polska" : "InPost");
+
+/** Etykieta z aplikacji, której numeru nie udało się od razu wysłać do Shopify – ponowienie przy kolejnych przebiegach. */
+export async function queueTrackingPush(db: SupabaseClient, shipmentId: string, notify: boolean, reason: string) {
+  await db.from("sync_state").upsert({ key: `${PENDING}${shipmentId}`, value: { shipmentId, notify, reason, attempts: 0, at: new Date().toISOString() }, updated_at: new Date().toISOString() });
+}
+
+/**
+ * Numer przesyłki do Shopify (co minutę, razem z Furgonetką): realizacja z numerem, a gdy zamówienie zostało już
+ * oznaczone jako wysłane bez numeru – dopisanie numeru do tej realizacji.
+ */
+export async function pushPendingTracking(db: SupabaseClient) {
+  const { data: pend } = await db.from("sync_state").select("key, value").like("key", `${PENDING}%`).limit(20);
+  let sent = 0;
+  const errors: string[] = [];
+  for (const p of pend ?? []) {
+    const v = p.value as { shipmentId: string; notify: boolean; attempts?: number; at: string };
+    const drop = () => db.from("sync_state").delete().eq("key", p.key);
+    if (Date.now() - Date.parse(v.at) > 3 * 86400_000 || (v.attempts ?? 0) >= 30) {
+      await db.from("sync_log").insert({ job: "tracking-shopify", ok: false, message: `Przesyłka ${v.shipmentId}: numer nie trafił do Shopify (porzucone po ${v.attempts ?? 0} próbach).` });
+      await drop();
+      continue;
+    }
+    const { data: sh } = await db.from("shipments")
+      .select("id, external_id, tracking_number, tracking_url, service, state, order:orders(id, store_id, shopify_order_id, cancelled_at, store:stores(code, shopify_domain))")
+      .eq("id", v.shipmentId).maybeSingle();
+    const order = sh?.order as unknown as { id: string; store_id: string; shopify_order_id: string; cancelled_at: string | null; store: { code: string; shopify_domain: string | null } | null } | null;
+    if (!sh || !order || order.cancelled_at || !order.store?.shopify_domain || !order.shopify_order_id?.startsWith("gid://") || /cancel/i.test(sh.state ?? "")) { await drop(); continue; }
+    try {
+      let number = sh.tracking_number as string | null;
+      let url = sh.tracking_url as string | null;
+      if (!number) {
+        const full = await getPackage(db, sh.external_id as string);
+        number = full.parcels?.[0]?.package_no ?? null;
+        url = full.parcels?.[0]?.tracking_url ?? url;
+        if (number) await db.from("shipments").update({ tracking_number: number, tracking_url: url, updated_at: new Date().toISOString() }).eq("id", sh.id);
+      }
+      if (!number) throw new Error("Furgonetka nie podała jeszcze numeru przesyłki");
+      const t = { number, url, company: carrierName(sh.service as string | null) };
+      const note = await fulfillWithTracking(order.store.shopify_domain, order.store.code, order.shopify_order_id, t, v.notify);
+      // Brak otwartych pozycji = już oznaczone jako wysłane (np. ręcznie, bez numeru) → dopisujemy numer.
+      if (note && !(await addTrackingToFulfillment(order.store.shopify_domain, order.store.code, order.shopify_order_id, t, v.notify))) {
+        // Wszystko już wysłane z innym numerem – nie ma gdzie dopisać; zostawiamy ślad w dzienniku.
+        await db.from("sync_log").insert({ job: "tracking-shopify", ok: false, message: `Przesyłka ${number}: zamówienie w Shopify jest już zrealizowane z innym numerem – nie dopisano.` });
+      }
+      const fresh = await getOrder(order.store.shopify_domain, order.store.code, order.shopify_order_id);
+      if (fresh) await saveShopifyOrders(db, order.store_id, [fresh]);
+      await drop();
+      sent++;
+    } catch (e) {
+      errors.push(errorMessage(e));
+      await db.from("sync_state").update({ value: { ...v, attempts: (v.attempts ?? 0) + 1, error: errorMessage(e) }, updated_at: new Date().toISOString() }).eq("key", p.key);
+    }
+  }
+  return { sent, ...(errors.length ? { errors } : {}) };
 }

@@ -12,7 +12,7 @@ import { accountServices, calculatePrices, cancelPackages, createPackage, delete
 import { isShopifyOrder } from "@/lib/orders/par-order";
 import { cancelShopifyOrder, fulfillWithTracking, getOrder, markPickedUp, markReadyForPickup, refundShopifyLines, type CancelReason } from "@/lib/integrations/shopify";
 import { carrierOf, getSender, lockerOnly, LOCKER_SIZES, SERVICE_LABEL, toPoint, type ServiceKey } from "@/lib/orders/sender";
-import { refreshOrderStatus, saveShopifyOrders, syncFurgonetkaShipments } from "@/lib/sync/shop-orders";
+import { queueTrackingPush, refreshOrderStatus, saveShopifyOrders, syncFurgonetkaShipments } from "@/lib/sync/shop-orders";
 
 export type LabelState = { error?: string; ok?: string; warning?: string; shipmentId?: string; tracking?: string } | null;
 
@@ -174,32 +174,44 @@ export async function createLabel(_: LabelState, fd: FormData): Promise<LabelSta
 
   let tracking: string | null = null;
   let trackingUrl: string | null = null;
-  try {
-    const full = await getPackage(db, packageId);
-    const parcel = full.parcels?.[0];
-    tracking = parcel?.package_no ?? null;
-    trackingUrl = parcel?.tracking_url ?? null;
-    await db.from("shipments").update({
-      tracking_number: tracking, tracking_url: trackingUrl, state: parcel?.state ?? full.state ?? "ordered",
-      state_description: parcel?.state_description ?? null, state_at: parcel?.datetime_status ?? new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    }).eq("id", ship.id);
-  } catch {
-    // numer dojdzie przy następnym odczycie przesyłek
+  // Numer przesyłki bywa nadawany z opóźnieniem – kilka prób (wcześniej brak numeru = cicho bez wysyłki do Shopify).
+  for (let attempt = 0; attempt < 3 && !tracking; attempt++) {
+    if (attempt) await new Promise((r) => setTimeout(r, 2000));
+    try {
+      const full = await getPackage(db, packageId);
+      const parcel = full.parcels?.[0];
+      tracking = parcel?.package_no ?? null;
+      trackingUrl = parcel?.tracking_url ?? null;
+      await db.from("shipments").update({
+        tracking_number: tracking, tracking_url: trackingUrl, state: parcel?.state ?? full.state ?? "ordered",
+        state_description: parcel?.state_description ?? null, state_at: parcel?.datetime_status ?? new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }).eq("id", ship.id);
+    } catch {
+      // numer dojdzie przy następnym odczycie przesyłek
+    }
   }
 
   let warning: string | undefined = processing ? "Furgonetka jeszcze nadaje przesyłkę – etykieta i numer pojawią się za chwilę (odśwież stronę)." : undefined;
   const store = order.store as { code: string; shopify_domain: string | null } | null;
-  if (fd.get("fulfill") && tracking && store?.shopify_domain && isShopifyOrder(order.shopify_order_id)) {
-    try {
-      const note = await fulfillWithTracking(store.shopify_domain, store.code, order.shopify_order_id, {
-        number: tracking, url: trackingUrl, company: carrier === "dpd" ? "DPD" : "InPost",
-      }, !!fd.get("notify"));
-      if (note) warning = `Shopify: ${note}.`;
-      const fresh = await getOrder(store.shopify_domain, store.code, order.shopify_order_id);
-      if (fresh) await saveShopifyOrders(db, order.store_id, [fresh]);
-    } catch (e) {
-      warning = `Etykieta jest, ale Shopify nie przyjął numeru: ${errorMessage(e)}`;
+  if (fd.get("fulfill") && store?.shopify_domain && isShopifyOrder(order.shopify_order_id)) {
+    const later = "Numer trafi do Shopify automatycznie w ciągu kilku minut (aplikacja ponawia co minutę).";
+    if (!tracking) {
+      await queueTrackingPush(db, ship.id, !!fd.get("notify"), "brak numeru przy tworzeniu etykiety");
+      warning = [warning, `Furgonetka nie podała jeszcze numeru przesyłki. ${later}`].filter(Boolean).join(" ");
+    } else {
+      try {
+        const note = await fulfillWithTracking(store.shopify_domain, store.code, order.shopify_order_id, {
+          number: tracking, url: trackingUrl, company: carrier === "dpd" ? "DPD" : "InPost",
+        }, !!fd.get("notify"));
+        // Już oznaczone jako wysłane (np. ręcznie, bez numeru) – numer dopisze ponowienie.
+        if (note) { await queueTrackingPush(db, ship.id, !!fd.get("notify"), note); warning = `Shopify: ${note}. ${later}`; }
+        const fresh = await getOrder(store.shopify_domain, store.code, order.shopify_order_id);
+        if (fresh) await saveShopifyOrders(db, order.store_id, [fresh]);
+      } catch (e) {
+        await queueTrackingPush(db, ship.id, !!fd.get("notify"), errorMessage(e));
+        warning = `Etykieta jest, ale Shopify nie przyjął numeru: ${errorMessage(e)}. ${later}`;
+      }
     }
   }
   await refreshOrderStatus(db, [order.id]);
