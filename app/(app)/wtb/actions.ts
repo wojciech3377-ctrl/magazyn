@@ -127,19 +127,19 @@ export async function addFromCatalog(_: WtbAddState, fd: FormData): Promise<WtbA
   const note = String(fd.get("note") ?? "").trim() || null;
   const { data: p } = await supabase.from("products").select("id, title, image_url, style_sku, variants(id, option)").eq("id", productId).maybeSingle();
   if (!p) return { error: "Wybierz model z katalogu." };
-  // Rozmiary już szukane (aktywne) dla tego modelu nie są dodawane drugi raz – dopisują się do tej samej karty.
-  const { data: had } = await supabase.from("wtb_items").select("variant_id").eq("product_id", p.id).eq("status", "active");
-  const already = new Set((had ?? []).map((h) => h.variant_id as string | null));
+  // USED i NEW tego samego modelu to osobne karty – para szukana jako USED nie blokuje dodania jej jako nowej (i odwrotnie).
+  const used = fd.get("used") === "1";
+  // Rozmiary już szukane (aktywne) w tej samej karcie (ten sam model i USED/NEW) nie są dodawane drugi raz.
+  const { data: had } = await supabase.from("wtb_items").select("*").eq("product_id", p.id).eq("status", "active");
+  const already = new Set(((had ?? []) as { variant_id: string | null; used?: boolean | null }[]).filter((h) => !!h.used === used).map((h) => h.variant_id));
   const variants = ((p.variants ?? []) as { id: string; option: string }[]).filter((v) => variantIds.includes(v.id) && !already.has(v.id));
-  if (variantIds.length && !variants.length) return { ok: "Te rozmiary już są na liście WTB." };
+  if (variantIds.length && !variants.length) return { ok: `Te rozmiary już są na liście WTB jako ${used ? "USED" : "NEW"}.` };
   let photo: string | null;
   try {
     photo = await photoFrom(fd);
   } catch (e) {
     return { error: errorMessage(e) };
   }
-  // USED: tylko zaznaczone w formularzu.
-  const used = fd.get("used") === "1";
   const rows = (variants.length ? variants : [null]).map((v) => ({
     title: p.title, size: v?.option ?? null, sku: p.style_sku, image_url: photo ?? p.image_url, product_id: p.id, variant_id: v?.id ?? null,
     source: "catalog", note, created_by: profile.id, ...(used ? { used: true } : {}),
@@ -149,10 +149,10 @@ export async function addFromCatalog(_: WtbAddState, fd: FormData): Promise<WtbA
     await dropUnusedWtbPhotos([photo]);
     return { error: usedErr(errorMessage(error)) };
   }
-  // Własne zdjęcie dotyczy całej karty modelu – także rozmiarów dodanych wcześniej.
+  // Własne zdjęcie dotyczy całej karty modelu (ten sam model i USED/NEW) – także rozmiarów dodanych wcześniej.
   if (photo) {
-    const { data: old } = await supabase.from("wtb_items").select("image_url").eq("product_id", p.id).eq("status", "active").neq("image_url", photo);
-    await supabase.from("wtb_items").update({ image_url: photo }).eq("product_id", p.id).eq("status", "active");
+    const { data: old } = await supabase.from("wtb_items").select("image_url").eq("product_id", p.id).eq("status", "active").eq("used", used).neq("image_url", photo);
+    await supabase.from("wtb_items").update({ image_url: photo }).eq("product_id", p.id).eq("status", "active").eq("used", used);
     await dropUnusedWtbPhotos((old ?? []).map((o) => o.image_url as string | null));
   }
   revalidatePath("/wtb");

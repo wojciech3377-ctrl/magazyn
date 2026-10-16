@@ -114,7 +114,7 @@ function FromCatalog() {
       </div>
       <input className="input max-w-xl" name="note" placeholder="Notatka (opcjonalnie, np. maks. cena) – nie trafia na grafikę" />
       <PhotoField hint="Własne zdjęcie (opcjonalnie) – zamiast zdjęcia z katalogu" />
-      <label className="flex items-center gap-2 text-sm"><input type="checkbox" name="used" value="1" /> <b>USED</b> – szukamy używanych (produkty z tagiem „reused” dostają znacznik same)</label>
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" name="used" value="1" /> <b>USED</b> – szukamy używanych (osobna karta – ten sam model może być na liście jako USED i jako nowy)</label>
       {state?.error && <p className="text-sm text-bad">{state.error}</p>}
       <button className="btn" disabled={pending || (!sizes.length && picked.variants.length > 0)}>
         {pending ? "Dodaję…" : sizes.length > 1 ? `Dodaj ${sizes.length} rozmiary` : "Dodaj do WTB"}
