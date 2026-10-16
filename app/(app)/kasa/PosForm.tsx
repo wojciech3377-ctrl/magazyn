@@ -294,7 +294,7 @@ export function PosForm({ stores, printer, ptu, defaultPtu, ptuFor, printerOnlin
                   <button type="button" className="btn-secondary px-2.5 py-1 text-xs" onClick={() => addUnit(u)} disabled={unitIds.includes(u.id)}>Dodaj</button>
                 </div>
               ))}
-              {hits.extras === null && <p className="px-1 text-xs text-muted">Szukam też w Shopify (produkty spoza magazynu, np. rope)…</p>}
+              {hits.extras === null && <p className="px-1 text-xs text-muted">Szukam też w Shopify (produkty spoza magazynu: np. rope albo bez śledzenia stanu)…</p>}
               {hits.extras?.map((p) => (
                 <div key={p.id} className="rounded-lg border border-line bg-white p-2.5">
                   <div className="mb-2 flex items-center gap-2.5">

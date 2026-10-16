@@ -128,7 +128,10 @@ export async function searchCatalog(q: string, storeId: string, limit = 10): Pro
     }));
 }
 
-/** Produkty wykluczone z magazynu (np. sznurówki rope) – prosto ze Shopify wybranego sklepu, z wariantami do wyboru. */
+/**
+ * Produkty spoza magazynu aplikacji – prosto ze Shopify wybranego sklepu, z wariantami do wyboru:
+ * wykluczone regułą (np. sznurówki rope) oraz bez śledzenia stanu w Shopify (np. Supreme x Hanes – aplikacja ich nie liczy).
+ */
 export type ExtraSize = { id: string; option: string; price: number | null; available: number | null };
 export type ExtraHit = { id: string; title: string; image: string | null; vat: "margin" | "23"; sizes: ExtraSize[] };
 
@@ -145,7 +148,7 @@ export async function searchShopifyExtras(q: string, storeId: string): Promise<E
     supabase.from("stores").select("code, shopify_domain").eq("id", storeId).maybeSingle(),
     loadExclusionRules(supabase),
   ]);
-  if (!store?.shopify_domain || !rules.length) return [];
+  if (!store?.shopify_domain) return [];
   const ex = {
     skuPrefixes: rules.filter((r) => r.kind === "sku_prefix").map((r) => r.value.toUpperCase()),
     titleContains: rules.filter((r) => r.kind === "title_contains").map((r) => r.value.toLowerCase()),
@@ -166,7 +169,7 @@ export async function searchShopifyExtras(q: string, storeId: string): Promise<E
   const hits: ExtraHit[] = [];
   for (const p of data.products.nodes) {
     if (!words.every((w) => p.title.toLowerCase().includes(w) || p.variants.nodes.some((v) => (v.sku ?? "").toLowerCase().includes(w) || v.title.toLowerCase().includes(w)))) continue;
-    const vs = p.variants.nodes.filter((v) => isExcluded(ex, [v.sku], `${p.title} ${v.title}`));
+    const vs = p.variants.nodes.filter((v) => v.inventoryItem?.tracked === false || isExcluded(ex, [v.sku], `${p.title} ${v.title}`));
     if (!vs.length) continue;
     hits.push({
       id: p.id, title: p.title, image: p.featuredMedia?.preview?.image?.url ?? null,
