@@ -14,6 +14,8 @@ export type Profile = {
   active: boolean;
   /** Działy dostępne dla pracownika (administrator ma wszystkie). */
   permissions: string[] | null;
+  /** Hasło startowe / nadane przez administratora – przy logowaniu obowiązkowa zmiana (SQL 65). */
+  must_change_password?: boolean;
 };
 
 /**

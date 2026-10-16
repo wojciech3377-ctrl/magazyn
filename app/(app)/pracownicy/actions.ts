@@ -6,6 +6,7 @@ import { forgetProfile, requireAdmin } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { SECTION_KEYS, type Section } from "@/lib/permissions";
 import { errorMessage } from "@/lib/errors";
+import { mailStaffAccount } from "@/lib/staff-mail";
 
 async function done(msg: string, tone: "ok" | "blad" = "ok", open?: string): Promise<never> {
   revalidatePath("/pracownicy");
@@ -43,8 +44,9 @@ export async function createEmployee(_: CreateState, fd: FormData): Promise<Crea
     });
     forgetProfile();
     if (iErr) return { error: iErr.message };
+    const mail = await mailStaffAccount(admin, "linked", email, null, text(fd, "full_name"));
     revalidatePath("/pracownicy");
-    return { ok: `${email} to konto komisanta ${cons.name} – dostało też dostęp pracownika. Loguje się swoim dotychczasowym hasłem (hasło startowe z formularza nie jest użyte).` };
+    return { ok: `${email} to konto komisanta ${cons.name} – dostało też dostęp pracownika. Loguje się swoim dotychczasowym hasłem (hasło startowe z formularza nie jest użyte). ${mail}` };
   }
   if (password.length < 10) return { error: "Hasło startowe musi mieć co najmniej 10 znaków." };
   const { data, error } = await admin.auth.admin.createUser({ email, password, email_confirm: true, user_metadata: { full_name: text(fd, "full_name") } });
@@ -57,10 +59,13 @@ export async function createEmployee(_: CreateState, fd: FormData): Promise<Crea
     can_see_prices: fd.get("can_see_prices") !== null,
     active: true,
   }).eq("id", data.user.id);
+  // Hasło startowe: przy pierwszym logowaniu obowiązkowa zmiana (bez SQL 65 – pomijane).
+  const { error: fErr } = await admin.from("profiles").update({ must_change_password: true }).eq("id", data.user.id);
   forgetProfile();
   if (pErr) return { error: `Konto utworzone, ale nie zapisały się uprawnienia: ${pErr.message}. Uruchom migrację 0038.` };
+  const mail = await mailStaffAccount(admin, "new", email, password, text(fd, "full_name"));
   revalidatePath("/pracownicy");
-  return { ok: `Dodano ${email}. Przekaż hasło osobiście – pracownik loguje się e-mailem i tym hasłem.` };
+  return { ok: `Dodano ${email}. ${mail}${fErr ? " (Obowiązkowa zmiana hasła przy logowaniu zadziała po uruchomieniu SQL 65.)" : " Przy pierwszym logowaniu pracownik ustawi własne hasło."}` };
 }
 
 /** Zmiana danych, roli, działów i blokady. */
@@ -91,9 +96,14 @@ export async function setEmployeePassword(fd: FormData) {
   const id = String(fd.get("id"));
   const password = String(fd.get("password") ?? "");
   if (password.length < 10) return done("Hasło musi mieć co najmniej 10 znaków.", "blad", id);
-  const { error } = await createAdminClient().auth.admin.updateUserById(id, { password });
+  const admin = createAdminClient();
+  const { data: u, error } = await admin.auth.admin.updateUserById(id, { password });
   if (error) return done(error.message, "blad", id);
-  await done("Ustawiono nowe hasło. Przekaż je pracownikowi osobiście.");
+  const { error: fErr } = await admin.from("profiles").update({ must_change_password: true }).eq("id", id);
+  forgetProfile();
+  const { data: p } = await admin.from("profiles").select("full_name").eq("id", id).maybeSingle();
+  const mail = u?.user?.email ? await mailStaffAccount(admin, "reset", u.user.email, password, p?.full_name ?? null) : "";
+  await done(`Ustawiono nowe hasło tymczasowe. ${mail}${fErr ? "" : " Po zalogowaniu pracownik ustawi własne hasło."}`);
 }
 
 /** Usunięcie konta. Gdy pracownik ma już historię (dostawy, umowy, sprzedaże) – zostaje tylko blokada. */

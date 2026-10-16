@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import { isConsignorToo } from "@/lib/consignor-link";
 import { requireProfile } from "@/lib/auth";
 import { can, SECTIONS } from "@/lib/permissions";
@@ -76,6 +77,8 @@ async function myOpenTasks(db: Awaited<ReturnType<typeof requireProfile>>["supab
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const { supabase, profile } = await requireProfile();
+  // Hasło startowe (nowe konto albo nadane przez administratora) – najpierw własne hasło.
+  if (profile.must_change_password) redirect("/haslo");
   const [[alerts, delivery, newOrders], todo, issues, ownConsignor] = await Promise.all([
     badges(), myOpenTasks(supabase, profile.id), profile.role === "admin" ? automationIssues() : Promise.resolve(0),
     isConsignorToo(profile.id),
