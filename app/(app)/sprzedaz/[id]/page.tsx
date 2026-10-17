@@ -36,6 +36,9 @@ function shopifyAdminUrl(domain: string | null, legacyId: string | null) {
   return `https://admin.shopify.com/store/${domain.replace(/\.myshopify\.com$/, "")}/orders/${legacyId}`;
 }
 
+// Etykieta: nadanie w Furgonetce czeka do ~15 s na wynik – więcej czasu niż domyślnie.
+export const maxDuration = 60;
+
 export default async function OrderPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const { supabase, profile } = await requireProfile();

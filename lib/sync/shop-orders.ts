@@ -291,8 +291,7 @@ export async function syncFurgonetkaShipments(db: SupabaseClient, pages = 3) {
     if (error) throw error;
   }
   await refreshOrderStatus(db, [...touched]);
-  const tracking = await pushPendingTracking(db).catch((e) => ({ error: errorMessage(e) }));
-  return { packages: rows.length, orders: touched.size, ...(tracking && (("sent" in tracking && tracking.sent) || "error" in tracking) ? { tracking } : {}) };
+  return { packages: rows.length, orders: touched.size };
 }
 
 const PENDING = "ship_fulfill:";
@@ -303,11 +302,41 @@ export async function queueTrackingPush(db: SupabaseClient, shipmentId: string, 
   await db.from("sync_state").upsert({ key: `${PENDING}${shipmentId}`, value: { shipmentId, notify, reason, attempts: 0, at: new Date().toISOString() }, updated_at: new Date().toISOString() });
 }
 
+export async function clearTrackingPush(db: SupabaseClient, shipmentId: string) {
+  await db.from("sync_state").delete().eq("key", `${PENDING}${shipmentId}`);
+}
+
+/**
+ * Etykiety z aplikacji z ostatnich 3 dni, których numer nie trafił do Shopify (zamówienie bez realizacji z tym numerem),
+ * a nie ma ich w kolejce – np. przerwane tworzenie etykiety przed wprowadzeniem kolejki. Dopisywane do kolejki.
+ */
+async function queueMissedTracking(db: SupabaseClient) {
+  const since = new Date(Date.now() - 3 * 86400_000).toISOString();
+  const { data: ships } = await db.from("shipments")
+    .select("id, tracking_number, state, order:orders(shopify_order_id, cancelled_at, fulfillments)")
+    .eq("provider", "furgonetka").eq("created_in_app", true).gte("created_at", since).not("order_id", "is", null).limit(100);
+  for (const sh of ships ?? []) {
+    const o = sh.order as unknown as { shopify_order_id: string | null; cancelled_at: string | null; fulfillments: Fulfillment[] | null } | null;
+    if (!o || o.cancelled_at || !o.shopify_order_id?.startsWith("gid://") || /cancel/i.test(String(sh.state ?? ""))) continue;
+    const nums = (o.fulfillments ?? []).flatMap((f) => (f.trackingInfo ?? []).map((t) => t.number));
+    if (sh.tracking_number && nums.includes(sh.tracking_number as string)) continue;
+    const key = `${PENDING}${sh.id}`;
+    const { data: had } = await db.from("sync_state").select("key").eq("key", key).maybeSingle();
+    if (had) continue;
+    // Raz na przesyłkę (znacznik „sprawdzone”, żeby po porzuceniu nie wracała co minutę).
+    const { data: seen } = await db.from("sync_state").select("key").eq("key", `ship_checked:${sh.id}`).maybeSingle();
+    if (seen) continue;
+    await db.from("sync_state").upsert({ key: `ship_checked:${sh.id}`, value: { at: new Date().toISOString() }, updated_at: new Date().toISOString() });
+    await queueTrackingPush(db, sh.id as string, true, "numer nie dotarł do Shopify przy tworzeniu etykiety");
+  }
+}
+
 /**
  * Numer przesyłki do Shopify (co minutę, razem z Furgonetką): realizacja z numerem, a gdy zamówienie zostało już
  * oznaczone jako wysłane bez numeru – dopisanie numeru do tej realizacji.
  */
 export async function pushPendingTracking(db: SupabaseClient) {
+  await queueMissedTracking(db).catch(() => null);
   const { data: pend } = await db.from("sync_state").select("key, value").like("key", `${PENDING}%`).limit(20);
   let sent = 0;
   const errors: string[] = [];

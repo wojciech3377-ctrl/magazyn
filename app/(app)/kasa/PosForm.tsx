@@ -333,16 +333,19 @@ export function PosForm({ stores, printer, ptu, defaultPtu, ptuFor, printerOnlin
             </button>
             {manual.open && (
               <div className="space-y-3 border-t border-line p-3">
-                <div className="grid gap-2 sm:grid-cols-[1fr_7rem_5rem_9rem]">
-                  <SearchInput value={manual.name} onChange={(e) => { setManual({ ...manual, name: e.target.value }); setCatalogQ(e.target.value); }} placeholder="Szukaj w katalogu albo wpisz nazwę" aria-label="Nazwa albo wyszukiwanie w katalogu" maxLength={120}
+                {/* Pole wyszukiwania na całą szerokość (na ekranie terminala obok cen i PTU było za wąskie). */}
+                <div className="space-y-2">
+                  <SearchInput large wrapperClassName="w-full" value={manual.name} onChange={(e) => { setManual({ ...manual, name: e.target.value }); setCatalogQ(e.target.value); }} placeholder="Szukaj w katalogu albo wpisz nazwę" aria-label="Nazwa albo wyszukiwanie w katalogu" maxLength={120}
                     onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addManual(); } if (e.key === "Escape") setCatalogQ(""); }}
                     onScan={(code) => { setManual((m) => ({ ...m, open: true, name: code })); setCatalogQ(code); }} />
+                  <div className="grid grid-cols-[minmax(0,1fr)_4.5rem_minmax(0,1.2fr)] gap-2">
                   <input ref={priceRef} className="input tabular-nums" inputMode="decimal" value={manual.price} onChange={(e) => setManual({ ...manual, price: e.target.value })} placeholder="Cena zł" aria-label="Cena"
                     onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addManual(); } }} />
                   <input className="input tabular-nums" inputMode="decimal" value={manual.qty} onChange={(e) => setManual({ ...manual, qty: e.target.value })} aria-label="Ilość" title="Ilość" />
                   <select className="input" value={manual.ptu} onChange={(e) => setManual({ ...manual, ptu: e.target.value })} aria-label="Stawka PTU">
                     {ptu.map((p) => <option key={p.letter} value={p.letter}>PTU {p.label}</option>)}
                   </select>
+                  </div>
                 </div>
                 {catalogBusy && <p className="text-xs text-muted">Szukam w katalogu…</p>}
                 {catalog && catalogQ.trim() && (

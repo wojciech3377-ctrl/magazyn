@@ -12,7 +12,7 @@ import { accountServices, calculatePrices, cancelPackages, createPackage, delete
 import { isShopifyOrder } from "@/lib/orders/par-order";
 import { cancelShopifyOrder, fulfillWithTracking, getOrder, markPickedUp, markReadyForPickup, refundShopifyLines, type CancelReason } from "@/lib/integrations/shopify";
 import { carrierOf, getSender, lockerOnly, LOCKER_SIZES, SERVICE_LABEL, toPoint, type ServiceKey } from "@/lib/orders/sender";
-import { queueTrackingPush, refreshOrderStatus, saveShopifyOrders, syncFurgonetkaShipments } from "@/lib/sync/shop-orders";
+import { clearTrackingPush, pushPendingTracking, queueTrackingPush, refreshOrderStatus, saveShopifyOrders, syncFurgonetkaShipments } from "@/lib/sync/shop-orders";
 
 export type LabelState = { error?: string; ok?: string; warning?: string; shipmentId?: string; tracking?: string } | null;
 
@@ -162,6 +162,13 @@ export async function createLabel(_: LabelState, fd: FormData): Promise<LabelSta
     created_in_app: true, created_by: profile.id, state: "waiting",
   }).select("id").single();
   if (insErr) return { error: insErr.message };
+  // Numer do Shopify: od razu w kolejce (ponawianie co minutę) – nawet gdy dalsza część (nadanie, numer, Shopify)
+  // się przerwie (np. limit czasu serwera), zamówienie w Shopify dostanie numer automatycznie.
+  const store0 = order.store as { code: string; shopify_domain: string | null } | null;
+  const wantFulfill = !!fd.get("fulfill") && !!store0?.shopify_domain && isShopifyOrder(order.shopify_order_id);
+  if (wantFulfill) await queueTrackingPush(db, ship.id, !!fd.get("notify"), "nowa etykieta");
+  // „Oznacz w Shopify jako wysłane” odznaczone – automat nie dosyła numeru sam.
+  else await db.from("sync_state").upsert({ key: `ship_checked:${ship.id}`, value: { at: new Date().toISOString(), skip: true }, updated_at: new Date().toISOString() });
 
   let processing = false;
   try {
@@ -197,19 +204,18 @@ export async function createLabel(_: LabelState, fd: FormData): Promise<LabelSta
   if (fd.get("fulfill") && store?.shopify_domain && isShopifyOrder(order.shopify_order_id)) {
     const later = "Numer trafi do Shopify automatycznie w ciągu kilku minut (aplikacja ponawia co minutę).";
     if (!tracking) {
-      await queueTrackingPush(db, ship.id, !!fd.get("notify"), "brak numeru przy tworzeniu etykiety");
       warning = [warning, `Furgonetka nie podała jeszcze numeru przesyłki. ${later}`].filter(Boolean).join(" ");
     } else {
       try {
         const note = await fulfillWithTracking(store.shopify_domain, store.code, order.shopify_order_id, {
           number: tracking, url: trackingUrl, company: carrier === "dpd" ? "DPD" : "InPost",
         }, !!fd.get("notify"));
-        // Już oznaczone jako wysłane (np. ręcznie, bez numeru) – numer dopisze ponowienie.
-        if (note) { await queueTrackingPush(db, ship.id, !!fd.get("notify"), note); warning = `Shopify: ${note}. ${later}`; }
+        // Już oznaczone jako wysłane (np. ręcznie, bez numeru) – numer dopisze ponowienie (zostaje w kolejce).
+        if (note) warning = `Shopify: ${note}. ${later}`;
+        else await clearTrackingPush(db, ship.id);
         const fresh = await getOrder(store.shopify_domain, store.code, order.shopify_order_id);
         if (fresh) await saveShopifyOrders(db, order.store_id, [fresh]);
       } catch (e) {
-        await queueTrackingPush(db, ship.id, !!fd.get("notify"), errorMessage(e));
         warning = `Etykieta jest, ale Shopify nie przyjął numeru: ${errorMessage(e)}. ${later}`;
       }
     }
@@ -232,7 +238,11 @@ export async function refreshOrder(fd: FormData) {
     const fresh = await getOrder(store.shopify_domain, store.code, order.shopify_order_id);
     if (fresh) await saveShopifyOrders(db, order.store_id, [fresh]);
   }
-  if (await furgonetkaConnection(db)) await syncFurgonetkaShipments(db, 1).catch(() => null);
+  if (await furgonetkaConnection(db)) {
+    await syncFurgonetkaShipments(db, 1).catch(() => null);
+    // Zaległy numer przesyłki do Shopify – od razu przy odświeżeniu, bez czekania na automat.
+    await pushPendingTracking(db).catch(() => null);
+  }
   await db.rpc("link_sales_to_orders");
   await refreshOrderStatus(db, [id]);
   revalidatePath(`/sprzedaz/${id}`);

@@ -116,6 +116,7 @@ export function fastJobIssue(job: string, error: unknown): Issue {
     furgonetka: ["Nie udało się odświeżyć przesyłek Furgonetki", "Statusy wysyłek mogą być nieaktualne. Sprawdź połączenie z Furgonetką w Ustawienia → Wysyłka."],
     ksef: ["Nie udało się sprawdzić statusu faktur w KSeF", "Faktury mogą wisieć jako „w KSeF – przetwarzanie”. Sprawdź Ustawienia → Faktury i KSeF."],
     settle: ["Rozliczanie rezerwacji (sprzedane po paragonie) nie działa", "Sztuki z zamówień z paragonem mogą zostać „zarezerwowane” zamiast „sprzedane”."],
+    "tracking-shopify": ["Numery przesyłek nie trafiają do Shopify", "Zamówienia z etykietą z aplikacji zostają w Shopify jako niewysłane (klient nie dostaje numeru). Sprawdź połączenie ze Shopify; aplikacja ponawia co minutę."],
     "consignor-mail": ["E-maile do komisantów o sprzedaży nie wychodzą", "Sprawdź ustawienia poczty (Ustawienia → Faktury i KSeF → SMTP)."],
   };
   const [title, hint] = titles[job] ?? [`Zadanie „${job}” kończy się błędem`, null];

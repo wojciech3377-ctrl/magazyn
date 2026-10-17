@@ -1,7 +1,7 @@
 import "server-only";
 import { safeEqual } from "@/lib/security";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { syncFurgonetkaShipments, syncShopifyOrders } from "@/lib/sync/shop-orders";
+import { pushPendingTracking, syncFurgonetkaShipments, syncShopifyOrders } from "@/lib/sync/shop-orders";
 import { backfillContractNumbers } from "@/lib/contracts/docnumber";
 import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/furgonetka";
 import { errorMessage } from "@/lib/errors";
@@ -69,10 +69,22 @@ export async function runFastJobs(db: SupabaseClient) {
       if (!k.ok) failed.push(fastJobIssue("ksef", k.error));
     })(),
     (async () => {
-      const r = furgonetkaConfigured() && (await furgonetkaConnection(db))
+      const connected = furgonetkaConfigured() && (await furgonetkaConnection(db));
+      const r = connected
         ? await run(db, "furgonetka", () => syncFurgonetkaShipments(db))
         : { ok: true, result: "niepołączona" as unknown };
       if (!r.ok && "error" in r) failed.push(fastJobIssue("furgonetka", r.error));
+      // Numery przesyłek do Shopify – niezależnie od tego, czy odczyt listy paczek się udał.
+      if (connected) {
+        try {
+          const t = await pushPendingTracking(db);
+          if (t.sent || t.errors?.length) await db.from("sync_log").insert({ job: "tracking-shopify", ok: !t.errors?.length, message: JSON.stringify(t) });
+          if (t.errors?.length) failed.push(fastJobIssue("tracking-shopify", t.errors.join(" · ")));
+        } catch (e) {
+          await db.from("sync_log").insert({ job: "tracking-shopify", ok: false, message: errorMessage(e) });
+          failed.push(fastJobIssue("tracking-shopify", e));
+        }
+      }
       return r;
     })(),
   ]);
