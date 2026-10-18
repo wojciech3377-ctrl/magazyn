@@ -1,3 +1,4 @@
+import { CashDrawer } from "./CashDrawer";
 import { searchWords, wordsOr } from "@/lib/search";
 import { warsawDayRange } from "@/lib/month";
 import Link from "next/link";
@@ -501,6 +502,8 @@ async function PosList({ page, q, sp }: { page: number; q: string; sp: Record<st
     <>
       <PageHeader title="Sprzedaż" sub="Sprzedaż stacjonarna z kasy." actions={<Link className="btn" href="/kasa">Nowa sprzedaż</Link>} />
       <Tabs active="pos" />
+      <Flash sp={sp} />
+      {profile.role === "admin" && <CashDrawer />}
       <ListToolbar
         q={q}
         placeholder="Przedmiot, SKU, kod sztuki, IMEI, numer, klient"
