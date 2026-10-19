@@ -1,3 +1,4 @@
+import { paymentText } from "@/lib/contracts/options";
 import { searchWords, wordsOr } from "@/lib/search";
 import Link from "next/link";
 import { FilterField, ListToolbar } from "@/components/ListToolbar";
@@ -193,7 +194,7 @@ export default async function UmowyPage({ searchParams }: { searchParams: Promis
                   <td className="min-w-32 max-md:font-medium">{person(c)}</td>
                   <td><StatePill c={c} /></td>
                   {profile.can_see_prices && <td className="whitespace-nowrap text-right tabular-nums">{toPay(c) ? <b>{amountText(c)}</b> : "–"}</td>}
-                  <td className="max-w-40 break-all text-xs max-md:hidden">{e?.seller_bank_account ? e.seller_bank_account : e?.payment_method === "cash" || (!e?.seller_bank_account && c.template) ? "gotówka" : "–"}</td>
+                  <td className="max-w-40 break-all text-xs max-md:hidden">{e?.payment_method === "cash" ? "gotówka" : e?.seller_bank_account ? e.seller_bank_account : e?.payment_method === "transfer" ? <span className="text-warn">przelew – brak konta</span> : "–"}</td>
                   <td className="whitespace-nowrap">
                     {c.paid_at ? <span className="text-sm text-ok">tak · {dateOnly(c.paid_at)}</span> : toPay(c) ? (
                       <form action={markPaid} className="relative z-10">
@@ -260,7 +261,7 @@ function ContractPreview({ c, e, nr, person, amount, products }: {
         </div>
         <div>
           {amount && <div>Kwota: <b>{amount}</b></div>}
-          <div>Zapłata: {e?.payment_method === "cash" ? "gotówka" : e?.seller_bank_account ? `przelew – ${e.seller_bank_account}` : "–"}</div>
+          <div>Zapłata: {paymentText(e?.payment_method, e?.seller_bank_account)}</div>
           {e?.payment_days ? <div className="text-muted">termin: {e.payment_days} dni</div> : null}
           <div>Opłacona: {c.paid_at ? dateOnly(c.paid_at) : "nie"}</div>
           {e?.signed_at && <div className="text-muted">podpisana {dateOnly(e.signed_at)}</div>}

@@ -5,11 +5,12 @@ import { createClient } from "@/lib/supabase/client";
 import { prepareSellerInvoiceUpload, submitSellerInvoice } from "../actions";
 
 /** Sprzedający-firma: zamiast podpisywać umowę – wgrywa fakturę (pozycje i ceny jak w linku). */
-export function InvoiceOption({ token }: { token: string }) {
+export function InvoiceOption({ token, currency }: { token: string; currency?: string | null }) {
   const [open, setOpen] = useState(false);
   const [state, action, pending] = useActionState(submitSellerInvoice.bind(null, token), null);
   const [file, setFile] = useState<{ path: string; name: string } | null>(null);
   const [upload, setUpload] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null });
+  const [payment, setPayment] = useState<"transfer" | "cash" | "">("");
 
   async function onFile(f: File | undefined) {
     setFile(null);
@@ -59,6 +60,26 @@ export function InvoiceOption({ token }: { token: string }) {
         <div><label className="label" htmlFor="inv-email">E-mail</label><input id="inv-email" className="input" type="email" name="email" autoComplete="email" /></div>
       </div>
       <div>
+        <div className="label">Forma zapłaty / Payment</div>
+        <div className="grid grid-cols-2 gap-2">
+          {([["transfer", "Przelew / Bank transfer"], ["cash", "Gotówka / Cash"]] as const).map(([v, t]) => (
+            <label key={v} className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm ${payment === v ? "border-accent bg-sky-50" : "border-line"}`}>
+              <input type="radio" name="payment_method" value={v} checked={payment === v} onChange={() => setPayment(v)} required /> {t}
+            </label>
+          ))}
+        </div>
+        {currency ? <p className="mt-2 text-sm">Waluta / Currency: <b>{currency}</b></p> : (
+          <div className="mt-2"><label className="label" htmlFor="inv-cur">Waluta faktury / Currency</label>
+            <select id="inv-cur" className="input" name="currency" defaultValue="" required>
+              <option value="" disabled>wybierz…</option><option value="PLN">PLN</option><option value="EUR">EUR</option>
+            </select>
+          </div>
+        )}
+        {payment === "transfer" && (
+          <div className="mt-2"><label className="label" htmlFor="inv-bank">Numer konta (IBAN) / Bank account</label><input id="inv-bank" className="input" name="bank" required autoComplete="off" maxLength={80} /></div>
+        )}
+      </div>
+      <div>
         <label className="label" htmlFor="inv-file">Plik faktury (PDF, JPG, PNG – do 10 MB) / Invoice file</label>
         <input id="inv-file" type="file" accept="application/pdf,image/jpeg,image/png" className="block text-sm" onChange={(e) => onFile(e.target.files?.[0])} />
         {upload.busy && <p className="mt-1 text-xs text-muted">Wgrywam…</p>}
@@ -68,7 +89,7 @@ export function InvoiceOption({ token }: { token: string }) {
         <input type="hidden" name="file_name" value={file?.name ?? ""} />
       </div>
       {state?.error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-bad" role="alert">{state.error}</p>}
-      <button className="btn w-full" disabled={pending || upload.busy || !file}>{pending ? "Wysyłam…" : "Wyślij fakturę / Send invoice"}</button>
+      <button className="btn w-full" disabled={pending || upload.busy || !file || !payment}>{pending ? "Wysyłam…" : "Wyślij fakturę / Send invoice"}</button>
     </form>
   );
 }

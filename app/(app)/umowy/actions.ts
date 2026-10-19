@@ -612,3 +612,19 @@ export async function setTemplateCurrency(formData: FormData) {
   revalidatePath(`/umowy/${id}`);
   redirect(`/umowy/${id}?${msg}`);
 }
+
+/** Forma zapłaty umowy z szablonu przed opłaceniem (np. faktura wgrana bez numeru konta). */
+export async function setContractPayment(formData: FormData) {
+  const { supabase } = await requireSection("umowy", "dostawa");
+  const id = String(formData.get("id") ?? "");
+  const method = formData.get("payment_method") === "cash" ? "cash" : "transfer";
+  const account = method === "transfer" ? String(formData.get("bank") ?? "").trim().slice(0, 80) || null : null;
+  const { data, error } = await supabase.from("contracts").update({ payment_method: method, seller_bank_account: account })
+    .eq("id", id).is("paid_at", null).select("id");
+  const msg = error ? `blad=${encodeURIComponent(error.message)}`
+    : !data?.length ? `blad=${encodeURIComponent("Opłaconej umowy nie można już zmienić.")}`
+    : `ok=${encodeURIComponent(method === "cash" ? "Zapłata: gotówka." : account ? "Zapłata: przelew – konto zapisane." : "Zapłata: przelew – wpisz jeszcze numer konta.")}`;
+  revalidatePath(`/umowy/${id}`);
+  revalidatePath("/umowy");
+  redirect(`/umowy/${id}?${msg}`);
+}

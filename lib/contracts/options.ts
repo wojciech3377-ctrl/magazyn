@@ -66,3 +66,15 @@ function ibanOk(iban: string) {
 export function formatAccount(account: string | null | undefined) {
   return (account ?? "").trim();
 }
+
+/**
+ * Forma zapłaty – jeden opis wszędzie (lista umów, podgląd, strona umowy).
+ * Brak danych to „nie podano” (wcześniej lista zgadywała „gotówka”, a strona umowy „przelew”).
+ */
+export function paymentText(method: string | null | undefined, account: string | null | undefined) {
+  const acc = formatAccount(account);
+  if (method === "cash") return "gotówka";
+  if (acc) return `przelew – ${acc}`;
+  if (method === "transfer") return "przelew – brak numeru konta";
+  return "nie podano";
+}

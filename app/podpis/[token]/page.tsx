@@ -83,7 +83,7 @@ export default async function SignPage({ params }: { params: Promise<{ token: st
     <PublicShell company={company.name}>
       <h1 className="h1 mb-3">Umowa kupna NR{c.number}</h1>
       {/* Umowa od sklepu (nie komisant – ten wgrywa faktury w swoim panelu): firma może wgrać fakturę zamiast podpisu. */}
-      {c.source !== "consignor" && <InvoiceOption token={token} />}
+      {c.source !== "consignor" && <InvoiceOption token={token} currency={c.currency ?? null} />}
       <SellerContractForm
         action={action}
         mode="fixed"

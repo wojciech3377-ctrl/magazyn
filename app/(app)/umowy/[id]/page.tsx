@@ -5,11 +5,11 @@ import { requireProfile } from "@/lib/auth";
 import { CONTRACT_TYPE, dateOnly, money } from "@/lib/labels";
 import { Field, Notice, PageHeader, StatusBadge } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
-import { acceptContract, addContractItem, removeContractItem, attachUnits, decideConsignorInvoice, cancelContract, deleteContract, detachUnit, markPaid, rejectContract, replaceFile, retryFinalize, sendSigningEmail, setTemplateCurrency, updateContractMeta } from "../actions";
+import { acceptContract, addContractItem, removeContractItem, attachUnits, decideConsignorInvoice, cancelContract, deleteContract, detachUnit, markPaid, rejectContract, replaceFile, retryFinalize, sendSigningEmail, setContractPayment, setTemplateCurrency, updateContractMeta } from "../actions";
 import { appUrl } from "@/lib/app-url";
 import { mailConfigured } from "@/lib/mail";
 import { contractTotal, formatMoney } from "@/lib/contracts/purchase";
-import { countryName, formatAccount } from "@/lib/contracts/options";
+import { countryName, formatAccount, paymentText } from "@/lib/contracts/options";
 import { Pill } from "@/components/ui";
 import { CopyLink } from "./CopyLink";
 import { AssignItems } from "./AssignItems";
@@ -244,7 +244,7 @@ export default async function ContractPage({ params, searchParams }: { params: P
 }
 
 type TemplateContract = {
-  id: string; status: string; source: string | null; sign_token: string | null; sign_expires_at: string | null;
+  id: string; status: string; source: string | null; sign_token: string | null; sign_expires_at: string | null; type?: string | null;
   seller_name: string | null; seller_id_number: string | null; seller_address: string | null; seller_bank_account: string | null;
   seller_email: string | null; seller_phone: string | null; signed_at: string | null; signer_ip: string | null;
   payment_days: number | null; units_created_at: string | null; sale_id: string | null;
@@ -350,11 +350,25 @@ async function TemplateSection({ c, canSeePrices }: { c: TemplateContract; canSe
               </>
             ) : (
               <>
-                <span>{c.payment_method === "cash" ? "Do wypłaty gotówką." : `Do przelewu na konto: ${formatAccount(c.seller_bank_account) || "–"}`}</span>
+                <span>{c.payment_method === "cash" ? "Do wypłaty gotówką." : c.seller_bank_account ? `Do przelewu na konto: ${formatAccount(c.seller_bank_account)}` : <span className="text-warn">Forma zapłaty: {paymentText(c.payment_method, null)} – uzupełnij niżej.</span>}</span>
                 <SubmitButton pendingText="…">Oznacz jako opłaconą</SubmitButton>
               </>
             )}
           </form>
+        )}
+        {(c.status === "accepted" || c.status === "signed") && !c.paid_at && (
+          <details className="border-t border-line pt-3 text-sm" open={!c.payment_method || (c.payment_method === "transfer" && !c.seller_bank_account)}>
+            <summary className="cursor-pointer font-medium">Zmień formę zapłaty</summary>
+            <form action={setContractPayment} className="mt-2 flex flex-wrap items-end gap-2">
+              <input type="hidden" name="id" value={c.id} />
+              <select name="payment_method" className="input w-auto" defaultValue={c.payment_method ?? "transfer"} aria-label="Forma zapłaty">
+                <option value="transfer">przelew</option>
+                <option value="cash">gotówka</option>
+              </select>
+              <input name="bank" className="input w-80" defaultValue={c.seller_bank_account ?? ""} placeholder="numer konta (przy przelewie)" aria-label="Numer konta" maxLength={80} />
+              <SubmitButton className="btn-secondary" pendingText="…">Zapisz</SubmitButton>
+            </form>
+          </details>
         )}
         {c.status === "accepted" && !c.units_created_at && !needsAssign && (
           <form action={retryFinalize} className="flex items-center gap-3 border-t border-line pt-3 text-sm">
@@ -400,8 +414,8 @@ async function TemplateSection({ c, canSeePrices }: { c: TemplateContract; canSe
         {(c.status === "signed" || c.status === "accepted" || c.status === "rejected") && (
           <div className="space-y-1 text-sm">
             <h3 className="font-medium">Sprzedający</h3>
-            <p>{c.seller_name}<br />{c.seller_address}{c.seller_country && c.seller_country !== "PL" ? `, ${countryName(c.seller_country)}` : ""}<br />PESEL/dowód: {c.seller_id_number}</p>
-            <p>Zapłata: <b>{c.payment_method === "cash" ? "gotówka" : `przelew – ${formatAccount(c.seller_bank_account)}`}</b>, waluta <b>{c.currency ?? "–"}</b></p>
+            <p>{c.seller_name}<br />{c.seller_address}{c.seller_country && c.seller_country !== "PL" ? `, ${countryName(c.seller_country)}` : ""}{c.type === "invoice" ? (c.seller_id_number ? <><br />NIP: {c.seller_id_number}</> : null) : <><br />PESEL/dowód: {c.seller_id_number}</>}</p>
+            <p>Zapłata: <b>{paymentText(c.payment_method, c.seller_bank_account)}</b>, waluta <b>{c.currency ?? "–"}</b></p>
             <p className="text-muted">{[c.seller_email, c.seller_phone].filter(Boolean).join(" · ")}</p>
             <p className="text-xs text-muted">Podpisano {dateOnly(c.signed_at)}{c.signer_ip ? ` · IP ${c.signer_ip}` : ""}. {c.payment_method !== "cash" && <>Przelew w ciągu {c.payment_days ?? 7} dni od dostarczenia towaru.</>}</p>
           </div>

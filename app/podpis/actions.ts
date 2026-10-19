@@ -296,10 +296,17 @@ export async function submitSellerInvoice(token: string, _: Result | null, fd: F
   if (!vatForm) return { error: "Wybierz rodzaj faktury: VAT marża albo VAT 23%. / Choose the invoice type." };
   if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return { error: "Nieprawidłowy adres e-mail." };
   if (!/^\d{4}\/\d{2}\/[0-9a-f-]{36}\.(pdf|jpg|png)$/.test(path)) return { error: "Dołącz plik faktury. / Attach the invoice file." };
+  const paymentMethod = String(fd.get("payment_method") ?? "");
+  if (paymentMethod !== "transfer" && paymentMethod !== "cash") return { error: "Wybierz formę zapłaty: przelew albo gotówka. / Choose a payment method." };
+  const account = paymentMethod === "transfer" ? clean(fd.get("bank"), 80) : null;
+  if (paymentMethod === "transfer" && !account) return { error: "Wpisz numer konta. / Enter your bank account number." };
   const db = createAdminClient();
-  const { data: c } = await db.from("contracts").select("id, status, sign_expires_at").eq("sign_token", token).maybeSingle();
+  const { data: c } = await db.from("contracts").select("id, status, sign_expires_at, currency").eq("sign_token", token).maybeSingle();
   if (!c || c.status === "cancelled") return { error: "Ten link jest nieaktywny." };
   if (c.status !== "sent") redirect(`/podpis/${token}`);
+  // Waluta ustalona przez nas zostaje; bez niej – wybrana przy fakturze.
+  const currency = c.currency ?? (["PLN", "EUR"].includes(String(fd.get("currency"))) ? String(fd.get("currency")) : null);
+  if (!currency) return { error: "Wybierz walutę faktury. / Choose the currency." };
   if (c.sign_expires_at && new Date(c.sign_expires_at) < new Date()) return { error: "Link wygasł – poproś o nowy." };
   const { count: used } = await db.from("contracts").select("id", { count: "exact", head: true }).eq("file_path", path);
   if (used) return { error: "Ten plik jest już użyty – dołącz fakturę ponownie." };
@@ -314,6 +321,7 @@ export async function submitSellerInvoice(token: string, _: Result | null, fd: F
   const { data: updated, error } = await db.from("contracts").update({
     type: "invoice", doc_number: docNumber, contract_date: docDate, vat_form: vatForm,
     counterparty: company, seller_name: company, seller_id_number: nip || null, seller_email: email || null,
+    payment_method: paymentMethod, seller_bank_account: account, currency,
     file_path: path, file_name: fileName, status: "signed", signed_at: new Date().toISOString(),
     notes: "Faktura wgrana przez sprzedającego (link do umowy).", ...(await requestMeta()),
   }).eq("id", c.id).eq("status", "sent").select("id");
