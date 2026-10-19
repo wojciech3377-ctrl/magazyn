@@ -3,6 +3,7 @@
 import { manualPayment } from "@/lib/orders/payment";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { requireAdmin, requireSection } from "@/lib/auth";
 import { errorMessage } from "@/lib/errors";
 import { adjustStock, type StockChange } from "@/lib/stock";
@@ -465,4 +466,87 @@ export async function pickupAction(_: OrderOpState, fd: FormData): Promise<Order
   revalidatePath(`/sprzedaz/${order.id}`);
   revalidatePath("/sprzedaz");
   return { ok: step === "picked" ? "Zamówienie oznaczone jako odebrane." : "Gotowe do odbioru – Shopify wysłał klientowi e-mail." };
+}
+
+/**
+ * Paragon PDF (PAR, bez paragonu fiskalnego, poza JPK) do zamówienia – tak jak „Drukuj paragon PDF” w Kasie.
+ * Pozycje z zamówienia (bez zwróconych), wysyłka 23%.
+ */
+export async function issueOrderReceiptPdf(fd: FormData) {
+  const { profile } = await requireSection("sprzedaz", "faktury");
+  const db = createAdminClient();
+  const orderId = str(fd, "order_id");
+  const back = (m: string) => redirect(`/sprzedaz/${orderId}?blad=${encodeURIComponent(m)}`);
+  const { data: order } = await db.from("orders").select("id, receipt_id, cancelled_at").eq("id", orderId).maybeSingle();
+  if (!order) return back("Nie ma takiego zamówienia.");
+  if (order.cancelled_at) return back("Zamówienie jest anulowane.");
+  const { data: had } = await db.from("invoices").select("id, kind, number").eq("order_id", orderId).not("status", "in", "(rejected,cancelled)").limit(5);
+  const par = (had ?? []).find((d) => d.kind === "receipt");
+  if (par) redirect(`/sprzedaz/faktury/${par.id}`);
+  const inv = (had ?? []).find((d) => d.kind !== "receipt");
+  if (inv) return back(`Do zamówienia jest już faktura ${inv.number}.`);
+  if (order.receipt_id) return back("Do zamówienia jest już paragon fiskalny.");
+  const { draftFromOrder, issueReceipt } = await import("@/lib/invoices/service");
+  let id: string;
+  try {
+    const draft = await draftFromOrder(db, orderId);
+    if (!draft || !draft.items.length) throw new Error("Zamówienie nie ma pozycji do paragonu.");
+    const row = await issueReceipt(db, { ...draft, orderId, notes: null }, profile.id);
+    id = row.id as string;
+  } catch (e) {
+    return back(`Paragon PDF nie powstał: ${errorMessage(e)}`);
+  }
+  revalidatePath(`/sprzedaz/${orderId}`);
+  redirect(`/sprzedaz/faktury/${id}`);
+}
+
+export type TrackingState = { ok?: string; error?: string } | null;
+
+const CARRIERS = ["InPost", "DPD", "DHL", "GLS", "UPS", "FedEx", "Poczta Polska", "Orlen Paczka", "Inny"];
+
+/** Numer przesyłki nadanej poza Furgonetką (np. ręcznie u kuriera): do Shopify (zamówienie wysłane) i do zamówienia w aplikacji. */
+export async function addManualTracking(_: TrackingState, fd: FormData): Promise<TrackingState> {
+  await requireSection("sprzedaz");
+  const db = createAdminClient();
+  const orderId = str(fd, "order_id");
+  const number = str(fd, "number").replace(/\s+/g, "").slice(0, 60);
+  const carrier = CARRIERS.includes(str(fd, "carrier")) ? str(fd, "carrier") : "Inny";
+  const urlRaw = str(fd, "url");
+  const url = /^https?:\/\/\S+$/i.test(urlRaw) ? urlRaw.slice(0, 500) : null;
+  const notify = !!fd.get("notify");
+  if (!/^[A-Za-z0-9-]{4,60}$/.test(number)) return { error: "Wpisz numer przesyłki (litery i cyfry)." };
+  const { data: order } = await db.from("orders").select("id, store_id, shopify_order_id, cancelled_at, number, store:stores(code, shopify_domain)").eq("id", orderId).maybeSingle();
+  if (!order) return { error: "Nie ma takiego zamówienia." };
+  if (order.cancelled_at) return { error: "Zamówienie jest anulowane." };
+  const store = order.store as unknown as { code: string; shopify_domain: string | null } | null;
+  const shopify = !!store?.shopify_domain && isShopifyOrder(order.shopify_order_id);
+  // Zamówienie spoza Shopify (wysyłka z paragonu PAR): przesyłka zapisana w aplikacji. Ze Shopify – numer i status
+  // przychodzą z realizacji w Shopify (Shopify sam śledzi doręczenie u znanych przewoźników).
+  const { error: sErr } = shopify ? { error: null } : await db.from("shipments").upsert({
+    order_id: order.id, provider: "manual", external_id: number, service: carrier, tracking_number: number, tracking_url: url,
+    state: "shipped", state_description: `Nadana poza Furgonetką (${carrier})`, state_at: new Date().toISOString(), reference: order.number,
+    created_in_app: true, updated_at: new Date().toISOString(),
+  }, { onConflict: "provider,external_id" });
+  if (sErr) return { error: sErr.message };
+  let note = "";
+  if (shopify && store?.shopify_domain) {
+    const t = { number, url, company: carrier === "Inny" ? "Other" : carrier };
+    try {
+      const open = await fulfillWithTracking(store.shopify_domain, store.code, order.shopify_order_id, t, notify);
+      if (open) {
+        // Już oznaczone jako wysłane (np. bez numeru) – dopisujemy numer do tej realizacji.
+        const { addTrackingToFulfillment } = await import("@/lib/integrations/shopify");
+        const added = await addTrackingToFulfillment(store.shopify_domain, store.code, order.shopify_order_id, t, notify);
+        note = added ? " Numer dopisany do wysyłki w Shopify." : " W Shopify zamówienie jest już wysłane z innym numerem – numer zapisany tylko w aplikacji.";
+      } else note = ` Zamówienie oznaczone w Shopify jako wysłane${notify ? " (klient dostał e-mail z numerem)" : ""}.`;
+      const fresh = await getOrder(store.shopify_domain, store.code, order.shopify_order_id);
+      if (fresh) await saveShopifyOrders(db, order.store_id, [fresh]);
+    } catch (e) {
+      return { error: `Shopify nie przyjął numeru: ${errorMessage(e)}` };
+    }
+  }
+  await refreshOrderStatus(db, [order.id]);
+  revalidatePath(`/sprzedaz/${order.id}`);
+  revalidatePath("/sprzedaz");
+  return { ok: `Zapisano przesyłkę ${carrier} ${number}.${note}` };
 }

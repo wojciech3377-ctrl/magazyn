@@ -21,7 +21,9 @@ import { WtbButton, WtbOrderButton } from "@/components/WtbButton";
 import { ReceiptButton } from "@/components/ReceiptButton";
 import { fiscalPrinterReady } from "@/lib/fiscal/jobs";
 import type { JobView } from "../receipt-actions";
-import { refreshOrder } from "./actions";
+import { issueOrderReceiptPdf, refreshOrder } from "./actions";
+import { ManualTrackingForm } from "./ManualTrackingForm";
+import { ConfirmSubmit } from "@/components/ConfirmSubmit";
 import { PickupPanel } from "./PickupPanel";
 import { isPersonalPickup } from "@/lib/orders/status";
 
@@ -39,8 +41,9 @@ function shopifyAdminUrl(domain: string | null, legacyId: string | null) {
 // Etykieta: nadanie w Furgonetce czeka do ~15 s na wynik – więcej czasu niż domyślnie.
 export const maxDuration = 60;
 
-export default async function OrderPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function OrderPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<Record<string, string | undefined>> }) {
   const { id } = await params;
+  const sp = await searchParams;
   const { supabase, profile } = await requireProfile();
   // Wszystko, co zależy tylko od id zamówienia – równolegle.
   const [{ data: order }, { data: shipments }, { data: sales }, furgonetka, { data: invoice }, { data: receiptJob }, printer, { data: parDoc }] = await Promise.all([
@@ -89,7 +92,13 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
         actions={
           <>
             {parDoc && <Link className="btn-secondary" href={`/sprzedaz/faktury/${parDoc.id}`}>Paragon {parDoc.number}</Link>}
-            {!par && status !== "cancelled" && status !== "returned" && <ReceiptButton orderId={order.id} receiptId={order.receipt_id} job={receiptJob as JobView | null} printer={printer} />}
+            {!parDoc && !invoice && !order.receipt_id && status !== "cancelled" && (
+              <form action={issueOrderReceiptPdf}>
+                <input type="hidden" name="order_id" value={order.id} />
+                <ConfirmSubmit className="btn-secondary" message="Wystawić paragon PDF (bez paragonu fiskalnego, poza JPK) do tego zamówienia?">Paragon PDF</ConfirmSubmit>
+              </form>
+            )}
+            {!par && !parDoc && status !== "cancelled" && status !== "returned" && <ReceiptButton orderId={order.id} receiptId={order.receipt_id} job={receiptJob as JobView | null} printer={printer} />}
             <WtbOrderButton orderId={order.id} />
             {invoice
               ? <Link className="btn-secondary" href={`/sprzedaz/faktury/${invoice.id}`}>Faktura {invoice.number}</Link>
@@ -102,6 +111,8 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
         }
       />
 
+      {sp.blad && <div className="mb-4"><Notice tone="error">{sp.blad}</Notice></div>}
+      {sp.ok && <div className="mb-4"><Notice tone="ok">{sp.ok}</Notice></div>}
       {par && <div className="mb-4"><Notice>Wysyłka z paragonu {parDoc?.number ?? "PAR"} – zamówienie utworzone w aplikacji (nie w Shopify). <b>Nie wchodzi do JPK</b>, a umowy jego sztuk wróciły do niewykorzystanych.</Notice></div>}
       <div className="mb-5 flex flex-wrap items-center gap-2">
         <OrderStatusPill status={status} />
@@ -143,7 +154,7 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
                   {classifyShipment(s) === null && <Pill>anulowana</Pill>}
                 </div>
                 {s.state_description && <div className={classifyShipment(s) === "problem" ? "font-medium text-bad" : "text-muted"}>{s.state_description}{s.state_at ? ` · ${dateTime(s.state_at)}` : ""}</div>}
-                <a className="mt-1 inline-block text-xs text-accent hover:underline" href={`/druk/pdf?src=${encodeURIComponent(`/api/etykiety/${s.id}`)}&wroc=${encodeURIComponent(`/sprzedaz/${order.id}`)}&nazwa=etykieta-${s.tracking_number ?? s.id}&tytul=${encodeURIComponent(`Etykieta ${s.tracking_number ?? ""}`)}`}>Etykieta PDF</a>
+                {s.provider !== "manual" && <a className="mt-1 inline-block text-xs text-accent hover:underline" href={`/druk/pdf?src=${encodeURIComponent(`/api/etykiety/${s.id}`)}&wroc=${encodeURIComponent(`/sprzedaz/${order.id}`)}&nazwa=etykieta-${s.tracking_number ?? s.id}&tytul=${encodeURIComponent(`Etykieta ${s.tracking_number ?? ""}`)}`}>Etykieta PDF</a>}
               </li>
             ))}
             {fulfillments.flatMap((f) => f.trackingInfo.filter((t) => t.number && !(shipments ?? []).some((s) => s.tracking_number === t.number)).map((t) => (
@@ -259,6 +270,13 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
           </>
         )}
       </section>
+      {status !== "cancelled" && (
+        <section className="card mt-5 p-4">
+          <h2 className="h2 mb-1">Numer przesyłki nadanej poza Furgonetką</h2>
+          <p className="mb-3 text-sm text-muted">Paczka nadana ręcznie (np. u kuriera, na poczcie)? Wpisz numer – {par ? "zapisze się przy zamówieniu." : "zamówienie w Shopify zostanie oznaczone jako wysłane z tym numerem (albo numer zostanie dopisany do już wysłanego)."}</p>
+          <ManualTrackingForm orderId={order.id} />
+        </section>
+      )}
       {profile.role === "admin" && (status !== "cancelled" || (["PAID", "PARTIALLY_REFUNDED", "PARTIALLY_PAID"].includes(String(order.financial_status ?? "").toUpperCase()) && Number(order.refunded_amount ?? 0) + Number(order.refund_pending ?? 0) < Number(order.total ?? 0))) && (
         <section className="card mt-5 p-4">
           <h2 className="h2 mb-1">Anulowanie i zwroty</h2>
