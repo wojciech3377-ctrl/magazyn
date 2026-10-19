@@ -54,7 +54,7 @@ const UNIT_FIELDS = "id, code, owner_type, purchase_form, purchase_price, payout
 export function contractLabel(c: Pick<Contract, "number" | "doc_number" | "template"> | null) {
   if (!c) return null;
   if (c.doc_number) return c.doc_number;
-  return c.template && c.number ? String(c.number) : null;
+  return c.template && c.number ? `NR${c.number}` : null;
 }
 
 function vatOf(unit: Unit, taxRate?: number | null): JpkLine["vat"] {

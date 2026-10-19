@@ -100,7 +100,7 @@ export async function AcceptTab() {
           <div key={c.id} className="card space-y-3 p-4">
             <div className="flex flex-wrap items-center gap-2">
               {c.type === "invoice" ? <Pill tone="blue">faktura</Pill> : <Pill tone="amber">umowa</Pill>}
-              <b><Link className="text-accent hover:underline" href={`/umowy/${c.id}`}>{c.type === "invoice" ? `FV ${c.doc_number} (link umowy nr ${c.number})` : `Umowa nr ${c.number}`}</Link> · {c.seller_name ?? c.counterparty}</b>
+              <b><Link className="text-accent hover:underline" href={`/umowy/${c.id}`}>{c.type === "invoice" ? `FV ${c.doc_number} (link umowy NR${c.number})` : `Umowa NR${c.number}`}</Link> · {c.seller_name ?? c.counterparty}</b>
               {c.type === "invoice" && <a className="text-sm text-accent hover:underline" href={`/api/umowy/${c.id}/pdf`} target="_blank" rel="noreferrer">zobacz fakturę{c.vat_form === "vat_23" ? " (VAT 23%)" : c.vat_form === "vat_margin" ? " (VAT marża)" : ""}</a>}
               <span className="text-sm text-muted">{c.type === "invoice" ? "przesłana" : "podpisana"} {dateTime(c.signed_at)}{c.source === "general" ? " · z ogólnego linku" : ""}{c.location_id ? ` · towar na ${locName(c.location_id)}` : ""}</span>
             </div>
@@ -129,7 +129,7 @@ export async function AcceptTab() {
           <h2 className="h2 mb-2">Czekają na odpowiedź na Twoją ofertę</h2>
           <ul className="space-y-1 text-sm">
             {offerWait.map((i) => <li key={i.id}>Komis · {i.consignor?.name} · {i.items.filter((x) => x.status === "offered").length} szt. z ofertą <span className="text-muted">({INTAKE_STATUS[i.status].text})</span></li>)}
-            {contractOffers.map((c) => <li key={c.id}><Link className="text-accent hover:underline" href={`/umowy/${c.id}`}>Umowa nr {c.number}</Link> · {c.seller_name ?? c.counterparty} <span className="text-muted">· oferta wysłana {dateTime(c.offer?.sent_at ?? null)}, ważna do {dateOnly(c.sign_expires_at)}</span></li>)}
+            {contractOffers.map((c) => <li key={c.id}><Link className="text-accent hover:underline" href={`/umowy/${c.id}`}>Umowa NR{c.number}</Link> · {c.seller_name ?? c.counterparty} <span className="text-muted">· oferta wysłana {dateTime(c.offer?.sent_at ?? null)}, ważna do {dateOnly(c.sign_expires_at)}</span></li>)}
           </ul>
         </section>
       )}
@@ -255,7 +255,7 @@ export async function TransitTab() {
           <input type="hidden" name="contract_id" value={cid} />
           <div className="flex flex-wrap items-center gap-2">
             <Pill tone="amber">umowa</Pill>
-            <b><Link className="text-accent hover:underline" href={`/umowy/${cid}`}>Umowa nr {us[0].contract.number}</Link> · {us[0].contract.seller_name ?? us[0].contract.counterparty}</b>
+            <b><Link className="text-accent hover:underline" href={`/umowy/${cid}`}>Umowa NR{us[0].contract.number}</Link> · {us[0].contract.seller_name ?? us[0].contract.counterparty}</b>
             <span className="text-sm text-muted">{us.length} szt. w drodze{us[0].location ? ` · do ${us[0].location.name}` : ""}</span>
           </div>
           <ul className="space-y-1 text-sm">

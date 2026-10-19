@@ -28,7 +28,7 @@ export async function freeContracts(db: SupabaseClient, opts: { keep?: (string |
     .filter((r) => keep.has(r.id) || (count.get(r.id) ?? 0) < capacity(r.items, r.type))
     .map((r) => ({
       id: r.id, counterparty: r.counterparty, contract_date: r.contract_date,
-      label: [r.number ? `nr ${r.number}` : null, r.counterparty ?? "umowa"].filter(Boolean).join(" · "),
+      label: [r.number ? `NR${r.number}` : null, r.counterparty ?? "umowa"].filter(Boolean).join(" · "),
     }));
 }
 
@@ -42,7 +42,7 @@ export async function contractTakenError(db: SupabaseClient, contractId: string,
   const { data: others } = await q;
   const cap = capacity(c.items as Row["items"], c.type as string | null);
   if ((others ?? []).length + adding > cap) {
-    const name = [c.number ? `nr ${c.number}` : null, c.counterparty].filter(Boolean).join(" · ");
+    const name = [c.number ? `NR${c.number}` : null, c.counterparty].filter(Boolean).join(" · ");
     return `Umowa ${name} jest już zajęta (${(others ?? []).map((o) => o.code).join(", ") || "inne rzeczy"}${cap > 1 ? ` – ma ${cap} pozycji` : ""}). Wybierz inną umowę albo najpierw odepnij ją od tamtej rzeczy.`;
   }
   return null;

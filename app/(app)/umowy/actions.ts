@@ -397,7 +397,7 @@ export async function acceptContract(formData: FormData) {
     }
     if (items.every((i) => i.unit_id || i.variant_id)) {
       const fin = await supabase.rpc("finalize_contract", { p_contract_id: g.id });
-      if (fin.error) errors.push(`Sztuki (nr ${g.number}): ${fin.error.message}`);
+      if (fin.error) errors.push(`Sztuki (NR${g.number}): ${fin.error.message}`);
       else created += Number(fin.data?.created_units ?? 0);
     } else unlinked = true;
   }

@@ -149,8 +149,8 @@ export async function offerContract(fd: FormData) {
     try {
       const company = await getCompany(supabase);
       const total = contractTotal(items.map((it, idx) => ({ ...it, qty: Number(it.qty ?? 1), price: prices[idx] })));
-      await sendMail(c!.seller_email, `Umowa nr ${c!.number}: nasza propozycja ceny – ${company.name}`,
-        `<p>Dzień dobry,</p><p>dziękujemy za podpisanie umowy nr ${c!.number}. Proponujemy inne ceny:</p>` +
+      await sendMail(c!.seller_email, `Umowa NR${c!.number}: nasza propozycja ceny – ${company.name}`,
+        `<p>Dzień dobry,</p><p>dziękujemy za podpisanie umowy NR${c!.number}. Proponujemy inne ceny:</p>` +
         `<table style="border-collapse:collapse">${items.map((it, idx) => `<tr><td style="padding:3px 10px 3px 0">${escapeHtml(`${it.title} ${it.option ?? ""}`)}</td><td style="padding:3px 10px 3px 0;color:#5b6878"><s>${escapeHtml(formatMoney(Number(it.price), c!.currency ?? "PLN"))}</s></td><td style="padding:3px 0"><b>${escapeHtml(formatMoney(prices[idx], c!.currency ?? "PLN"))}</b></td></tr>`).join("")}</table>` +
         `<p>Razem: <b>${escapeHtml(formatMoney(total, c!.currency ?? "PLN"))}</b></p>${note ? `<p>${escapeHtml(note)}</p>` : ""}` +
         `<p>Zaakceptuj albo odrzuć propozycję tutaj (link ważny 14 dni):</p><p><a href="${escapeHtml(link)}">${escapeHtml(link)}</a></p><p>${escapeHtml(company.name)}</p>`);

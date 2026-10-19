@@ -13,7 +13,7 @@ export async function contractPdf(db: SupabaseClient, c: ContractRow & { status?
     ? `Podpisano elektronicznie przez Sprzedającego ${new Intl.DateTimeFormat("pl-PL", { dateStyle: "short", timeStyle: "short", timeZone: "Europe/Warsaw" }).format(new Date(c.signed_at))}${c.signer_ip ? `, adres IP ${c.signer_ip}` : ""}.`
     : null;
   return renderContractPdf(purchaseBlocks(data), {
-    title: `Umowa kupna nr ${data.number}`,
+    title: `Umowa kupna NR${data.number}`,
     // Podpis kupującego dopiero po zatwierdzeniu umowy przez sklep.
     buyerSignature: c.status === "accepted" ? buyerSignature : null,
     sellerSignature: c.seller_signature ?? null,

@@ -248,10 +248,10 @@ async function notifyOfferAnswer(contractId: string, accepted: boolean) {
     const { data: c } = await db.from("contracts").select("number, seller_name").eq("id", contractId).single();
     const company = await getCompany(db);
     if (!company.email) return;
-    await sendMail(company.email, `Umowa nr ${c?.number}: oferta ${accepted ? "zaakceptowana" : "odrzucona"}`,
+    await sendMail(company.email, `Umowa NR${c?.number}: oferta ${accepted ? "zaakceptowana" : "odrzucona"}`,
       accepted
-        ? `<p>${escapeHtml(c?.seller_name ?? "Sprzedający")} zaakceptował(a) nowe ceny w umowie nr ${c?.number}. Umowa jest zawarta – towar czeka w Przyjęciu dostawy → W drodze.</p>`
-        : `<p>${escapeHtml(c?.seller_name ?? "Sprzedający")} odrzucił(a) ofertę cenową do umowy nr ${c?.number}. Umowa jest odrzucona.</p>`);
+        ? `<p>${escapeHtml(c?.seller_name ?? "Sprzedający")} zaakceptował(a) nowe ceny w umowie NR${c?.number}. Umowa jest zawarta – towar czeka w Przyjęciu dostawy → W drodze.</p>`
+        : `<p>${escapeHtml(c?.seller_name ?? "Sprzedający")} odrzucił(a) ofertę cenową do umowy NR${c?.number}. Umowa jest odrzucona.</p>`);
   } catch {
     // powiadomienie nie jest konieczne
   }

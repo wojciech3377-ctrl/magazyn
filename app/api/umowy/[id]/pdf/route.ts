@@ -29,6 +29,6 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   if (!c.template) return contractPage;
   const pdf = await contractPdf(db, c);
   return new Response(Buffer.from(pdf), {
-    headers: { "Content-Type": "application/pdf", "Content-Disposition": `inline; filename="umowa-${c.number}.pdf"`, "Cache-Control": "private, no-store" },
+    headers: { "Content-Type": "application/pdf", "Content-Disposition": `inline; filename="umowa-NR${c.number}.pdf"`, "Cache-Control": "private, no-store" },
   });
 }

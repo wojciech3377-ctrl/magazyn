@@ -21,11 +21,11 @@ export default async function OfferPage({ params }: { params: Promise<{ token: s
   if (!c || (!c.offer && c.status !== "offer")) return shell(<p>Ten link jest nieaktywny. Skontaktuj się z nami: {company.email}</p>);
   if (c.status === "accepted" && c.offer_responded_at) {
     return shell(<>
-      <h1 className="h1">Dziękujemy – umowa nr {c.number} jest zawarta</h1>
+      <h1 className="h1">Dziękujemy – umowa NR{c.number} jest zawarta</h1>
       <p className="text-sm text-muted">Zaakceptowałeś(-aś) nowe ceny. Umowę z podpisami obu stron pobierzesz tutaj{" "}<a className="text-accent underline" href={`/podpis/pdf/${token}`}>(PDF)</a>.</p>
     </>);
   }
-  if (c.status === "rejected") return shell(<><h1 className="h1">Oferta odrzucona</h1><p className="text-sm text-muted">Umowa nr {c.number} nie zostanie zawarta. W razie pytań: {company.email}</p></>);
+  if (c.status === "rejected") return shell(<><h1 className="h1">Oferta odrzucona</h1><p className="text-sm text-muted">Umowa NR{c.number} nie zostanie zawarta. W razie pytań: {company.email}</p></>);
   if (c.status !== "offer") return shell(<p>Ta oferta nie czeka już na odpowiedź. Kontakt: {company.email}</p>);
   if (c.sign_expires_at && new Date(c.sign_expires_at) < new Date()) return shell(<p>Oferta wygasła. Skontaktuj się z nami: {company.email}</p>);
 
@@ -36,7 +36,7 @@ export default async function OfferPage({ params }: { params: Promise<{ token: s
   const total = formatMoney(items.reduce((s, it, idx) => s + Number(it.qty ?? 1) * Number(offer.prices?.[idx] ?? it.price), 0), cur);
   return (
     <PublicShell company={company.name}>
-      <h1 className="h1 mb-3">Umowa nr {c.number}: nasza propozycja ceny</h1>
+      <h1 className="h1 mb-3">Umowa NR{c.number}: nasza propozycja ceny</h1>
       <OfferResponse action={respondContractOffer.bind(null, token)} rows={rows} total={total} note={offer.note ?? null} />
     </PublicShell>
   );

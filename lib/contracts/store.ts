@@ -19,8 +19,8 @@ export async function notifyAwaitingApproval(contractId: string) {
     if (!(await mailConfigured())) return;
     const { data: c } = await db.from("contracts").select("*").eq("id", contractId).single();
     const company = await getCompany(db);
-    await sendMail(company.email, `Umowa kupna nr ${c.number} czeka na zatwierdzenie`,
-      `<p>${escapeHtml(c.seller_name)} podpisał(a) umowę kupna nr ${c.number} na kwotę ${escapeHtml(formatMoney(contractTotal(c.items ?? []), c.currency))}.</p>` +
+    await sendMail(company.email, `Umowa kupna NR${c.number} czeka na zatwierdzenie`,
+      `<p>${escapeHtml(c.seller_name)} podpisał(a) umowę kupna NR${c.number} na kwotę ${escapeHtml(formatMoney(contractTotal(c.items ?? []), c.currency))}.</p>` +
       `<p>Zatwierdź ją w aplikacji w zakładce Umowy – dopiero wtedy sprzedający dostanie umowę z Waszym podpisem.</p>`);
   } catch (e) {
     await logError(db, "contract-mail", contractId, e);
@@ -41,7 +41,7 @@ export async function ensureContractPdf(contractId: string): Promise<Buffer | nu
   const path = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, "0")}/${crypto.randomUUID()}.pdf`;
   const { error } = await db.storage.from("contracts").upload(path, pdf, { contentType: "application/pdf" });
   if (error) throw new Error(`Nie udało się zapisać PDF: ${error.message}`);
-  await db.from("contracts").update({ file_path: path, file_name: `umowa-kupna-${c.number}.pdf` }).eq("id", contractId);
+  await db.from("contracts").update({ file_path: path, file_name: `umowa-kupna-NR${c.number}.pdf` }).eq("id", contractId);
   return pdf;
 }
 
@@ -55,9 +55,9 @@ export async function deliverAcceptedContract(contractId: string): Promise<{ ema
     // Faktura sprzedającego – nie odsyłamy jej jako „umowy kupna”.
     if (!c?.seller_email || c.type === "invoice" || !(await mailConfigured())) return { emailed: false };
     const company = await getCompany(db);
-    await sendMail(c.seller_email, `Umowa kupna nr ${c.number} – ${company.name}`,
-      `<p>Dziękujemy! W załączniku umowa kupna nr ${c.number} podpisana przez obie strony.</p><p>${escapeHtml(company.name)}</p>`,
-      [{ filename: `umowa-kupna-${c.number}.pdf`, content: pdf }]);
+    await sendMail(c.seller_email, `Umowa kupna NR${c.number} – ${company.name}`,
+      `<p>Dziękujemy! W załączniku umowa kupna NR${c.number} podpisana przez obie strony.</p><p>${escapeHtml(company.name)}</p>`,
+      [{ filename: `umowa-kupna-NR${c.number}.pdf`, content: pdf }]);
     return { emailed: true };
   } catch (e) {
     await logError(db, "contract-pdf", contractId, e);

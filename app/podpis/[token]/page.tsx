@@ -36,7 +36,7 @@ export default async function SignPage({ params }: { params: Promise<{ token: st
     return (
       <PublicShell company={company.name}>
         <div className="card mx-auto max-w-lg space-y-3 p-6">
-          <h1 className="h1">Dziękujemy, umowa nr {c.number} jest podpisana</h1>
+          <h1 className="h1">Dziękujemy, umowa NR{c.number} jest podpisana</h1>
           <p className="text-sm text-muted">Teraz zatwierdzimy ją po naszej stronie. {c.seller_email ? `Umowę podpisaną przez obie strony wyślemy na ${c.seller_email}, a także` : "Umowę podpisaną przez obie strony"} pobierzesz pod tym samym linkiem.</p>
           <p className="text-sm text-muted">Thank you! We will now approve the agreement. The copy signed by both parties will be available at this link{c.seller_email ? " and sent to your e-mail" : ""}.</p>
         </div>
@@ -51,7 +51,7 @@ export default async function SignPage({ params }: { params: Promise<{ token: st
     return (
       <PublicShell company={company.name}>
         <div className="card mx-auto max-w-lg space-y-3 p-6">
-          <h1 className="h1">{list ? `Umowy nr ${list.map((g) => g.number).join(", ")} są zawarte` : `Umowa nr ${c.number} jest zawarta`}</h1>
+          <h1 className="h1">{list ? `Umowy ${list.map((g) => `NR${g.number}`).join(", ")} są zawarte` : `Umowa NR${c.number} jest zawarta`}</h1>
           <p className="text-sm text-muted">Podpisane przez obie strony{list ? " – osobna umowa dla każdej rzeczy" : ""}. / Signed by both parties{list ? " – a separate agreement for each item" : ""}.</p>
           {list ? (
             <ul className="space-y-2">
@@ -59,7 +59,7 @@ export default async function SignPage({ params }: { params: Promise<{ token: st
                 const it = ((g.items ?? []) as { title?: string; option?: string }[])[0];
                 return (
                   <li key={g.sign_token as string} className="flex items-center justify-between gap-3 rounded-lg border border-line p-3 text-sm">
-                    <span className="min-w-0"><b>Umowa nr {g.number}</b><span className="block truncate text-muted">{[it?.title, it?.option].filter(Boolean).join(" ")}</span></span>
+                    <span className="min-w-0"><b>Umowa NR{g.number}</b><span className="block truncate text-muted">{[it?.title, it?.option].filter(Boolean).join(" ")}</span></span>
                     <a className="btn-secondary shrink-0" href={`/podpis/pdf/${g.sign_token}`}>PDF</a>
                   </li>
                 );
@@ -72,7 +72,7 @@ export default async function SignPage({ params }: { params: Promise<{ token: st
   }
   if (c.status === "offer") redirect(`/podpis/${token}/oferta`);
   if (c.status === "rejected") {
-    return <PublicShell company={company.name}><div className="card mx-auto max-w-lg p-6">Umowa nr {c.number} nie została zaakceptowana. Skontaktuj się z nami: {company.email}</div></PublicShell>;
+    return <PublicShell company={company.name}><div className="card mx-auto max-w-lg p-6">Umowa NR{c.number} nie została zaakceptowana. Skontaktuj się z nami: {company.email}</div></PublicShell>;
   }
   if (c.sign_expires_at && new Date(c.sign_expires_at) < new Date()) {
     return <PublicShell company={company.name}><div className="card mx-auto max-w-lg p-6">Link wygasł. Poproś o nowy: {company.email}</div></PublicShell>;
@@ -81,7 +81,7 @@ export default async function SignPage({ params }: { params: Promise<{ token: st
   const action = signLinkedContract.bind(null, token);
   return (
     <PublicShell company={company.name}>
-      <h1 className="h1 mb-3">Umowa kupna nr {c.number}</h1>
+      <h1 className="h1 mb-3">Umowa kupna NR{c.number}</h1>
       {/* Umowa od sklepu (nie komisant – ten wgrywa faktury w swoim panelu): firma może wgrać fakturę zamiast podpisu. */}
       {c.source !== "consignor" && <InvoiceOption token={token} />}
       <SellerContractForm

@@ -122,7 +122,7 @@ export default async function AttachContractPage({ searchParams }: { searchParam
               const docNumber = boundTo.get(c.id as string)?.doc_number as string | null | undefined;
               return (
                 <tr key={c.id}>
-                  <td className="whitespace-nowrap"><Link className="text-accent hover:underline" href={`/umowy/${c.id}`} target="_blank">{docNumber ?? (c.number ? `nr ${c.number}` : "bez numeru")}</Link></td>
+                  <td className="whitespace-nowrap"><Link className="text-accent hover:underline" href={`/umowy/${c.id}`} target="_blank">{docNumber ?? (c.number ? `NR${c.number}` : "bez numeru")}</Link></td>
                   <td>{c.counterparty}</td>
                   <td className="max-w-80 text-sm text-muted"><span className="line-clamp-2">{items.length ? items.map((i) => `${i.title ?? ""} ${i.option ?? ""}`.trim()).join(", ") : "–"}</span></td>
                   <td className="whitespace-nowrap text-sm text-muted">{dateOnly(c.contract_date ?? c.created_at)}</td>

@@ -14,6 +14,6 @@ export async function GET(_: NextRequest, { params }: { params: Promise<{ token:
   const pdf = await ensureContractPdf(c.id).catch(() => null);
   if (!pdf) return new Response("Nie udało się przygotować PDF – napisz do nas", { status: 500 });
   return new Response(new Uint8Array(pdf), {
-    headers: { "Content-Type": "application/pdf", "Content-Disposition": `attachment; filename="umowa-kupna-${c.number}.pdf"`, "Cache-Control": "private, no-store" },
+    headers: { "Content-Type": "application/pdf", "Content-Disposition": `attachment; filename="umowa-kupna-NR${c.number}.pdf"`, "Cache-Control": "private, no-store" },
   });
 }

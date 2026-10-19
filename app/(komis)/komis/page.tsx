@@ -33,7 +33,7 @@ function docOf(c: ConsignorContract | undefined): SoldRow["doc"] {
     return live ? { kind: "sign", href: `/podpis/${c.sign_token}`, swappable: true } : c.source === "consignor" ? { kind: "none" } : { kind: "sign", href: null };
   }
   if (c.status === "signed") return { kind: "approve" };
-  return { kind: "done", label: c.type === "invoice" ? `faktura ${c.doc_number ?? ""}`.trim() : `umowa${c.number ? ` nr ${c.number}` : ""}` };
+  return { kind: "done", label: c.type === "invoice" ? `faktura ${c.doc_number ?? ""}`.trim() : `umowa${c.number ? ` NR${c.number}` : ""}` };
 }
 
 export default async function KomisPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {

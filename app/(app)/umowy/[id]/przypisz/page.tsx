@@ -50,7 +50,7 @@ export default async function AssignContractPage({ params, searchParams }: { par
   return (
     <>
       <PageHeader
-        title={`Przypisz umowę ${c.number ? `nr ${c.number}` : ""} · ${c.counterparty}`}
+        title={`Przypisz umowę ${c.number ? `NR${c.number}` : ""} · ${c.counterparty}`}
         sub={<>{items.length ? items.map((i) => `${i.title} ${i.option}`).join(", ") : "umowa bez pozycji"}{c.amount !== null ? ` · ${money(c.amount, (c as { currency?: string | null }).currency)}` : ""}</>}
         actions={<Link className="btn-secondary" href={`/umowy/${c.id}`}>Wróć do umowy</Link>}
       />
