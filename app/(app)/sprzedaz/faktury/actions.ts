@@ -428,6 +428,8 @@ export async function deleteInvoiceAction(fd: FormData) {
     }
   }
   revalidatePath("/sprzedaz");
+  // Paragon / faktura do zamówienia – powrót do zamówienia (np. żeby wystawić paragon PDF od nowa).
+  if (inv.order_id) redirect(`/sprzedaz/${inv.order_id}?ok=${encodeURIComponent(`Dokument ${inv.number} usunięty.${note}`)}`);
   redirect(`/sprzedaz?widok=faktury&ok=${encodeURIComponent(`Faktura ${inv.number} usunięta.${note}`)}`);
 }
 
