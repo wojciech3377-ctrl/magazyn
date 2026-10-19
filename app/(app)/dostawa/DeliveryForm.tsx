@@ -1,6 +1,7 @@
 "use client";
 
 import { SizeChip } from "@/components/SizeChip";
+import { OffCatalogAdd } from "@/components/OffCatalogAdd";
 import { useActionState, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { SearchInput } from "@/components/SearchInput";
 import { createDelivery, searchVariants, type VariantHit } from "./actions";
@@ -101,8 +102,11 @@ export function DeliveryForm({
           />
           {searching && <p className="mt-2 text-sm text-muted">Szukam…</p>}
           {!searching && query.trim().length >= 2 && hits.length === 0 && (
-            <p className="mt-2 text-sm text-muted">Nic nie znaleziono. Nowy produkt dodaj najpierw w Shopify – pojawi się tu automatycznie.</p>
+            <p className="mt-2 text-sm text-muted">Nic nie znaleziono w katalogu. Możesz dodać rzecz ręcznie (niżej) albo najpierw w Shopify – wtedy pojawi się tu automatycznie.</p>
           )}
+          <div className="mt-2">
+            <OffCatalogAdd onAdd={({ variantId, title, option }) => setLines((prev) => [...prev, { key: crypto.randomUUID(), variantId, title: `${title} (spoza Shopify)`, option, baseLinked: false, quantity: 1, price: "", payout: "", identifiers: "" }])} />
+          </div>
           <div className="mt-3 space-y-3">
             {hits.map((h) => (
               <div key={h.productId} className="rounded-md border border-line p-3">

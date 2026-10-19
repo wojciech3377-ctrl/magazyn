@@ -1,6 +1,7 @@
 "use client";
 
 import { SizeChip } from "@/components/SizeChip";
+import { OffCatalogAdd } from "@/components/OffCatalogAdd";
 import { useEffect, useState, useTransition } from "react";
 import { SearchInput } from "@/components/SearchInput";
 import { Icon } from "@/components/icons";
@@ -99,6 +100,8 @@ export function ContractItemsPicker({ defaultCodes }: { defaultCodes: string[] }
           </div>
         )}
       </div>
+
+      <OffCatalogAdd onAdd={({ variantId, title, option }) => add({ kind: "variant", key: `v:${variantId}:${Date.now()}`, variantId, label: `${title} ${option} (spoza Shopify)` })} />
 
       <div className="rounded-xl border border-line p-3">
         <div className="mb-1.5 text-xs font-medium text-muted">2. Rzeczy w sklepie bez umowy (kod sztuki, IMEI, nazwa)</div>

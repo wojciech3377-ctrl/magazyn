@@ -175,3 +175,16 @@ export async function retryDeliveryBase(formData: FormData) {
   await saveBaseResult(supabase, id, results);
   redirect(`/dostawa/${id}`);
 }
+
+/**
+ * Rzecz spoza katalogu Shopify (Przyjęcie dostawy, nowa umowa): produkt „nieprzypisany do Shopify” z rozmiarem.
+ * Sztuka normalnie trafia do magazynu; do produktu z Shopify przypiszesz ją później na karcie sztuki.
+ */
+export async function createOffCatalogVariant(title: string, option: string): Promise<{ variantId?: string; error?: string }> {
+  const { supabase } = await requireSection("dostawa", "umowy");
+  const t = title.trim().slice(0, 200);
+  if (t.length < 2) return { error: "Wpisz nazwę rzeczy." };
+  const { data, error } = await supabase.rpc("create_unassigned_variant", { p_title: t, p_option: option.trim().slice(0, 100) });
+  if (error || !data) return { error: error && /create_unassigned_variant|schema cache/i.test(error.message) ? "Ta funkcja wymaga SQL 63 w Supabase." : error?.message ?? "Nie udało się dodać." };
+  return { variantId: data as string };
+}

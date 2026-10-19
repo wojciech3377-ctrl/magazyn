@@ -3,6 +3,7 @@
 import { useActionState, useEffect, useState, useTransition } from "react";
 import { createLinkContract } from "./actions";
 import { SizeChip } from "@/components/SizeChip";
+import { OffCatalogAdd } from "@/components/OffCatalogAdd";
 import { searchVariants, type VariantHit } from "@/app/(app)/dostawa/actions";
 
 export type Line = { key: string; unit_id?: string; variant_id?: string; title: string; option: string; identifier?: string | null; code?: string; qty: number; price: string };
@@ -63,6 +64,7 @@ export function TemplateContractForm({
           <section className="card space-y-2 p-4">
             <label className="label" htmlFor="q">{saleId ? "Pozycja zamówienia nie jest powiązana z katalogiem – wybierz produkt i rozmiar" : "Dodaj produkt, który dopiero kupujesz"}</label>
             <input id="q" className="input" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Nazwa, SKU, EAN" />
+            <OffCatalogAdd onAdd={({ variantId, title, option }) => setLines((prev) => [...prev, { key: crypto.randomUUID(), variant_id: variantId, title, option, qty: 1, price: "" }])} />
             <div className="space-y-2">
               {hits.map((h) => (
                 <div key={h.productId} className="rounded-md border border-line p-2">
