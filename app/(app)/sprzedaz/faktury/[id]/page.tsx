@@ -63,7 +63,12 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
       )}
       {inKsef && inv.kind !== "correction" && profile.role === "admin" && <p className="mb-4 text-xs text-muted">Faktury przyjętej w KSeF nie można usunąć – KSeF nie pozwala kasować faktur. Zmiany robi się korektą.</p>}
 
-      {isPar && <div className="mb-4"><Notice>Paragon dla osoby prywatnej – dokument do druku bez danych nabywcy. Nie trafia do KSeF.</Notice></div>}
+      {isPar && (() => {
+        const b = inv.buyer as { name?: string; address1?: string | null; address2?: string | null; email?: string | null } | null;
+        return b?.name && b.name !== "Osoba prywatna"
+          ? <div className="mb-4"><Notice>Paragon do druku – kupujący: <b>{b.name}</b>{[b.address1, b.address2, b.email].filter(Boolean).length ? `, ${[b.address1, b.address2, b.email].filter(Boolean).join(", ")}` : ""}. Nie trafia do KSeF.</Notice></div>
+          : <div className="mb-4"><Notice>Paragon dla osoby prywatnej – dokument do druku bez danych nabywcy. Nie trafia do KSeF.</Notice></div>;
+      })()}
       {!isPar && <>
       <section className="card mb-5 p-4">
         <div className="flex flex-wrap items-center gap-3">

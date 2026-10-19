@@ -507,7 +507,7 @@ export async function issueOrderReceiptPdf(fd: FormData) {
     const ship = draft.items.filter((i) => i.unit === "usł.");
     draft.items = [...draft.items.filter((i) => i.unit !== "usł."), ...extra, ...ship];
     if (!draft.items.length) throw new Error("Zamówienie nie ma pozycji do paragonu.");
-    const row = await issueReceipt(db, { ...draft, orderId, notes: null }, profile.id);
+    const row = await issueReceipt(db, { ...draft, orderId, notes: null }, profile.id, { withBuyer: true });
     id = row.id as string;
   } catch (e) {
     return back(`Paragon PDF nie powstał: ${errorMessage(e)}`);

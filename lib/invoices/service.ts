@@ -254,15 +254,17 @@ async function sellerOf(db: SupabaseClient) {
 }
 
 /** Paragon (dokument do druku dla osoby prywatnej, w formie faktury): numer PAR/miesiąc/n, bez XML i bez KSeF. */
-export async function issueReceipt(db: SupabaseClient, d: InvoiceDraft, userId: string) {
+export async function issueReceipt(db: SupabaseClient, d: InvoiceDraft, userId: string, opts: { withBuyer?: boolean } = {}) {
   const { company, seller } = await sellerOf(db);
-  d = cleanItems({ ...d, buyer: RECEIPT_BUYER, paid: true });
+  // Paragon do zamówienia: dane kupującego z zamówienia (imię i nazwisko / firma, adres, e-mail); bez nich – „Osoba prywatna”.
+  const buyer = opts.withBuyer && d.buyer?.name?.trim() ? { ...d.buyer, name: d.buyer.name.trim() } : RECEIPT_BUYER;
+  d = cleanItems({ ...d, buyer, paid: true });
   validate(company, d, true);
   d = { ...d, items: d.items.map(({ checkVat: _c, ...i }) => i) };
   const t = invoiceTotals(d.items);
   const { data, error } = await db.rpc("create_invoice", {
     p_invoice: {
-      kind: "receipt", issue_date: d.issueDate, sale_date: d.saleDate, place: company.city.replace(/^\d{2}-\d{3}\s*/, "") || null, seller, buyer: RECEIPT_BUYER,
+      kind: "receipt", issue_date: d.issueDate, sale_date: d.saleDate, place: company.city.replace(/^\d{2}-\d{3}\s*/, "") || null, seller, buyer,
       currency: "PLN", payment_method: d.paymentMethod, paid: true, paid_at: d.paidAt ?? d.issueDate, due_date: null,
       total_gross: t.total, net_23: t.net23, vat_23: t.vat23, margin_total: t.margin, notes: d.notes, order_id: d.orderId, pos_order_id: d.posOrderId, created_by: userId,
     },

@@ -94,8 +94,9 @@ export async function renderInvoicePdf(inv: InvoiceForPdf) {
     y -= 8;
   }
   const y1 = party("SPRZEDAWCA", inv.seller, M);
-  // Paragon: bez danych nabywcy (osoba prywatna).
-  const y2 = isPar ? y1 : party("NABYWCA", inv.buyer, A4[0] / 2 + 10);
+  // Paragon: dane kupującego tylko, gdy są (paragon do zamówienia); „Osoba prywatna” – bez bloku nabywcy.
+  const parBuyer = isPar && inv.buyer?.name && inv.buyer.name !== "Osoba prywatna";
+  const y2 = isPar && !parBuyer ? y1 : party(isPar ? "KUPUJĄCY" : "NABYWCA", inv.buyer, A4[0] / 2 + 10);
   y = Math.min(y1, y2) - 14;
 
   // Tabela pozycji (przy korekcie: najpierw „przed korektą”, potem „po korekcie”)
