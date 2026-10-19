@@ -1,5 +1,6 @@
 "use client";
 
+import { SizeChip } from "@/components/SizeChip";
 import { useEffect, useState, useTransition } from "react";
 import { SearchInput } from "@/components/SearchInput";
 import { Icon } from "@/components/icons";
@@ -83,10 +84,14 @@ export function ContractItemsPicker({ defaultCodes }: { defaultCodes: string[] }
                     {h.styleSku && <span className="block truncate text-xs font-normal text-muted">{h.styleSku}</span>}
                   </div>
                 </div>
-                <div className="flex flex-wrap gap-1">
+                <div className="flex flex-wrap gap-2 pt-1">
                   {h.variants.map((v) => (
-                    <button type="button" key={v.id} onClick={() => add({ kind: "variant", key: `v:${v.id}:${Date.now()}`, variantId: v.id, label: `${h.title} ${v.option}` })}
-                      className="rounded-md border border-line px-2 py-0.5 text-sm hover:border-accent hover:text-accent">{v.option}</button>
+                    <SizeChip key={v.id} small label={v.option} count={picked.filter((p) => p.kind === "variant" && p.variantId === v.id).length}
+                      onAdd={() => add({ kind: "variant", key: `v:${v.id}:${Date.now()}`, variantId: v.id, label: `${h.title} ${v.option}` })}
+                      onRemove={() => {
+                        const last = [...picked].reverse().find((p) => p.kind === "variant" && p.variantId === v.id);
+                        if (last) setPicked(picked.filter((p) => p !== last));
+                      }} />
                   ))}
                 </div>
               </div>

@@ -218,7 +218,18 @@ export function SellerContractForm({
             {input("idNumber", T.id, { required: true })}
             {input("street", T.street, { required: true, autoComplete: "street-address" })}
             <div className="grid grid-cols-3 gap-2">
-              {input("postcode", T.postcode, { required: true, autoComplete: "postal-code" })}
+              {/* Polska: szablon 00-000 (myślnik dopisuje się sam); inny kraj – dowolny kod, bez szablonu. */}
+              <div>
+                <label className="label" htmlFor="postcode">{T.postcode}</label>
+                {country === "PL" ? (
+                  <input className="input tabular-nums" id="postcode" name="postcode" required autoComplete="postal-code" inputMode="numeric" placeholder="00-000" maxLength={6}
+                    pattern="\d{2}-?\d{3}" title="Kod pocztowy w formacie 00-000" value={f.postcode}
+                    onChange={(e) => { const d = e.target.value.replace(/\D/g, "").slice(0, 5); setF({ ...f, postcode: d.length > 2 ? `${d.slice(0, 2)}-${d.slice(2)}` : d }); }} />
+                ) : (
+                  <input className="input" id="postcode" name="postcode" required autoComplete="postal-code" maxLength={10} placeholder={lang === "en" ? "e.g. 10115" : "np. 10115"}
+                    value={f.postcode} onChange={(e) => setF({ ...f, postcode: e.target.value })} />
+                )}
+              </div>
               <div className="col-span-2">{input("city", T.city, { required: true, autoComplete: "address-level2" })}</div>
             </div>
             <div className="grid grid-cols-2 gap-2">

@@ -2,6 +2,7 @@
 
 import { useActionState, useEffect, useState, useTransition } from "react";
 import { createLinkContract } from "./actions";
+import { SizeChip } from "@/components/SizeChip";
 import { searchVariants, type VariantHit } from "@/app/(app)/dostawa/actions";
 
 export type Line = { key: string; unit_id?: string; variant_id?: string; title: string; option: string; identifier?: string | null; code?: string; qty: number; price: string };
@@ -66,12 +67,17 @@ export function TemplateContractForm({
               {hits.map((h) => (
                 <div key={h.productId} className="rounded-md border border-line p-2">
                   <div className="mb-1 text-sm font-medium">{h.title}</div>
-                  <div className="flex flex-wrap gap-1.5">
+                  <div className="flex flex-wrap gap-2 pt-1">
                     {h.variants.map((v) => (
-                      <button type="button" key={v.id} className="rounded border border-line px-2 py-1 text-sm hover:border-accent"
-                        onClick={() => setLines([...lines, { key: crypto.randomUUID(), variant_id: v.id, title: h.title, option: v.option, qty: 1, price: "" }])}>
-                        {v.option}
-                      </button>
+                      <SizeChip key={v.id} small label={v.option} count={lines.filter((l) => l.variant_id === v.id).reduce((n, l) => n + (l.qty || 1), 0)}
+                        onAdd={() => setLines([...lines, { key: crypto.randomUUID(), variant_id: v.id, title: h.title, option: v.option, qty: 1, price: "" }])}
+                        onRemove={() => {
+                          // Ostatnio dodana pozycja tego rozmiaru: −1 sztuka albo cała pozycja.
+                          const i = lines.map((l) => l.variant_id).lastIndexOf(v.id);
+                          if (i < 0) return;
+                          const l = lines[i];
+                          setLines(l.qty > 1 ? lines.map((x, k) => (k === i ? { ...x, qty: x.qty - 1 } : x)) : lines.filter((_, k) => k !== i));
+                        }} />
                     ))}
                   </div>
                 </div>

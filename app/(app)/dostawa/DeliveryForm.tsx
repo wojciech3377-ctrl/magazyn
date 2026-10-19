@@ -1,5 +1,6 @@
 "use client";
 
+import { SizeChip } from "@/components/SizeChip";
 import { useActionState, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { SearchInput } from "@/components/SearchInput";
 import { createDelivery, searchVariants, type VariantHit } from "./actions";
@@ -47,6 +48,11 @@ export function DeliveryForm({
       if (existing) return prev.map((l) => (l.variantId === v.id ? { ...l, quantity: l.quantity + 1 } : l));
       return [...prev, { key: crypto.randomUUID(), variantId: v.id, title: hit.title, option: v.option, baseLinked: v.baseLinked, quantity: 1, price: "", payout: "", identifiers: "" }];
     });
+  }
+
+  /** Odjęcie jednej sztuki rozmiaru (przy zerze – pozycja znika). */
+  function removeOne(variantId: string) {
+    setLines((prev) => prev.flatMap((l) => (l.variantId !== variantId ? [l] : l.quantity > 1 ? [{ ...l, quantity: l.quantity - 1 }] : [])));
   }
 
   function update(key: string, patch: Partial<Line>) {
@@ -107,17 +113,10 @@ export function DeliveryForm({
                     <div className="text-xs text-muted">{h.styleSku ?? "bez SKU"}</div>
                   </div>
                 </div>
-                <div className="flex flex-wrap gap-1.5">
+                <div className="flex flex-wrap gap-2 pt-1">
                   {h.variants.map((v) => (
-                    <button
-                      type="button"
-                      key={v.id}
-                      onClick={() => addLine(h, v)}
-                      className="rounded-md border border-line px-2.5 py-1.5 text-sm hover:border-accent hover:bg-accent/5"
-                    >
-                      <b>{v.option}</b>
-                      <span className="ml-1.5 text-xs text-muted">{v.inStock} szt.</span>
-                    </button>
+                    <SizeChip key={v.id} label={v.option} sub={`${v.inStock} szt.`} count={lines.filter((l) => l.variantId === v.id).reduce((n, l) => n + (Number(l.quantity) || 0), 0)}
+                      onAdd={() => addLine(h, v)} onRemove={() => removeOne(v.id)} title="Kliknij, żeby dodać sztukę" />
                   ))}
                 </div>
               </div>
@@ -144,7 +143,7 @@ export function DeliveryForm({
                 <tr key={l.key}>
                   <td className="min-w-48">{l.title}</td>
                   <td className="font-medium">{l.option}</td>
-                  <td><input className="input" type="number" min={1} max={500} value={l.quantity} onChange={(e) => update(l.key, { quantity: Math.max(1, Number(e.target.value)) })} aria-label="Ilość" /></td>
+                  <td><input className="input min-w-[4.5rem] tabular-nums" type="number" min={1} max={500} value={l.quantity} onChange={(e) => update(l.key, { quantity: Math.max(1, Number(e.target.value)) })} aria-label="Ilość" /></td>
                   {canSeePrices && <td><input className="input" inputMode="decimal" value={l.price} onChange={(e) => update(l.key, { price: e.target.value })} placeholder="zł" aria-label="Cena zakupu" /></td>}
                   {canSeePrices && ownerType === "consignment" && <td><input className="input" inputMode="decimal" value={l.payout} onChange={(e) => update(l.key, { payout: e.target.value })} placeholder="zł" aria-label="Cena w komisie" /></td>}
                   <td><textarea className="input min-w-40" rows={1} value={l.identifiers} onChange={(e) => update(l.key, { identifiers: e.target.value })} placeholder="opcjonalnie, po jednym w linii" aria-label="IMEI lub numery seryjne" /></td>
