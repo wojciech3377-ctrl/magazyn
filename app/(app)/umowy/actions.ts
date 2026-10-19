@@ -59,6 +59,9 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
     }
     // Przedmioty faktury wpisane ręcznie (opis – bez sztuk i bez wpływu na kwoty zakupu).
     const manualItems = parseManualItems(formData.get("manual_items"));
+    // Rzeczy wpisane ręcznie / spoza katalogu → od razu sztuki na stanie („nieprzypisane do Shopify”).
+    const stockLoc = formData.get("to_stock") === "1" && !formData.get("sale_id") ? String(formData.get("stock_location_id") ?? "") : "";
+    if (formData.get("to_stock") === "1" && !formData.get("sale_id") && manualItems.length && !stockLoc) return { error: "Wybierz lokalizację, na którą trafią rzeczy (albo odznacz „dodaj do magazynu”)." };
     const docNumber = String(formData.get("doc_number") ?? "").trim().slice(0, 60) || null;
     const perItem = formData.get("amount_per_item") === "1";
     const vatForm = ["vat_margin", "vat_23"].includes(String(formData.get("vat_form"))) ? String(formData.get("vat_form")) : null;
@@ -86,6 +89,14 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
     id = data.id;
     // Numer nie wpisany → odczyt z pliku PDF (klucz serwera – plik w prywatnym magazynie).
     if (!docNumber) await fillContractNumber(createAdminClient(), id);
+    let stockErr = "";
+    if (stockLoc && (catalogItems.length || manualItems.length)) {
+      const { stockContractItems } = await import("@/lib/contracts/stock-items");
+      const r = await stockContractItems(supabase, id, [...catalogItems, ...manualItems], stockLoc).catch((e: unknown) => ({ items: null, created: 0, error: errorMessage(e) }));
+      if (r.items && r.created) await supabase.from("contracts").update({ items: r.items }).eq("id", id);
+      if (r.created) okNote = `Dodano do magazynu ${r.created} szt. „nieprzypisane do Shopify” – przypiszesz je, gdy produkt będzie w Shopify.`;
+      if (r.error) stockErr = `Umowa zapisana, ale ${r.created ? "nie wszystkie rzeczy" : "rzeczy nie"} trafiły do magazynu: ${r.error}`;
+    }
     // Kilka jednakowych umów z tym samym plikiem (np. jedna faktura na kilka osobnych umów). Rzeczy, sprzedaż
     // i pozycje z katalogu trafiają tylko do pierwszej.
     const copies = Math.min(50, Math.max(1, Math.floor(Number(formData.get("copies") ?? 1)) || 1));
@@ -93,9 +104,9 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
       const { data: first } = await supabase.from("contracts").select("doc_number").eq("id", id).single();
       const { data: made, error: copyErr } = await supabase.from("contracts")
         .insert(Array.from({ length: copies - 1 }, () => ({ ...payload, doc_number: first?.doc_number ?? payload.doc_number }))).select("id");
-      okNote = copyErr
+      okNote = [copyErr
         ? `Utworzono 1 umowę – kopii nie udało się zapisać: ${copyErr.message}`
-        : `Utworzono ${1 + (made?.length ?? 0)} jednakowych umów z tym samym plikiem. Rzeczy przypięte tylko do tej (pierwszej) – pozostałe są na liście niewykorzystanych.`;
+        : `Utworzono ${1 + (made?.length ?? 0)} jednakowych umów z tym samym plikiem. Rzeczy przypięte tylko do tej (pierwszej) – pozostałe są na liście niewykorzystanych.`, okNote].filter(Boolean).join(" ");
     }
     const saleId = String(formData.get("sale_id") ?? "");
     if (saleId) {
@@ -117,6 +128,7 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
     if (attachError) note = `?blad=${encodeURIComponent([okNote || "Umowa zapisana.", `Rzeczy NIE zostały przypięte: ${attachError}`].join(" "))}`;
     else if (r.missing.length || r.price.problems.length) note = `?blad=${encodeURIComponent([r.missing.length ? `Nie znaleziono sztuk: ${r.missing.join(", ")}.` : "Umowa zapisana i przypięta.", pm].filter(Boolean).join(" "))}`;
     else if (pm) okNote = [okNote, pm].filter(Boolean).join(" ");
+    if (stockErr) note = `?blad=${encodeURIComponent([stockErr, note ? decodeURIComponent(note.slice(6)) : ""].filter(Boolean).join(" "))}`;
   } catch (e) {
     return { error: e instanceof Error ? e.message : String((e as { message?: string }).message ?? e) };
   }
@@ -155,9 +167,22 @@ export async function addContractItem(formData: FormData) {
   if (!item) redirect(`/umowy/${id}?blad=${encodeURIComponent("Wpisz nazwę przedmiotu.")}`);
   const { data: c } = await supabase.from("contracts").select("items, template").eq("id", id).maybeSingle();
   if (!c || c.template) redirect(`/umowy/${id}`);
-  const { error } = await supabase.from("contracts").update({ items: [...((c.items ?? []) as unknown[]), item] }).eq("id", id);
+  // „Dodaj do magazynu” → od razu sztuki na stanie, „nieprzypisane do Shopify”.
+  const stockLoc = formData.get("to_stock") === "1" ? String(formData.get("stock_location_id") ?? "") : "";
+  if (formData.get("to_stock") === "1" && !stockLoc) redirect(`/umowy/${id}?blad=${encodeURIComponent("Wybierz lokalizację, na którą trafi rzecz.")}`);
+  let added: unknown[] = [item];
+  let msg = "";
+  if (stockLoc) {
+    const { stockContractItems } = await import("@/lib/contracts/stock-items");
+    const r = await stockContractItems(supabase, id, [item!], stockLoc).catch((e: unknown) => ({ items: [item!], created: 0, error: errorMessage(e) }));
+    added = r.items;
+    msg = r.error ? `blad=${encodeURIComponent(`Rzecz nie trafiła do magazynu: ${r.error}`)}` : `ok=${encodeURIComponent(`Dodano do magazynu ${r.created} szt. „nieprzypisane do Shopify”.`)}`;
+  }
+  const { error } = await supabase.from("contracts").update({ items: [...((c.items ?? []) as unknown[]), ...added] }).eq("id", id);
   if (error) redirect(`/umowy/${id}?blad=${encodeURIComponent(error.message)}`);
   revalidatePath(`/umowy/${id}`);
+  revalidatePath("/magazyn");
+  if (msg) redirect(`/umowy/${id}?${msg}`);
   redirect(`/umowy/${id}`);
 }
 

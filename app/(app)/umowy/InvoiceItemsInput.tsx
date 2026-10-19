@@ -7,7 +7,7 @@ const empty = (): Row => ({ title: "", option: "", qty: "1", price: "" });
 
 /**
  * „Przedmioty faktury” – opcjonalny opis, co jest na umowie / fakturze (nazwa, rozmiar, ilość, cena).
- * Tylko opis: nie przypina sztuk i nie zmienia kwot zakupu. Pole ukryte `manual_items` (JSON).
+ * Z zaznaczonym „dodaj do magazynu” – od razu sztuki na stanie („nieprzypisane do Shopify”), inaczej tylko opis. Pole ukryte `manual_items` (JSON).
  */
 export function InvoiceItemsInput({ canSeePrices }: { canSeePrices: boolean }) {
   const [rows, setRows] = useState<Row[]>([]);
@@ -20,7 +20,7 @@ export function InvoiceItemsInput({ canSeePrices }: { canSeePrices: boolean }) {
         <span className="text-sm font-medium">Przedmioty faktury <span className="font-normal text-muted">(opcjonalnie)</span></span>
         <button type="button" className="btn-secondary px-2.5 py-1 text-xs" onClick={() => setRows((r) => [...r, empty()])}>+ Dodaj przedmiot</button>
       </div>
-      {rows.length === 0 && <p className="text-xs text-muted">Możesz wpisać, co jest na fakturze, np. „Air Force 1 · 42 · 1 szt. · 300”. Nie jest to wymagane.</p>}
+      {rows.length === 0 && <p className="text-xs text-muted">Możesz wpisać, co jest na fakturze, np. „Air Force 1 · 42 · 1 szt. · 300”. Nie jest to wymagane. Zaznaczone „dodaj do magazynu” – każda sztuka od razu na stanie jako „nieprzypisane do Shopify”.</p>}
       {rows.map((r, k) => (
         <div key={k} className="grid grid-cols-[1fr_5rem] gap-2 sm:grid-cols-[1fr_6rem_4rem_7rem_auto]">
           <input className="input" placeholder="Nazwa przedmiotu" value={r.title} maxLength={120} onChange={(e) => set(k, { title: e.target.value })} aria-label="Nazwa przedmiotu" />

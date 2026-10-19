@@ -16,6 +16,7 @@ import { VariantPick } from "@/components/VariantPick";
 import { diagnoseUnitStock } from "@/lib/unit-stock";
 import { errorMessage } from "@/lib/errors";
 import { expectedPrices } from "@/lib/contracts/inherit-price";
+import { shopifyMatches, type ShopifyMatch } from "@/lib/unassigned";
 
 const NEXT_STATUS: Record<string, { to: string; label: string; danger?: boolean }[]> = {
   in_transit: [{ to: "in_stock", label: "Przyjmij na stan" }],
@@ -65,6 +66,14 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
   const priceDiff = fromContract !== undefined && ownPrice !== null && ownPrice !== undefined && Math.abs(Number(ownPrice) - fromContract) >= 0.005;
 
   const unassigned = !!(prodFlags as { unassigned?: boolean } | null)?.unassigned;
+  // Nieprzypisana: inne sztuki tego samego produktu (przypisanie hurtem) i podobne produkty z Shopify.
+  const [siblingsRes, matches] = unassigned
+    ? await Promise.all([
+      supabase.from("units").select("id, variant:variants!inner(product_id)", { count: "exact", head: true }).eq("variant.product_id", u.variant.product.id).neq("id", u.id),
+      shopifyMatches(supabase, u.variant.product.title, u.variant.option, u.location.store_id).catch(() => [] as ShopifyMatch[]),
+    ])
+    : [{ count: 0 }, [] as ShopifyMatch[]];
+  const siblings = siblingsRes.count ?? 0;
   let fileUrl: string | null = null;
   if (contract?.file_path) {
     const { data: signed } = await supabase.storage.from("contracts").createSignedUrl(contract.file_path, 600);
@@ -90,10 +99,37 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
       {unassigned && (
         <section className="card mb-5 border-orange-300 bg-orange-50/50 p-4">
           <h2 className="h2 mb-1">Nieprzypisany do Shopify</h2>
-          <p className="mb-3 text-sm text-muted">Tej rzeczy nie było w katalogu („{u.variant.product.title} · {u.variant.option}”). Nie ma jej w Shopify, więc nie ma ceny ani stanu w sklepie. Wybierz produkt i rozmiar z katalogu – sztuka się z nim połączy{u.status === "in_stock" ? ", a stan w Shopify wzrośnie o 1" : ""}. Nowego produktu? Dodaj go najpierw w Shopify.</p>
+          <p className="mb-3 text-sm text-muted">Tej rzeczy nie było w katalogu („{u.variant.product.title} · {u.variant.option}”). Nie ma jej w Shopify, więc nie ma ceny ani stanu w sklepie. Wybierz produkt i rozmiar z katalogu – sztuka się z nim połączy{u.status === "in_stock" ? ", a stan w Shopify wzrośnie o 1" : ""}. Nowego produktu? Dodaj go najpierw w Shopify – po odczycie katalogu (co 15 min albo „Sprawdź nowe produkty i stany” w Magazynie) pojawi się niżej jako podobny.</p>
+          {matches.length > 0 && (
+            <div className="mb-4">
+              <div className="label">Podobne produkty w Shopify</div>
+              <ul className="divide-y divide-line rounded-lg border border-line bg-white">
+                {matches.map((m) => (
+                  <li key={m.productId} className="flex flex-wrap items-center gap-3 p-2">
+                    {m.image ? <img src={m.image} alt="" className="h-10 w-10 rounded object-cover" /> : <span className="h-10 w-10 rounded bg-panel" />}
+                    <span className="min-w-0 flex-1 text-sm">{m.title}<span className="block text-xs text-muted">{m.sameSize ? `rozmiar ${m.sameSize.option} jest w Shopify` : `brak rozmiaru ${u.variant.option} w tym produkcie`}</span></span>
+                    {m.sameSize && (
+                      <form action={assignUnitToShopify}>
+                        <input type="hidden" name="id" value={u.id} />
+                        <input type="hidden" name="variant_id" value={m.sameSize.id} />
+                        {siblings > 0 && <input type="hidden" name="all" value="1" />}
+                        <SubmitButton className="btn-secondary" pendingText="Łączę…">{siblings > 0 ? `Połącz (${siblings + 1} szt., po rozmiarach)` : "Połącz"}</SubmitButton>
+                      </form>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           <form action={assignUnitToShopify} className="max-w-xl space-y-2">
             <input type="hidden" name="id" value={u.id} />
-            <VariantPick name="variant_id" storeId={u.location.store_id} label="Produkt z katalogu" />
+            <VariantPick name="variant_id" storeId={u.location.store_id} label={matches.length ? "Albo wybierz inny produkt z katalogu" : "Produkt z katalogu"} />
+            {siblings > 0 && (
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" name="all" value="1" defaultChecked />
+                przypisz też pozostałe {siblings} szt. „{u.variant.product.title}” (każdą do swojego rozmiaru)
+              </label>
+            )}
             <SubmitButton pendingText="Przypisuję…">Przypisz do produktu z Shopify</SubmitButton>
           </form>
         </section>

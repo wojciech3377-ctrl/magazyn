@@ -14,6 +14,7 @@ import { Pill } from "@/components/ui";
 import { CopyLink } from "./CopyLink";
 import { AssignItems } from "./AssignItems";
 import { ContractFileInput } from "@/components/ContractFileInput";
+import { StockOption } from "../ContractForm";
 
 export default async function ContractPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<Record<string, string | undefined>> }) {
   const { id } = await params;
@@ -21,11 +22,21 @@ export default async function ContractPage({ params, searchParams }: { params: P
   const { supabase, profile } = await requireProfile();
   const { data: c } = await supabase.from("contracts").select("*, consignor:consignors(name)").eq("id", id).maybeSingle();
   if (!c) notFound();
+  const { data: locRows } = !c.template && c.status !== "cancelled"
+    ? await supabase.from("locations").select("id, name, store:stores(name)").eq("active", true).order("name")
+    : { data: [] };
+  const stockLocations = (locRows ?? []).map((l) => ({ id: l.id as string, label: `${(l.store as unknown as { name: string } | null)?.name ?? ""} · ${l.name}` }));
   const { data: units } = await supabase
     .from("units")
-    .select("id, code, status, identifier, variant:variants(option, product:products(title))")
+    .select("id, code, status, identifier, variant:variants(option, product:products(id, title))")
     .eq("contract_id", id)
     .order("number");
+  // Sztuki „nieprzypisane do Shopify” (select * – działa także bez SQL 63).
+  const prodOf = (x: { variant: unknown }) => (x.variant as { product?: { id?: string } } | null)?.product?.id ?? "";
+  const pids = [...new Set((units ?? []).map(prodOf).filter(Boolean))];
+  const { data: pflags } = pids.length ? await supabase.from("products").select("*").in("id", pids.slice(0, 300)) : { data: [] };
+  const unassignedP = new Set(((pflags ?? []) as { id: string; unassigned?: boolean }[]).filter((x) => x.unassigned).map((x) => x.id));
+  const unassignedUnits = new Set((units ?? []).filter((x) => unassignedP.has(prodOf(x))).map((x) => x.id as string));
   let fileUrl: string | null = null;
   if (c.file_path) {
     const { data } = await supabase.storage.from("contracts").createSignedUrl(c.file_path, 600);
@@ -133,7 +144,7 @@ export default async function ContractPage({ params, searchParams }: { params: P
                       <tbody>
                         {(c.items as { title: string; option?: string; qty?: number; price?: number | string; unit_id?: string; variant_id?: string; manual?: boolean }[]).map((i, k) => (
                           <tr key={k}>
-                            <td>{i.title}{!i.manual && !i.unit_id && i.variant_id && <span className="ml-1 text-xs text-muted">(z katalogu – dopnij sztukę poniżej)</span>}</td>
+                            <td>{i.title}{!i.manual && !i.unit_id && i.variant_id && <span className="ml-1 text-xs text-muted">(z katalogu – dopnij sztukę poniżej)</span>}{i.unit_id && unassignedUnits.has(i.unit_id) && <span className="ml-1 text-xs text-warn">(w magazynie – nieprzypisane do Shopify)</span>}</td>
                             <td className="font-medium">{i.option || "–"}</td>
                             <td className="text-right tabular-nums">{Number(i.qty ?? 1)}</td>
                             {profile.can_see_prices && <td className="text-right tabular-nums">{Number(i.price ?? 0) > 0 ? formatMoney(Number(i.price), c.currency ?? "PLN") : "–"}</td>}
@@ -157,6 +168,7 @@ export default async function ContractPage({ params, searchParams }: { params: P
                   <input className="input w-20" name="qty" defaultValue="1" inputMode="numeric" aria-label="Ilość" />
                   {profile.can_see_prices && <input className="input w-28" name="price" placeholder="Cena / szt." inputMode="decimal" aria-label="Cena za sztukę" />}
                   <SubmitButton className="btn-secondary" pendingText="…">Dodaj</SubmitButton>
+                  {stockLocations.length > 0 && <div className="w-full"><StockOption compact locations={stockLocations} /></div>}
                 </form>
               </div>
             )}

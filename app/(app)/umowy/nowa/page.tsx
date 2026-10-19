@@ -5,7 +5,10 @@ import { ContractForm } from "../ContractForm";
 export default async function NewContractPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const sp = await searchParams;
   const { supabase, profile } = await requireProfile();
-  const { data: consignors } = await supabase.from("consignors").select("id, name").order("name");
+  const [{ data: consignors }, { data: locations }] = await Promise.all([
+    supabase.from("consignors").select("id, name").order("name"),
+    supabase.from("locations").select("id, name, store:stores(name)").eq("active", true).order("name"),
+  ]);
   // Sztuki zaznaczone w Magazynie (ids) albo podane kodem (sztuki).
   const ids = ([] as string[]).concat(sp.ids ?? []).flatMap((x) => x.split(",")).filter((x) => /^[0-9a-f-]{36}$/.test(x)).slice(0, 300);
   const { data: picked } = ids.length ? await supabase.from("units").select("code").in("id", ids) : { data: [] };
@@ -22,7 +25,8 @@ export default async function NewContractPage({ searchParams }: { searchParams: 
     <>
       <PageHeader title="Nowa umowa" sub="Plik trafia do prywatnego magazynu plików; widzą go tylko zalogowani pracownicy." />
       <ContractForm consignors={consignors ?? []} defaultUnits={codes.join(" ")} canSeePrices={profile.can_see_prices} returnTo={back} saleId={saleLabel ? saleId : null} saleLabel={saleLabel}
-        pickVariantStore={sale && !sale.unit_id && !sale.variant_id ? (sale.store_id as string | null) ?? "" : null} />
+        pickVariantStore={sale && !sale.unit_id && !sale.variant_id ? (sale.store_id as string | null) ?? "" : null}
+        locations={(locations ?? []).map((l) => ({ id: l.id as string, label: `${(l.store as unknown as { name: string } | null)?.name ?? ""} · ${l.name}` }))} />
     </>
   );
 }

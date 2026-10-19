@@ -341,21 +341,68 @@ export async function alignUnitNow(formData: FormData) {
   return go("ok", text);
 }
 
-/** Sztuka „nieprzypisana do Shopify” → wybrany rozmiar z katalogu (na stanie: +1 w Shopify). */
+/**
+ * Sztuka „nieprzypisana do Shopify” → wybrany rozmiar z katalogu (na stanie: +1 w Shopify).
+ * `all=1` – także pozostałe sztuki tego samego produktu „nieprzypisanego”: każda do rozmiaru o tej samej nazwie
+ * w wybranym produkcie Shopify (bez pasującego rozmiaru – zostaje do ręcznego przypisania).
+ */
 export async function assignUnitToShopify(formData: FormData) {
   const { supabase } = await requireSection("magazyn", "dostawa");
   const id = String(formData.get("id") ?? "");
   const variant = String(formData.get("variant_id") ?? "");
   const go = (k: "ok" | "blad", m: string) => redirect(`/magazyn/${id}?${k}=${encodeURIComponent(m)}`);
   if (!/^[0-9a-f-]{36}$/.test(variant)) return go("blad", "Wybierz produkt i rozmiar z katalogu.");
-  const { data, error } = await supabase.rpc("assign_unit_variant", { p_unit: id, p_variant: variant });
-  if (error) return go("blad", error.message);
-  const r = data as { status: string; location_id: string };
-  let note = "";
-  if (r.status === "in_stock") {
-    const [res] = await adjustStock(supabase, [{ variantId: variant, locationId: r.location_id, delta: 1 }]);
-    note = res ? (res.ok ? " Stan w Shopify +1." : ` Stan w Shopify: ${res.message}`) : "";
+  const pairs: { unit: string; variant: string }[] = [{ unit: id, variant }];
+  const skipped: string[] = [];
+  if (formData.get("all") === "1") {
+    const { normOption } = await import("@/lib/unassigned");
+    const [{ data: me }, { data: target }] = await Promise.all([
+      supabase.from("units").select("variant:variants(product_id)").eq("id", id).maybeSingle(),
+      supabase.from("variants").select("product_id").eq("id", variant).maybeSingle(),
+    ]);
+    const pid = (me?.variant as unknown as { product_id: string } | null)?.product_id;
+    if (pid && target) {
+      const [{ data: others }, { data: tv }] = await Promise.all([
+        supabase.from("units").select("id, code, variant:variants!inner(product_id, option)").eq("variant.product_id", pid).neq("id", id),
+        supabase.from("variants").select("id, option").eq("product_id", target.product_id),
+      ]);
+      for (const o of others ?? []) {
+        const opt = (o.variant as unknown as { option: string }).option;
+        const m = (tv ?? []).find((v) => normOption(v.option as string) === normOption(opt));
+        if (m) pairs.push({ unit: o.id as string, variant: m.id as string });
+        else skipped.push(`${o.code} (${opt})`);
+      }
+    }
   }
+  const changes = new Map<string, StockChange>();
+  const errors: string[] = [];
+  let done = 0;
+  for (const p of pairs) {
+    const { data, error } = await supabase.rpc("assign_unit_variant", { p_unit: p.unit, p_variant: p.variant });
+    if (error) {
+      if (p.unit === id) return go("blad", error.message);
+      errors.push(error.message);
+      continue;
+    }
+    done++;
+    const r = data as { status: string; location_id: string };
+    if (r.status === "in_stock") {
+      const key = `${p.variant}|${r.location_id}`;
+      const ch = changes.get(key) ?? { variantId: p.variant, locationId: r.location_id, delta: 0 };
+      ch.delta += 1;
+      changes.set(key, ch);
+    }
+  }
+  const results = changes.size ? await adjustStock(supabase, [...changes.values()]) : [];
+  const plus = results.filter((r) => r.ok).length;
+  const bad = results.filter((r) => !r.ok).map((r) => r.message);
   revalidatePath("/magazyn");
-  return go("ok", `Sztuka przypisana do produktu z Shopify.${note}`);
+  const msg = [
+    done > 1 ? `Przypisano do produktu z Shopify ${done} szt.` : "Sztuka przypisana do produktu z Shopify.",
+    plus ? "Stan w Shopify zwiększony." : "",
+    bad.length ? `Stan w Shopify: ${bad.join("; ")}` : "",
+    skipped.length ? `Bez pasującego rozmiaru (przypisz ręcznie): ${skipped.join(", ")}.` : "",
+    errors.length ? `Błędy: ${errors.join("; ")}` : "",
+  ].filter(Boolean).join(" ");
+  return go(bad.length || errors.length ? "blad" : "ok", msg);
 }

@@ -8,7 +8,7 @@ import { ContractItemsPicker } from "./ContractItemsPicker";
 import { DateField } from "@/components/DateField";
 import { InvoiceItemsInput } from "./InvoiceItemsInput";
 
-export function ContractForm({ consignors, defaultUnits, canSeePrices, returnTo = "", saleId = null, saleLabel = null, pickVariantStore = null }: { consignors: { id: string; name: string }[]; defaultUnits: string; canSeePrices: boolean; returnTo?: string; saleId?: string | null; saleLabel?: string | null; pickVariantStore?: string | null }) {
+export function ContractForm({ consignors, defaultUnits, canSeePrices, returnTo = "", saleId = null, saleLabel = null, pickVariantStore = null, locations = [] }: { consignors: { id: string; name: string }[]; defaultUnits: string; canSeePrices: boolean; returnTo?: string; saleId?: string | null; saleLabel?: string | null; pickVariantStore?: string | null; locations?: { id: string; label: string }[] }) {
   const [state, action, pending] = useActionState(createContract, null);
   const [type, setType] = useState("purchase");
   return (
@@ -77,6 +77,7 @@ export function ContractForm({ consignors, defaultUnits, canSeePrices, returnTo 
       <ContractFileInput label="Plik (PDF lub zdjęcie)" />
       <ContractItemsPicker defaultCodes={defaultUnits.split(/[\s,]+/).filter(Boolean)} />
       <InvoiceItemsInput canSeePrices={canSeePrices} />
+      {!saleId && locations.length > 0 && <StockOption locations={locations} />}
       <div className="md:col-span-2">
         <label className="label" htmlFor="notes">Notatki</label>
         <input className="input" id="notes" name="notes" />
@@ -100,6 +101,26 @@ function CopiesCounter() {
         <button type="button" className="h-9 w-9 text-lg text-muted hover:text-ink" onClick={() => set(n + 1)} aria-label="Więcej">+</button>
       </span>
       <span className="text-xs text-muted">{n > 1 ? `Powstanie ${n} umów z tym samym plikiem i danymi. Rzeczy wybrane niżej trafią tylko do pierwszej.` : "Jedna umowa."}</span>
+    </div>
+  );
+}
+
+/** Rzeczy wpisane ręcznie i spoza katalogu → od razu sztuki na stanie, „nieprzypisane do Shopify”. */
+export function StockOption({ locations, compact = false }: { locations: { id: string; label: string }[]; compact?: boolean }) {
+  const [on, setOn] = useState(true);
+  return (
+    <div className={compact ? "flex flex-wrap items-center gap-2 text-sm" : "space-y-2 rounded-xl border border-line p-3 md:col-span-2"}>
+      <label className="flex items-start gap-2 text-sm">
+        <input type="checkbox" name="to_stock" value="1" checked={on} onChange={(e) => setOn(e.target.checked)} className="mt-0.5" />
+        {compact
+          ? <span>dodaj do magazynu (na stanie, „nieprzypisane do Shopify”)</span>
+          : <span><b>Rzeczy wpisane ręcznie i spoza katalogu Shopify – dodaj od razu do magazynu</b> <span className="text-muted">(na stanie, status „nieprzypisane do Shopify”; gdy produkt pojawi się w Shopify, połączysz go na karcie sztuki)</span></span>}
+      </label>
+      {on && (
+        <select className={compact ? "input w-64" : "input sm:w-80"} name="stock_location_id" defaultValue={locations[0]?.id} aria-label="Lokalizacja dla nowych sztuk">
+          {locations.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
+        </select>
+      )}
     </div>
   );
 }
