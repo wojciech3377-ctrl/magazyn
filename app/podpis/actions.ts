@@ -256,3 +256,69 @@ async function notifyOfferAnswer(contractId: string, accepted: boolean) {
     // powiadomienie nie jest konieczne
   }
 }
+
+/** Sprzedający-firma: adres do wgrania faktury (PDF / JPG / PNG, do 10 MB) zamiast podpisywania umowy. */
+export async function prepareSellerInvoiceUpload(token: string, fileName: string, size: number): Promise<{ path: string; token: string } | { error: string }> {
+  if (!TOKEN.test(token)) return { error: "Ten link jest nieaktywny." };
+  if (await limited("invoice-upload", 15)) return TOO_MANY as { error: string };
+  const db = createAdminClient();
+  const { data: c } = await db.from("contracts").select("status, sign_expires_at").eq("sign_token", token).maybeSingle();
+  if (!c || c.status !== "sent" || (c.sign_expires_at && new Date(c.sign_expires_at) < new Date())) return { error: "Ten link jest nieaktywny." };
+  const ext = (fileName.split(".").pop() ?? "").toLowerCase().replace("jpeg", "jpg");
+  if (!["pdf", "jpg", "png"].includes(ext)) return { error: "Faktura musi być plikiem PDF, JPG albo PNG. / PDF, JPG or PNG only." };
+  if (!(size > 0) || size > 10 * 1024 * 1024) return { error: "Plik może mieć najwyżej 10 MB. / Max 10 MB." };
+  const now = new Date();
+  const path = `${now.getUTCFullYear()}/${String(now.getUTCMonth() + 1).padStart(2, "0")}/${crypto.randomUUID()}.${ext}`;
+  const { data, error } = await db.storage.from("contracts").createSignedUploadUrl(path);
+  if (error || !data) return { error: "Nie można przygotować wgrania pliku. Spróbuj ponownie." };
+  return { path, token: data.token };
+}
+
+/**
+ * Sprzedający-firma wgrywa fakturę zamiast podpisywać umowę: umowa staje się „FV zakupu” z plikiem faktury
+ * i czeka na zatwierdzenie w Przyjęciu dostawy → Do akceptacji (pozycje i ceny – jak w linku).
+ */
+export async function submitSellerInvoice(token: string, _: Result | null, fd: FormData): Promise<Result> {
+  if (fd.get("website")) return { error: "Błąd formularza." };
+  if (!TOKEN.test(token)) return { error: "Ten link jest nieaktywny." };
+  if (await limited("invoice", 10)) return TOO_MANY;
+  const company = clean(fd.get("company"), 150);
+  const nip = clean(fd.get("nip"), 20).replace(/[^0-9A-Z]/gi, "");
+  const docNumber = clean(fd.get("doc_number"), 60);
+  const docDate = String(fd.get("doc_date") ?? "");
+  const vatForm = fd.get("vat_form") === "vat_23" ? "vat_23" : fd.get("vat_form") === "vat_margin" ? "vat_margin" : null;
+  const email = clean(fd.get("email"), 120).toLowerCase();
+  const path = String(fd.get("file_path") ?? "");
+  const fileName = clean(fd.get("file_name"), 200) || "faktura";
+  if (company.length < 2) return { error: "Podaj nazwę firmy. / Enter the company name." };
+  if (!docNumber) return { error: "Wpisz numer faktury. / Enter the invoice number." };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(docDate)) return { error: "Podaj datę wystawienia faktury. / Enter the invoice date." };
+  if (!vatForm) return { error: "Wybierz rodzaj faktury: VAT marża albo VAT 23%. / Choose the invoice type." };
+  if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return { error: "Nieprawidłowy adres e-mail." };
+  if (!/^\d{4}\/\d{2}\/[0-9a-f-]{36}\.(pdf|jpg|png)$/.test(path)) return { error: "Dołącz plik faktury. / Attach the invoice file." };
+  const db = createAdminClient();
+  const { data: c } = await db.from("contracts").select("id, status, sign_expires_at").eq("sign_token", token).maybeSingle();
+  if (!c || c.status === "cancelled") return { error: "Ten link jest nieaktywny." };
+  if (c.status !== "sent") redirect(`/podpis/${token}`);
+  if (c.sign_expires_at && new Date(c.sign_expires_at) < new Date()) return { error: "Link wygasł – poproś o nowy." };
+  const { count: used } = await db.from("contracts").select("id", { count: "exact", head: true }).eq("file_path", path);
+  if (used) return { error: "Ten plik jest już użyty – dołącz fakturę ponownie." };
+  const { data: blob, error: dErr } = await db.storage.from("contracts").download(path);
+  if (dErr || !blob) return { error: "Nie znalazłem wgranego pliku – dołącz fakturę ponownie." };
+  const buf = Buffer.from(await blob.arrayBuffer());
+  const { labelFileType } = await import("@/lib/consignment");
+  if (buf.length > 10 * 1024 * 1024 || !labelFileType(buf)) {
+    await db.storage.from("contracts").remove([path]);
+    return { error: "Faktura musi być prawdziwym plikiem PDF, JPG albo PNG (do 10 MB)." };
+  }
+  const { data: updated, error } = await db.from("contracts").update({
+    type: "invoice", doc_number: docNumber, contract_date: docDate, vat_form: vatForm,
+    counterparty: company, seller_name: company, seller_id_number: nip || null, seller_email: email || null,
+    file_path: path, file_name: fileName, status: "signed", signed_at: new Date().toISOString(),
+    notes: "Faktura wgrana przez sprzedającego (link do umowy).", ...(await requestMeta()),
+  }).eq("id", c.id).eq("status", "sent").select("id");
+  if (error) return { error: "Nie udało się zapisać faktury. Spróbuj ponownie." };
+  if (!updated?.length) redirect(`/podpis/${token}`);
+  await notifyAwaitingApproval(c.id);
+  redirect(`/podpis/${token}`);
+}

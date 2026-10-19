@@ -19,6 +19,7 @@ type ContractRow = {
   id: string; number: number | null; counterparty: string; seller_name: string | null; status: string; source: string | null; created_at: string; signed_at: string | null;
   items: { title: string; option: string; qty: number; price: number; unit_id?: string; variant_id?: string }[] | null; location_id: string | null; sale_id: string | null;
   currency: string | null; offer: { prices?: number[]; sent_at?: string } | null; sign_expires_at: string | null;
+  type: string; doc_number: string | null; vat_form: string | null;
 };
 
 const BACK = "/dostawa?zakladka=akceptacja";
@@ -41,7 +42,7 @@ export async function AcceptTab() {
   const db = createAdminClient();
   const [{ data: intakes }, { data: contracts }, { data: invoices }, { data: locations }] = await Promise.all([
     db.from("consignor_intakes").select("*, items:consignor_intake_items(*), consignor:consignors(id, name)").in("status", ["review", "offer"]).order("created_at"),
-    supabase.from("contracts").select("id, number, counterparty, seller_name, status, source, created_at, signed_at, items, location_id, sale_id, currency, offer, sign_expires_at").in("status", ["signed", "offer"]).not("template", "is", null).order("signed_at"),
+    supabase.from("contracts").select("id, number, counterparty, seller_name, status, source, created_at, signed_at, items, location_id, sale_id, currency, offer, sign_expires_at, type, doc_number, vat_form").in("status", ["signed", "offer"]).not("template", "is", null).order("signed_at"),
     supabase.from("contracts").select("id, doc_number, counterparty, amount, created_at").eq("status", "signed").eq("source", "consignor_invoice").order("created_at"),
     supabase.from("locations").select("id, name, store_id, store:stores(name)").eq("active", true).order("name"),
   ]);
@@ -98,12 +99,13 @@ export async function AcceptTab() {
         return (
           <div key={c.id} className="card space-y-3 p-4">
             <div className="flex flex-wrap items-center gap-2">
-              <Pill tone="amber">umowa</Pill>
-              <b><Link className="text-accent hover:underline" href={`/umowy/${c.id}`}>Umowa nr {c.number}</Link> · {c.seller_name ?? c.counterparty}</b>
-              <span className="text-sm text-muted">podpisana {dateTime(c.signed_at)}{c.source === "general" ? " · z ogólnego linku" : ""}{c.location_id ? ` · towar na ${locName(c.location_id)}` : ""}</span>
+              {c.type === "invoice" ? <Pill tone="blue">faktura</Pill> : <Pill tone="amber">umowa</Pill>}
+              <b><Link className="text-accent hover:underline" href={`/umowy/${c.id}`}>{c.type === "invoice" ? `FV ${c.doc_number} (link umowy nr ${c.number})` : `Umowa nr ${c.number}`}</Link> · {c.seller_name ?? c.counterparty}</b>
+              {c.type === "invoice" && <a className="text-sm text-accent hover:underline" href={`/api/umowy/${c.id}/pdf`} target="_blank" rel="noreferrer">zobacz fakturę{c.vat_form === "vat_23" ? " (VAT 23%)" : c.vat_form === "vat_margin" ? " (VAT marża)" : ""}</a>}
+              <span className="text-sm text-muted">{c.type === "invoice" ? "przesłana" : "podpisana"} {dateTime(c.signed_at)}{c.source === "general" ? " · z ogólnego linku" : ""}{c.location_id ? ` · towar na ${locName(c.location_id)}` : ""}</span>
             </div>
             <ContractDecision
-              id={c.id} back={BACK} showPrices={prices} needsLocation={needsLocation} currency={c.currency}
+              id={c.id} back={BACK} showPrices={prices} needsLocation={needsLocation} currency={c.currency} allowOffer={c.type !== "invoice"}
               items={items.map((it) => ({ title: it.title, option: it.option, qty: Number(it.qty ?? 1), price: Number(it.price), unassigned: !it.unit_id && !it.variant_id }))}
               locations={locs.map((l) => ({ id: l.id, label: `${l.store?.name ?? ""} · ${l.name}` }))}
               accept={acceptContract} reject={rejectContract} offer={offerContract}

@@ -333,11 +333,13 @@ export async function acceptContract(formData: FormData) {
   const locationId = String(formData.get("location_id") ?? "") || null;
   const { data: accepted } = await supabase.from("contracts")
     .update({ status: "accepted", accepted_at: new Date().toISOString(), accepted_by: profile.id, ...(locationId ? { location_id: locationId } : {}) })
-    .eq("id", id).eq("status", "signed").select("id, source, items");
+    .eq("id", id).eq("status", "signed").select("id, source, items, type");
   if (!accepted?.length) redirect(withMsg(target, "blad", "Zatwierdzić można tylko umowę podpisaną przez sprzedającego."));
 
   // Każda rzecz dostaje osobną umowę z własnym numerem (bez migracji 0040 – jedna umowa jak dotąd).
-  const split = await (await import("@/lib/supabase/admin")).createAdminClient().rpc("split_contract", { p_contract_id: id });
+  // Faktura sprzedającego (wgrana zamiast podpisu) obejmuje wszystkie pozycje – bez dzielenia.
+  const isInvoice = (accepted![0] as { type?: string }).type === "invoice";
+  const split = isInvoice ? { data: [id], error: null } : await (await import("@/lib/supabase/admin")).createAdminClient().rpc("split_contract", { p_contract_id: id });
   const ids = (split.error ? [id] : (split.data as string[] | null) ?? [id]);
   // split_contract (SQL 40) nie zna późniejszych pól – nowe umowy dostają je z pierwotnej.
   if (ids.length > 1) {
@@ -388,6 +390,7 @@ export async function acceptContract(formData: FormData) {
   }
   const d = { error: pdfError };
   if (d.error) msgs.push(`PDF: ${d.error}`);
+  else if (isInvoice) msgs[0] = "Faktura sprzedającego zatwierdzona.";
   else msgs.push(emailed ? `Sprzedający dostał ${emailed > 1 ? `${emailed} umowy` : "umowę"} e-mailem.` : "Sprzedający pobierze umowy ze swojego linku.");
   revalidatePath(`/umowy/${id}`);
   revalidatePath("/dostawa");

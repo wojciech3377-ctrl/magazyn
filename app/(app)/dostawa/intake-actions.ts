@@ -130,8 +130,9 @@ export async function receiveIntake(fd: FormData) {
 export async function offerContract(fd: FormData) {
   const { supabase } = await requireSection("dostawa", "komisanci");
   const id = String(fd.get("id") ?? "");
-  const { data: c } = await supabase.from("contracts").select("id, status, items, sign_token, seller_email, number, currency, location_id").eq("id", id).maybeSingle();
+  const { data: c } = await supabase.from("contracts").select("id, status, items, sign_token, seller_email, number, currency, location_id, type").eq("id", id).maybeSingle();
   if (!c || c.status !== "signed" || !c.sign_token) back("akceptacja", "Ofertę można złożyć tylko do podpisanej umowy, która czeka na zatwierdzenie.", false);
+  if (c!.type === "invoice") back("akceptacja", "Do faktury nie można wysłać oferty – odrzuć ją i wyślij nowy link z innymi cenami.", false);
   const items = (c!.items ?? []) as { title: string; option: string; qty: number; price: number }[];
   const prices = items.map((it, idx) => amount(fd.get(`p_${idx}`)) ?? Number(it.price));
   if (prices.every((p, idx) => p === Number(items[idx].price))) back("akceptacja", "Zmień kwotę co najmniej jednej pozycji (albo kliknij Tak).", false);

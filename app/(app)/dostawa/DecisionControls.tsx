@@ -31,10 +31,12 @@ type Item = { title: string; option: string; qty: number; price: number; unassig
 type Loc = { id: string; label: string };
 
 /** Umowa podpisana: Tak (zatwierdź), Nie (odrzuć) albo Oferta – dopiero wtedy pola z nowymi cenami. */
-export function ContractDecision({ id, back, items, showPrices, locations, needsLocation, accept, reject, offer, currency }: {
+export function ContractDecision({ id, back, items, showPrices, locations, needsLocation, accept, reject, offer, currency, allowOffer = true }: {
   id: string; back: string; items: Item[]; showPrices: boolean; locations: Loc[]; needsLocation: boolean;
   /** Waluta umowy (PLN / EUR); brak – PLN. */
   currency?: string | null;
+  /** Faktura sprzedającego – bez oferty (faktura ma już kwoty). */
+  allowOffer?: boolean;
   accept: (fd: FormData) => Promise<void>; reject: (fd: FormData) => Promise<void>; offer: (fd: FormData) => Promise<void>;
 }) {
   const [offerMode, setOfferMode] = useState(false);
@@ -77,7 +79,7 @@ export function ContractDecision({ id, back, items, showPrices, locations, needs
             <input type="hidden" name="back" value={back} />
             <button className="btn-danger">Nie – odrzuć</button>
           </form>
-          <button type="button" className="btn-secondary border-accent text-accent hover:bg-sky-50" onClick={() => setOfferMode(true)}>Oferta – zaproponuj inne ceny</button>
+          {allowOffer && <button type="button" className="btn-secondary border-accent text-accent hover:bg-sky-50" onClick={() => setOfferMode(true)}>Oferta – zaproponuj inne ceny</button>}
         </div>
       ) : (
         <div className="flex flex-wrap items-end gap-2 rounded-lg border border-accent/40 bg-sky-50 p-3">

@@ -51,8 +51,9 @@ export async function deliverAcceptedContract(contractId: string): Promise<{ ema
   try {
     const pdf = await ensureContractPdf(contractId);
     if (!pdf) return { emailed: false, error: "Umowa nie jest zatwierdzona." };
-    const { data: c } = await db.from("contracts").select("number, seller_email").eq("id", contractId).single();
-    if (!c?.seller_email || !(await mailConfigured())) return { emailed: false };
+    const { data: c } = await db.from("contracts").select("number, seller_email, type").eq("id", contractId).single();
+    // Faktura sprzedającego – nie odsyłamy jej jako „umowy kupna”.
+    if (!c?.seller_email || c.type === "invoice" || !(await mailConfigured())) return { emailed: false };
     const company = await getCompany(db);
     await sendMail(c.seller_email, `Umowa kupna nr ${c.number} – ${company.name}`,
       `<p>Dziękujemy! W załączniku umowa kupna nr ${c.number} podpisana przez obie strony.</p><p>${escapeHtml(company.name)}</p>`,

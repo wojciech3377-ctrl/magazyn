@@ -40,7 +40,7 @@ export default async function ContractPage({ params, searchParams }: { params: P
         sub={`${CONTRACT_TYPE[c.type]} · ${dateOnly(c.contract_date ?? c.created_at)}`}
         actions={
           <>
-            {c.template && profile.can_see_prices && <a className="btn-secondary" href={`/api/umowy/${c.id}/pdf`} target="_blank" rel="noreferrer">{c.status === "signed" ? "PDF umowy" : "Podgląd PDF"}</a>}
+            {c.template && profile.can_see_prices && <a className="btn-secondary" href={`/api/umowy/${c.id}/pdf`} target="_blank" rel="noreferrer">{c.type === "invoice" ? "Faktura sprzedającego" : c.status === "signed" ? "PDF umowy" : "Podgląd PDF"}</a>}
             {!["cancelled", "rejected", "sent"].includes(c.status) && <Link className={units?.length ? "btn-secondary" : "btn"} href={`/umowy/${c.id}/przypisz`}>Przypisz do rzeczy / sprzedaży</Link>}
             <Link className="btn-secondary" href="/umowy">Wróć do listy</Link>
           </>
