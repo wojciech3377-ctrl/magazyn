@@ -8,6 +8,7 @@ import { getCompany } from "@/lib/contracts/settings";
 import { contractTotal } from "@/lib/contracts/purchase";
 import { uploadedFile } from "@/lib/contracts/upload";
 import { errorMessage } from "@/lib/errors";
+import { adjustStock } from "@/lib/stock";
 
 const UUID = /^[0-9a-f-]{36}$/;
 const back = (key: "ok" | "blad", msg: string): never => redirect(`/dostawa?zakladka=w-drodze&${key}=${encodeURIComponent(msg)}`);
@@ -45,10 +46,12 @@ export async function transitContract(fd: FormData) {
   const bad = items.find((i) => !(i.price > 0));
   if (bad) back("blad", `Podaj cenę zakupu dla: ${bad.title} ${bad.option}`);
   const company = await getCompany(supabase);
+  // Waluta wybrana tutaj – sprzedający jej nie zmieni; pusta – wybierze ją przy podpisie.
+  const currency = ["PLN", "EUR"].includes(String(fd.get("currency"))) ? String(fd.get("currency")) : null;
   const token = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
   const { data: c, error } = await supabase.from("contracts").insert({
     type: "purchase", template: "purchase_v1", source: "link", status: "sent", counterparty: "(czeka na podpis)",
-    amount: contractTotal(items), payment_days: company.payment_days ?? 7, items,
+    amount: contractTotal(items), payment_days: company.payment_days ?? 7, items, currency,
     location_id: units[0].location_id,
     seller_email: String(fd.get("seller_email") ?? "").trim() || null,
     sign_token: token, sign_expires_at: new Date(Date.now() + 14 * 86400_000).toISOString(),
@@ -75,12 +78,14 @@ export async function transitInvoice(fd: FormData) {
   const { data: c, error } = await db.from("contracts").insert({
     type: "invoice", status: "accepted", counterparty, doc_number: docNumber,
     contract_date: /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null,
-    amount: contractTotal(items) || null, currency: "PLN", items,
+    amount: contractTotal(items) || null, currency: fd.get("currency") === "EUR" ? "EUR" : "PLN", items,
     file_path: file!.path, file_name: file!.name,
     notes: `Faktura do ${units.length} szt. w drodze – ten sam dokument przy każdej rzeczy.`,
   }).select("id").single();
   if (error) back("blad", errorMessage(error));
   await db.from("units").update({ contract_id: c!.id }).in("id", units.map((u) => u.id)).is("contract_id", null);
+  // Waluta cen sztuk jak na fakturze (bez SQL 67 – pomijane).
+  await db.from("units").update({ purchase_currency: fd.get("currency") === "EUR" ? "EUR" : "PLN" }).in("id", units.map((u) => u.id)).then(() => null, () => null);
   // Cena zakupu wpisana przy rzeczy – zapis w sztuce.
   for (const u of units) {
     const p = price(u);
@@ -88,4 +93,20 @@ export async function transitInvoice(fd: FormData) {
   }
   revalidatePath("/dostawa");
   back("ok", `Faktura ${docNumber} dołączona do ${units.length} szt. w drodze.`);
+}
+
+/** Zaznaczone rzeczy w drodze bez dokumentu → na stan (umowę albo fakturę dopniesz później). */
+export async function receiveNoDocUnits(fd: FormData) {
+  const { supabase } = await requireSection("dostawa");
+  const ids = fd.getAll("unit").map(String).filter((x) => UUID.test(x)).slice(0, 300);
+  if (!ids.length) back("blad", "Zaznacz rzeczy, które dotarły.");
+  const { data, error } = await supabase.rpc("receive_in_transit", { p_unit_ids: ids });
+  if (error) back("blad", errorMessage(error));
+  const rows = (data ?? []) as { unit_id: string; variant_id: string; location_id: string; to_status: string }[];
+  const toStock = rows.filter((r) => r.to_status === "in_stock");
+  const results = await adjustStock(supabase, toStock.map((u) => ({ variantId: u.variant_id, locationId: u.location_id, delta: 1 })));
+  revalidatePath("/dostawa");
+  revalidatePath("/magazyn");
+  const failed = results.filter((r) => !r.ok);
+  back(failed.length ? "blad" : "ok", `Przyjęto ${rows.length} szt.: na stan ${toStock.length}${rows.length - toStock.length ? `, do zamówień ${rows.length - toStock.length}` : ""}. Bez umowy – dopniesz ją w Magazynie.${failed.length ? ` Shopify: ${failed.map((f) => f.message).join("; ")}` : ""}`);
 }

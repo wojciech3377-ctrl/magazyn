@@ -43,9 +43,18 @@ export function TemplateContractForm({
       {saleId && <input type="hidden" name="sale_id" value={saleId} />}
       <div className="min-w-0 space-y-5 lg:col-span-2">
         {saleRef && <div className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900">Umowa pod zamówienie <b>{saleRef}</b>. Po podpisie towar pojawi się jako „w drodze”, a po przyjęciu sam przypisze się do tego zamówienia.</div>}
+        <section className="card flex flex-wrap items-center gap-3 p-4">
+          <label className="text-sm font-medium" htmlFor="currency">Waluta umowy</label>
+          <select className="input w-auto min-w-64" id="currency" name="currency" value={currency} onChange={(e) => setCurrency(e.target.value)}>
+            <option value="">wybierze sprzedający przy podpisie</option>
+            <option value="PLN">PLN – złoty</option>
+            <option value="EUR">EUR – euro</option>
+          </select>
+          <span className="text-xs text-muted">{currency ? `Ceny w ${currency} – sprzedający nie zmieni waluty.` : "Sprzedający wybierze PLN albo EUR przy podpisie."}</span>
+        </section>
         <section className="card overflow-x-auto">
           <table className="table">
-            <thead><tr><th>Produkt</th><th>Rozmiar</th><th className="w-20">Ilość</th><th className="w-32">Cena / szt. (zł)</th><th /></tr></thead>
+            <thead><tr><th>Produkt</th><th>Rozmiar</th><th className="w-20">Ilość</th><th className="w-32">Cena / szt. ({currency || "PLN/EUR"})</th><th /></tr></thead>
             <tbody>
               {lines.length === 0 && <tr><td colSpan={5} className="py-8 text-center text-muted">Dodaj produkt z wyszukiwarki poniżej.</td></tr>}
               {lines.map((l) => (
@@ -98,14 +107,6 @@ export function TemplateContractForm({
               </select>
             </div>
           )}
-          <div>
-            <label className="label" htmlFor="currency">Waluta</label>
-            <select className="input" id="currency" name="currency" value={currency} onChange={(e) => setCurrency(e.target.value)}>
-              <option value="">wybierze sprzedający przy podpisie</option>
-              <option value="PLN">PLN – złoty</option>
-              <option value="EUR">EUR – euro</option>
-            </select>
-          </div>
           <div>
             <label className="label" htmlFor="payment_days">Przelew w ciągu (dni)</label>
             <input className="input" id="payment_days" name="payment_days" type="number" min={0} max={60} defaultValue={paymentDays} />

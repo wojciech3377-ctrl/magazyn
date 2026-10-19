@@ -600,3 +600,15 @@ export async function searchUnitsWithoutContract(q: string): Promise<NoContractU
     used: used(u.product_id as string, u.store_id as string | null),
   }));
 }
+
+/** Umowa z szablonu przed podpisem: waluta ustalona przez nas (sprzedający jej nie zmieni) albo do wyboru przy podpisie. */
+export async function setTemplateCurrency(formData: FormData) {
+  const { supabase } = await requireSection("umowy", "dostawa");
+  const id = String(formData.get("id") ?? "");
+  const cur = String(formData.get("currency") ?? "");
+  const currency = cur === "PLN" || cur === "EUR" ? cur : null;
+  const { data, error } = await supabase.from("contracts").update({ currency }).eq("id", id).eq("status", "sent").not("template", "is", null).select("id");
+  const msg = error ? `blad=${encodeURIComponent(error.message)}` : !data?.length ? `blad=${encodeURIComponent("Walutę można zmienić tylko przed podpisem.")}` : `ok=${encodeURIComponent(currency ? `Waluta umowy: ${currency}.` : "Walutę wybierze sprzedający przy podpisie.")}`;
+  revalidatePath(`/umowy/${id}`);
+  redirect(`/umowy/${id}?${msg}`);
+}

@@ -4,7 +4,8 @@ import Link from "next/link";
 import { useState } from "react";
 import { ContractFileInput } from "@/components/ContractFileInput";
 import { SubmitButton } from "@/components/SubmitButton";
-import { transitContract, transitInvoice } from "./transit-doc-actions";
+import { receiveNoDocUnits, transitContract, transitInvoice } from "./transit-doc-actions";
+import { PrintGroup } from "./ReceiveChecklist";
 import { DateField } from "@/components/DateField";
 
 export type TransitUnit = { id: string; code: string; title: string; option: string; location: string; price: number | null };
@@ -38,10 +39,21 @@ export function TransitNoDoc({ units, prices }: { units: TransitUnit[]; prices: 
           </li>
         ))}
       </ul>
+      <form action={receiveNoDocUnits}>
+        {picked.map((u) => <input key={u.id} type="hidden" name="unit" value={u.id} />)}
+        <PrintGroup ids={picked.map((u) => u.id).join(",")} count={picked.length}>
+          <SubmitButton className="btn rounded-none shadow-none" pendingText="Przyjmuję…" disabled={!picked.length}>Przyjmij na magazyn ({picked.length})</SubmitButton>
+        </PrintGroup>
+      </form>
       <div className="flex flex-wrap items-center gap-2">
         <form action={transitContract} className="flex flex-wrap items-center gap-2">
           <input type="hidden" name="units" value={payload} />
           <input className="input w-56" type="email" name="seller_email" placeholder="e-mail sprzedającego (opcjonalnie)" aria-label="E-mail sprzedającego" />
+          <select className="input w-auto" name="currency" defaultValue="" aria-label="Waluta umowy" title="Waluta umowy">
+            <option value="">waluta: wybierze sprzedający</option>
+            <option value="PLN">waluta: PLN</option>
+            <option value="EUR">waluta: EUR</option>
+          </select>
           <SubmitButton className="btn" pendingText="Tworzę umowę…" disabled={!picked.length}>Umowa do podpisu ({picked.length})</SubmitButton>
         </form>
         <button type="button" className="btn-secondary" disabled={!picked.length} onClick={() => setMode(mode === "invoice" ? "none" : "invoice")}>Dołącz fakturę ({picked.length})</button>
@@ -53,6 +65,9 @@ export function TransitNoDoc({ units, prices }: { units: TransitUnit[]; prices: 
           <div className="sm:col-span-2"><ContractFileInput label="Plik faktury (PDF lub zdjęcie)" /></div>
           <div><label className="label" htmlFor="doc_number">Numer faktury</label><input id="doc_number" name="doc_number" className="input" required /></div>
           <div><label className="label" htmlFor="doc_date">Data faktury</label><DateField id="doc_date" name="doc_date" /></div>
+          <div><label className="label" htmlFor="inv_currency">Waluta</label>
+            <select id="inv_currency" name="currency" className="input" defaultValue="PLN"><option value="PLN">PLN – złoty</option><option value="EUR">EUR – euro</option></select>
+          </div>
           <div className="sm:col-span-2"><label className="label" htmlFor="counterparty">Sprzedawca</label><input id="counterparty" name="counterparty" className="input" placeholder="np. firma, od której kupujesz" /></div>
           <div className="sm:col-span-2"><SubmitButton pendingText="Zapisuję…">Zapisz fakturę dla {picked.length} szt.</SubmitButton></div>
         </form>

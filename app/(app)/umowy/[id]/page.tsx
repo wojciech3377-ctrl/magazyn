@@ -5,7 +5,7 @@ import { requireProfile } from "@/lib/auth";
 import { CONTRACT_TYPE, dateOnly, money } from "@/lib/labels";
 import { Field, Notice, PageHeader, StatusBadge } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
-import { acceptContract, addContractItem, removeContractItem, attachUnits, decideConsignorInvoice, cancelContract, deleteContract, detachUnit, markPaid, rejectContract, replaceFile, retryFinalize, sendSigningEmail, updateContractMeta } from "../actions";
+import { acceptContract, addContractItem, removeContractItem, attachUnits, decideConsignorInvoice, cancelContract, deleteContract, detachUnit, markPaid, rejectContract, replaceFile, retryFinalize, sendSigningEmail, setTemplateCurrency, updateContractMeta } from "../actions";
 import { appUrl } from "@/lib/app-url";
 import { mailConfigured } from "@/lib/mail";
 import { contractTotal, formatMoney } from "@/lib/contracts/purchase";
@@ -299,6 +299,18 @@ async function TemplateSection({ c, canSeePrices }: { c: TemplateContract; canSe
             {canSeePrices && <tr><td colSpan={3} className="text-right font-medium">Razem</td><td className="text-right font-semibold tabular-nums">{formatMoney(contractTotal(items.map((i) => ({ ...i, qty: Number(i.qty ?? 1), price: Number(i.price) }))), c.currency ?? "PLN")}</td></tr>}
           </tbody>
         </table>
+        {c.status === "sent" ? (
+          <form action={setTemplateCurrency} className="flex flex-wrap items-center gap-2 border-t border-line pt-3 text-sm">
+            <input type="hidden" name="id" value={c.id} />
+            <label htmlFor="tpl_currency" className="font-medium">Waluta umowy</label>
+            <select id="tpl_currency" name="currency" className="input w-auto" defaultValue={c.currency ?? ""}>
+              <option value="">wybierze sprzedający przy podpisie</option>
+              <option value="PLN">PLN – złoty</option>
+              <option value="EUR">EUR – euro</option>
+            </select>
+            <SubmitButton className="btn-secondary" pendingText="…">Zapisz walutę</SubmitButton>
+          </form>
+        ) : <p className="border-t border-line pt-3 text-sm">Waluta umowy: <b>{c.currency ?? "–"}</b></p>}
         {c.status === "signed" && (
           <div className="space-y-2 border-t border-line pt-3">
             <p className="text-sm">Sprzedający podpisał umowę. Sprawdź dane i pozycje – po zatwierdzeniu dostanie umowę z Waszym podpisem{c.source !== "general" ? ", a towar pojawi się w Magazynie jako „w drodze”" : ""}.</p>

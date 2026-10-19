@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ReceiveChecklist } from "./ReceiveChecklist";
 import { TransitNoDoc, type TransitUnit } from "./TransitNoDoc";
 import { requireProfile } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -185,8 +186,7 @@ export async function TransitTab() {
         const done = its.length - open.length;
         return (
           <div key={t.id} className="card space-y-3 p-4">
-            <form action={receiveTransfer} className="space-y-3">
-              <input type="hidden" name="transfer_id" value={t.id} />
+            <div className="space-y-3">
               <div className="flex flex-wrap items-center gap-2">
                 <Pill tone="green">przesunięcie</Pill>
                 <b>Nr {t.number}</b>
@@ -195,14 +195,9 @@ export async function TransitTab() {
                 <Link className="ml-auto text-sm text-accent hover:underline" href={`/druk/przesuniecie/${t.id}`} target="_blank">Lista (druk)</Link>
               </div>
               {t.note && <p className="rounded bg-panel p-2 text-sm">{t.note}</p>}
-              <ul className="grid gap-1 text-sm sm:grid-cols-2">
-                {open.map((i) => {
-                  const u = unitById.get(i.unit_id as string);
-                  return u ? <li key={u.id}><label className="flex items-center gap-2"><input type="checkbox" name="unit" value={u.id} defaultChecked className="h-4 w-4" /> {u.title} · <b>{u.option}</b> <span className="font-mono text-xs text-muted">{u.code}</span></label></li> : null;
-                })}
-              </ul>
-              <SubmitButton pendingText="Przyjmuję…">Przyjmij zaznaczone</SubmitButton>
-            </form>
+              <ReceiveChecklist action={receiveTransfer} hidden={{ transfer_id: t.id }}
+                units={open.map((i) => unitById.get(i.unit_id as string)).filter((u): u is NonNullable<typeof u> => !!u).map((u) => ({ id: u.id, title: u.title, option: u.option, code: u.code }))} />
+            </div>
             <form action={cancelTransfer} className="border-t border-line pt-2">
               <input type="hidden" name="transfer_id" value={t.id} />
               <ConfirmSubmit className="text-xs text-muted hover:text-bad hover:underline" message={`Anulować przesunięcie nr ${t.number}? Rzeczy jeszcze w drodze wrócą na stan magazynu źródłowego.`}>Anuluj przesunięcie (rzeczy wracają do {locName(t.from_location_id)})</ConfirmSubmit>
@@ -251,20 +246,15 @@ export async function TransitTab() {
       })}
 
       {[...byContract.entries()].map(([cid, us]) => (
-        <form key={cid} action={receiveContractUnits} className="card space-y-3 p-4">
-          <input type="hidden" name="contract_id" value={cid} />
+        <div key={cid} className="card space-y-3 p-4">
           <div className="flex flex-wrap items-center gap-2">
             <Pill tone="amber">umowa</Pill>
             <b><Link className="text-accent hover:underline" href={`/umowy/${cid}`}>Umowa NR{us[0].contract.number}</Link> · {us[0].contract.seller_name ?? us[0].contract.counterparty}</b>
             <span className="text-sm text-muted">{us.length} szt. w drodze{us[0].location ? ` · do ${us[0].location.name}` : ""}</span>
           </div>
-          <ul className="space-y-1 text-sm">
-            {us.map((u) => (
-              <li key={u.id}><label className="flex items-center gap-2"><input type="checkbox" name="unit" value={u.id} defaultChecked className="h-4 w-4" /> {u.variant.product.title} · <b>{u.variant.option}</b> <span className="font-mono text-xs text-muted">{u.code}</span></label></li>
-            ))}
-          </ul>
-          <SubmitButton pendingText="Przyjmuję…">Przyjmij zaznaczone</SubmitButton>
-        </form>
+          <ReceiveChecklist action={receiveContractUnits} hidden={{ contract_id: cid }}
+            units={us.map((u) => ({ id: u.id, title: u.variant.product.title, option: u.variant.option, code: u.code }))} />
+        </div>
       ))}
     </div>
   );
