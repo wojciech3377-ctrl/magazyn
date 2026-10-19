@@ -91,21 +91,21 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
         sub={<>{store?.name} · {dateTime(order.ordered_at)}</>}
         actions={
           <>
-            {parDoc && <Link className="btn-secondary" href={`/sprzedaz/faktury/${parDoc.id}`}>Paragon {parDoc.number}</Link>}
+            {!par && !parDoc && status !== "cancelled" && status !== "returned" && <ReceiptButton orderId={order.id} receiptId={order.receipt_id} job={receiptJob as JobView | null} printer={printer} className="btn-green" />}
+            {parDoc && <Link className="btn-secondary btn-yellow" href={`/sprzedaz/faktury/${parDoc.id}`}>Paragon PDF {parDoc.number}</Link>}
             {!parDoc && !invoice && !order.receipt_id && status !== "cancelled" && (
               <form action={issueOrderReceiptPdf}>
                 <input type="hidden" name="order_id" value={order.id} />
-                <ConfirmSubmit className="btn-secondary" message="Wystawić paragon PDF (bez paragonu fiskalnego, poza JPK) do tego zamówienia?">Paragon PDF</ConfirmSubmit>
+                <ConfirmSubmit className="btn-secondary btn-yellow" message="Wystawić paragon PDF (bez paragonu fiskalnego, poza JPK) do tego zamówienia?">Drukuj paragon PDF</ConfirmSubmit>
               </form>
             )}
-            {!par && !parDoc && status !== "cancelled" && status !== "returned" && <ReceiptButton orderId={order.id} receiptId={order.receipt_id} job={receiptJob as JobView | null} printer={printer} />}
-            <WtbOrderButton orderId={order.id} />
             {invoice
-              ? <Link className="btn-secondary" href={`/sprzedaz/faktury/${invoice.id}`}>Faktura {invoice.number}</Link>
-              : status !== "cancelled" && !par && <Link className="btn-secondary" href={`/sprzedaz/faktury/nowa?zamowienie=${order.id}`}>Wystaw fakturę</Link>}
+              ? <Link className="btn-secondary btn-orange" href={`/sprzedaz/faktury/${invoice.id}`}>Faktura {invoice.number}</Link>
+              : status !== "cancelled" && !par && <Link className="btn-secondary btn-orange" href={`/sprzedaz/faktury/nowa?zamowienie=${order.id}`}>Wystaw fakturę</Link>}
             <a className="btn-secondary" href="#etykieta">Utwórz etykietę</a>
             {!par && <form action={refreshOrder}><input type="hidden" name="id" value={order.id} /><SubmitButton className="btn-secondary" pendingText="Odświeżam…">Odśwież</SubmitButton></form>}
             {shopUrl && <a className="btn-secondary" href={shopUrl} target="_blank" rel="noreferrer">Otwórz w Shopify</a>}
+            <WtbOrderButton orderId={order.id} className="btn-secondary btn-blue" />
             <Link className="btn-secondary" href="/sprzedaz">Wróć do listy</Link>
           </>
         }
