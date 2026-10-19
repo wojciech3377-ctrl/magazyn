@@ -8,7 +8,7 @@ import { receiveNoDocUnits, transitContract, transitInvoice } from "./transit-do
 import { PrintGroup } from "./ReceiveChecklist";
 import { DateField } from "@/components/DateField";
 
-export type TransitUnit = { id: string; code: string; title: string; option: string; location: string; price: number | null };
+export type TransitUnit = { id: string; code: string; title: string; option: string; location: string; price: number | null; productId?: string | null; storeId?: string | null };
 
 /**
  * W drodze bez dokumentu: zaznacz rzeczy i jednym kliknięciem „Umowa do podpisu” (osobna umowa na każdą parę po
@@ -41,7 +41,7 @@ export function TransitNoDoc({ units, prices }: { units: TransitUnit[]; prices: 
       </ul>
       <form action={receiveNoDocUnits}>
         {picked.map((u) => <input key={u.id} type="hidden" name="unit" value={u.id} />)}
-        <PrintGroup ids={picked.map((u) => u.id).join(",")} count={picked.length}>
+        <PrintGroup units={picked}>
           <SubmitButton className="btn rounded-none shadow-none" pendingText="Przyjmuję…" disabled={!picked.length}>Przyjmij na magazyn ({picked.length})</SubmitButton>
         </PrintGroup>
       </form>

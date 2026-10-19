@@ -566,3 +566,19 @@ export async function addManualTracking(_: TrackingState, fd: FormData): Promise
   revalidatePath("/sprzedaz");
   return { ok: `Zapisano przesyłkę ${carrier} ${number}.${note}` };
 }
+
+/** Notatka pracowników do zamówienia (czerwona, na górze). Pusta treść – usuwa notatkę. */
+export async function saveOrderNote(fd: FormData) {
+  const { profile } = await requireSection("sprzedaz");
+  const id = str(fd, "order_id");
+  const note = fd.get("delete") ? "" : str(fd, "staff_note").slice(0, 2000);
+  const { error } = await createAdminClient().from("orders").update(note
+    ? { staff_note: note, staff_note_by: profile.full_name ?? profile.email ?? null, staff_note_at: new Date().toISOString() }
+    : { staff_note: null, staff_note_by: null, staff_note_at: null }).eq("id", id);
+  const msg = error
+    ? `blad=${encodeURIComponent(/staff_note/.test(error.message) ? "Notatki do zamówień wymagają SQL 69 w Supabase (0069_order_staff_note.sql)." : error.message)}`
+    : `ok=${encodeURIComponent(note ? "Notatka zapisana." : "Notatka usunięta.")}`;
+  revalidatePath(`/sprzedaz/${id}`);
+  revalidatePath("/sprzedaz");
+  redirect(`/sprzedaz/${id}?${msg}`);
+}

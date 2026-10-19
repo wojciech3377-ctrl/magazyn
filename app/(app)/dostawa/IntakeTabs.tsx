@@ -142,7 +142,7 @@ export async function AcceptTab() {
 export async function TransitTab() {
   const { supabase, profile } = await requireProfile();
   const db = createAdminClient();
-  const unitFields = "id, code, contract_id, received_at, variant:variants(option, product:products(title)), contract:contracts(id, number, counterparty, seller_name), location:locations(name)";
+  const unitFields = "id, code, contract_id, received_at, variant:variants(option, product:products(id, title)), contract:contracts(id, number, counterparty, seller_name), location:locations(name, store_id)";
   const [{ data: intakes }, unitsRes, { data: locations }, transfersRes] = await Promise.all([
     db.from("consignor_intakes").select("*, items:consignor_intake_items(*), consignor:consignors(id, name)").in("status", ["to_send", "sent"]).order("sent_at", { nullsFirst: false }),
     // Rzeczy z przesunięć między magazynami mają osobną kartę (niżej).
@@ -155,17 +155,17 @@ export async function TransitTab() {
     ? (await supabase.from("units").select(unitFields).eq("status", "in_transit").not("contract_id", "is", null).order("received_at").limit(500)).data
     : unitsRes.data;
   // Rzeczy w drodze bez umowy / faktury (np. z Przyjęcia dostawy z opcją „w drodze”) – do „Umowa” / „Faktura” jednym kliknięciem.
-  const noDocRes = await supabase.from("units").select("id, code, purchase_price, variant:variants(option, product:products(title)), location:locations(name)")
+  const noDocRes = await supabase.from("units").select("id, code, purchase_price, variant:variants(option, product:products(id, title)), location:locations(name, store_id)")
     .eq("status", "in_transit").is("contract_id", null).is("transfer_id", null).order("received_at").limit(300);
-  const noDoc: TransitUnit[] = ((noDocRes.error ? [] : noDocRes.data ?? []) as unknown as { id: string; code: string; purchase_price: number | null; variant: { option: string; product: { title: string } }; location: { name: string } | null }[])
-    .map((u) => ({ id: u.id, code: u.code, title: u.variant.product.title, option: u.variant.option, location: u.location?.name ?? "–", price: profile.can_see_prices && u.purchase_price != null ? Number(u.purchase_price) : null }));
+  const noDoc: TransitUnit[] = ((noDocRes.error ? [] : noDocRes.data ?? []) as unknown as { id: string; code: string; purchase_price: number | null; variant: { option: string; product: { id: string; title: string } }; location: { name: string; store_id: string } | null }[])
+    .map((u) => ({ id: u.id, code: u.code, title: u.variant.product.title, option: u.variant.option, location: u.location?.name ?? "–", price: profile.can_see_prices && u.purchase_price != null ? Number(u.purchase_price) : null, productId: u.variant.product.id, storeId: u.location?.store_id ?? null }));
   const transfers = (transfersRes.error ? [] : transfersRes.data ?? []) as { id: string; number: number; note: string | null; created_at: string; from_location_id: string; to_location_id: string }[];
   const { data: tItems } = transfers.length ? await supabase.from("stock_transfer_items").select("transfer_id, unit_id, received_at").in("transfer_id", transfers.map((t) => t.id)) : { data: [] };
   const tIds = (tItems ?? []).map((i) => i.unit_id as string);
-  const { data: tUnits } = tIds.length ? await supabase.from("units_list").select("id, code, title, option, status").in("id", tIds) : { data: [] };
-  const unitById = new Map((tUnits ?? []).map((u) => [u.id as string, u as { id: string; code: string; title: string; option: string; status: string }]));
+  const { data: tUnits } = tIds.length ? await supabase.from("units_list").select("id, code, title, option, status, product_id, store_id").in("id", tIds) : { data: [] };
+  const unitById = new Map((tUnits ?? []).map((u) => [u.id as string, u as { id: string; code: string; title: string; option: string; status: string; product_id: string; store_id: string }]));
   const locs = (locations ?? []) as unknown as Loc[];
-  type TU = { id: string; code: string; contract_id: string; variant: { option: string; product: { title: string } }; contract: { id: string; number: number | null; counterparty: string; seller_name: string | null }; location: { name: string } | null };
+  type TU = { id: string; code: string; contract_id: string; variant: { option: string; product: { id: string; title: string } }; contract: { id: string; number: number | null; counterparty: string; seller_name: string | null }; location: { name: string; store_id: string } | null };
   const byContract = new Map<string, TU[]>();
   for (const u of (units ?? []) as unknown as TU[]) byContract.set(u.contract_id, [...(byContract.get(u.contract_id) ?? []), u]);
   const list = (intakes ?? []) as unknown as IntakeRow[];
@@ -196,7 +196,7 @@ export async function TransitTab() {
               </div>
               {t.note && <p className="rounded bg-panel p-2 text-sm">{t.note}</p>}
               <ReceiveChecklist action={receiveTransfer} hidden={{ transfer_id: t.id }}
-                units={open.map((i) => unitById.get(i.unit_id as string)).filter((u): u is NonNullable<typeof u> => !!u).map((u) => ({ id: u.id, title: u.title, option: u.option, code: u.code }))} />
+                units={open.map((i) => unitById.get(i.unit_id as string)).filter((u): u is NonNullable<typeof u> => !!u).map((u) => ({ id: u.id, title: u.title, option: u.option, code: u.code, productId: u.product_id, storeId: u.store_id }))} />
             </div>
             <form action={cancelTransfer} className="border-t border-line pt-2">
               <input type="hidden" name="transfer_id" value={t.id} />
@@ -253,7 +253,7 @@ export async function TransitTab() {
             <span className="text-sm text-muted">{us.length} szt. w drodze{us[0].location ? ` · do ${us[0].location.name}` : ""}</span>
           </div>
           <ReceiveChecklist action={receiveContractUnits} hidden={{ contract_id: cid }}
-            units={us.map((u) => ({ id: u.id, title: u.variant.product.title, option: u.variant.option, code: u.code }))} />
+            units={us.map((u) => ({ id: u.id, title: u.variant.product.title, option: u.variant.option, code: u.code, productId: u.variant.product.id, storeId: u.location?.store_id }))} />
         </div>
       ))}
     </div>

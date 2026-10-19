@@ -23,6 +23,7 @@ import { fiscalPrinterReady } from "@/lib/fiscal/jobs";
 import type { JobView } from "../receipt-actions";
 import { issueOrderReceiptPdf, refreshOrder } from "./actions";
 import { ManualTrackingForm } from "./ManualTrackingForm";
+import { OrderNote } from "./OrderNote";
 import { ConfirmSubmit } from "@/components/ConfirmSubmit";
 import { PickupPanel } from "./PickupPanel";
 import { isPersonalPickup } from "@/lib/orders/status";
@@ -111,6 +112,7 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
         }
       />
 
+      <OrderNote orderId={order.id} note={(order as { staff_note?: string | null }).staff_note ?? null} by={(order as { staff_note_by?: string | null }).staff_note_by ?? null} at={(order as { staff_note_at?: string | null }).staff_note_at ?? null} />
       {sp.blad && <div className="mb-4"><Notice tone="error">{sp.blad}</Notice></div>}
       {sp.ok && <div className="mb-4"><Notice tone="ok">{sp.ok}</Notice></div>}
       {par && <div className="mb-4"><Notice>Wysyłka z paragonu {parDoc?.number ?? "PAR"} – zamówienie utworzone w aplikacji (nie w Shopify). <b>Nie wchodzi do JPK</b>, a umowy jego sztuk wróciły do niewykorzystanych.</Notice></div>}

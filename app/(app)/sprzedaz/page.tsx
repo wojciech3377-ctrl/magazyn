@@ -115,7 +115,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
   const gids = [...new Set((orders ?? []).flatMap((o) => ((o.line_items ?? []) as LineItem[]).map((l) => l.shopify_variant_id).filter((x): x is string => !!x)))];
   const none = Promise.resolve({ data: [] as never[] });
   // Wszystko, co zależy tylko od listy zamówień – jednym rzutem, równolegle.
-  const [{ data: receiptJobs }, printer, { data: wtbRows }, { data: sales }, { data: shipments }, { data: vLinks }, fresh] = await Promise.all([
+  const [{ data: receiptJobs }, printer, { data: wtbRows }, { data: sales }, { data: shipments }, { data: vLinks }, fresh, { data: noteRows }] = await Promise.all([
     ids.length ? supabase.from("receipt_jobs").select("id, order_id, status, receipt_number, error, claimed_at, number").in("order_id", ids).neq("status", "cancelled") : none,
     fiscalPrinterReady(createAdminClient()),
     ids.length ? supabase.from("wtb_items").select("order_id").in("order_id", ids).eq("status", "active") : none,
@@ -123,7 +123,10 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
     ids.length ? supabase.from("shipments").select("order_id, service, tracking_number, tracking_url, state, state_description").in("order_id", ids).order("created_at", { ascending: false }) : none,
     gids.length ? supabase.from("variant_store_links").select("variant_id, shopify_variant_id").in("shopify_variant_id", gids) : none,
     newOrdersCount(),
+    // Notatki pracowników (SQL 69) – osobno, żeby lista działała także bez migracji.
+    ids.length ? supabase.from("orders").select("id, staff_note").in("id", ids).not("staff_note", "is", null).then((r) => (r.error ? { data: [] } : r)) : none,
   ]);
+  const staffNote = new Map(((noteRows ?? []) as { id: string; staff_note: string | null }[]).map((r) => [r.id, r.staff_note]));
   const jobOf = new Map((receiptJobs ?? []).map((j) => [j.order_id as string, j as unknown as JobView]));
   const wtbOrders = new Set((wtbRows ?? []).map((w) => w.order_id as string));
   type ListSale = { id: string; status: string; variant_id: string | null; shopify_line_id: string | null; shopify_line_index: number | null; unit: { id: string; code: string; contract_id: string | null; owner_type: string; contract: ContractLite | null } | null };
@@ -239,6 +242,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
                     <OrderPreview o={o as unknown as PreviewOrder} lines={lines} pay={pay} tracking={tracking} />
                   </td>
                   <td className="min-w-64 max-w-96" style={{ gridArea: "prod" }}>
+                    {staffNote.get(o.id) && <p className="mb-1 line-clamp-2 rounded border border-red-300 bg-red-50 px-2 py-1 text-xs font-semibold text-red-800" title={staffNote.get(o.id) ?? ""}>Notatka: {staffNote.get(o.id)}</p>}
                     <ul className="space-y-0.5 text-sm max-md:rounded-lg max-md:bg-slate-50 max-md:px-2.5 max-md:py-2">
                       {lines.map((l) => (
                         <li key={l.id} className="flex items-baseline gap-2">
