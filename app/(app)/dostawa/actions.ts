@@ -67,6 +67,7 @@ export async function createDelivery(_: unknown, formData: FormData): Promise<{ 
     if (!lines.length) return { error: "Dodaj co najmniej jeden rozmiar." };
     if (ownerType === "consignment" && !consignorId) return { error: "Dla komisu wybierz komisanta." };
 
+    let currency = String(formData.get("currency") ?? "") === "EUR" ? "EUR" : "PLN";
     // Umowa: brak, istniejąca albo nowa z plikiem.
     const contractMode = String(formData.get("contract_mode") ?? "none");
     let contractId: string | null = null;
@@ -75,6 +76,9 @@ export async function createDelivery(_: unknown, formData: FormData): Promise<{ 
       if (!contractId) return { error: "Wybierz umowę z listy." };
       const taken = await contractTakenError(supabase, contractId, lines.reduce((n, l) => n + l.quantity, 0));
       if (taken) return { error: taken };
+      // Waluta z istniejącej umowy ma pierwszeństwo.
+      const { data: ec } = await supabase.from("contracts").select("currency").eq("id", contractId).maybeSingle();
+      if (ec?.currency === "EUR" || ec?.currency === "PLN") currency = ec.currency;
     }
     if (contractMode === "new") {
       const counterparty = String(formData.get("counterparty") ?? "").trim();
@@ -86,6 +90,7 @@ export async function createDelivery(_: unknown, formData: FormData): Promise<{ 
         consignor_id: ownerType === "consignment" ? consignorId : null,
         contract_date: String(formData.get("contract_date") ?? "") || null,
         amount: parseAmount(formData.get("contract_amount")),
+        currency,
         file_path: file?.path ?? null,
         file_name: file?.name ?? null,
       }).select("id").single();
@@ -117,6 +122,8 @@ export async function createDelivery(_: unknown, formData: FormData): Promise<{ 
       if (error) throw error;
       deliveryId = data as string;
     }
+    // Waluta cen sztuk (bez SQL 67 – pomijane; wtedy PLN albo waluta umowy).
+    if (deliveryId) await supabase.from("units").update({ purchase_currency: currency }).eq("delivery_id", deliveryId).then(() => null, () => null);
 
     // Stan w Shopify: +N dla każdego rozmiaru.
     if (status === "in_stock") {

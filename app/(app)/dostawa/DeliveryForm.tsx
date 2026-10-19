@@ -22,6 +22,9 @@ export function DeliveryForm({
   // Z profilu komisanta („Przyjmij nowe rzeczy”): od razu komis tego komisanta.
   const [ownerType, setOwnerType] = useState<"own" | "consignment">(defaultConsignorId ? "consignment" : "own");
   const [contractMode, setContractMode] = useState<"none" | "existing" | "new">("none");
+  // Waluta cen zakupu / komisu (zapisywana przy sztukach i w nowej umowie).
+  const [currency, setCurrency] = useState<"PLN" | "EUR">("PLN");
+  const curLabel = currency === "EUR" ? "€" : "zł";
   const [inTransit, setInTransit] = useState(defaultInTransit);
   const [lines, setLines] = useState<Line[]>([]);
   const [query, setQuery] = useState("");
@@ -125,14 +128,23 @@ export function DeliveryForm({
         </section>
 
         <section className="card overflow-x-auto">
+          {canSeePrices && (
+            <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-2.5 text-sm">
+              <label htmlFor="currency" className="text-muted">Waluta cen</label>
+              <select id="currency" name="currency" className="input w-auto py-1" value={currency} onChange={(e) => setCurrency(e.target.value === "EUR" ? "EUR" : "PLN")}>
+                <option value="PLN">PLN – złoty</option>
+                <option value="EUR">EUR – euro</option>
+              </select>
+            </div>
+          )}
           <table className="table mtable mtable-flow">
             <thead>
               <tr>
                 <th>Produkt</th>
                 <th>Rozmiar</th>
                 <th className="w-20">Ilość</th>
-                {canSeePrices && <th className="w-28">Cena zakupu / szt.</th>}
-                {canSeePrices && ownerType === "consignment" && <th className="w-28">Cena w komisie / szt.</th>}
+                {canSeePrices && <th className="w-28">Cena zakupu / szt. ({currency})</th>}
+                {canSeePrices && ownerType === "consignment" && <th className="w-28">Cena w komisie / szt. ({currency})</th>}
                 <th>IMEI / nr seryjne</th>
                 <th />
               </tr>
@@ -144,8 +156,8 @@ export function DeliveryForm({
                   <td className="min-w-48">{l.title}</td>
                   <td className="font-medium">{l.option}</td>
                   <td><input className="input min-w-[4.5rem] tabular-nums" type="number" min={1} max={500} value={l.quantity} onChange={(e) => update(l.key, { quantity: Math.max(1, Number(e.target.value)) })} aria-label="Ilość" /></td>
-                  {canSeePrices && <td><input className="input" inputMode="decimal" value={l.price} onChange={(e) => update(l.key, { price: e.target.value })} placeholder="zł" aria-label="Cena zakupu" /></td>}
-                  {canSeePrices && ownerType === "consignment" && <td><input className="input" inputMode="decimal" value={l.payout} onChange={(e) => update(l.key, { payout: e.target.value })} placeholder="zł" aria-label="Cena w komisie" /></td>}
+                  {canSeePrices && <td><input className="input" inputMode="decimal" value={l.price} onChange={(e) => update(l.key, { price: e.target.value })} placeholder={curLabel} aria-label="Cena zakupu" /></td>}
+                  {canSeePrices && ownerType === "consignment" && <td><input className="input" inputMode="decimal" value={l.payout} onChange={(e) => update(l.key, { payout: e.target.value })} placeholder={curLabel} aria-label="Cena w komisie" /></td>}
                   <td><textarea className="input min-w-40" rows={1} value={l.identifiers} onChange={(e) => update(l.key, { identifiers: e.target.value })} placeholder="opcjonalnie, po jednym w linii" aria-label="IMEI lub numery seryjne" /></td>
                   <td><button type="button" className="text-sm text-bad hover:underline" onClick={() => setLines((p) => p.filter((x) => x.key !== l.key))}>Usuń</button></td>
                 </tr>
@@ -234,7 +246,7 @@ export function DeliveryForm({
               <input className="input" name="counterparty" placeholder="Od kogo (imię i nazwisko / firma)" aria-label="Od kogo" />
               <div className="grid grid-cols-2 gap-2">
                 <DateField name="contract_date" defaultValue={new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Warsaw" })} aria-label="Data umowy" />
-                {canSeePrices && <input className="input" name="contract_amount" inputMode="decimal" placeholder="Kwota zł" aria-label="Kwota" />}
+                {canSeePrices && <input className="input" name="contract_amount" inputMode="decimal" placeholder={`Kwota ${curLabel}`} aria-label="Kwota" />}
               </div>
               <ContractFileInput />
             </div>

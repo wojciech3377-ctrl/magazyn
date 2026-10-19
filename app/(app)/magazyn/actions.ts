@@ -173,6 +173,9 @@ export async function updateUnit(formData: FormData) {
   const { data: before } = await supabase.from("units").select("*").eq("id", id).single();
   const { error } = await supabase.from("units").update(patch).eq("id", id);
   if (error) back(path, error.message, "error");
+  // Waluta kwot sztuki bez umowy (SQL 67; bez niej – pomijane).
+  const pc = String(formData.get("purchase_currency") ?? "");
+  if (pc === "PLN" || pc === "EUR") await supabase.from("units").update({ purchase_currency: pc }).eq("id", id).then(() => null, () => null);
   const changed = Object.fromEntries(Object.entries(patch).filter(([k, v]) => String(before?.[k] ?? "") !== String(v ?? "")));
   if (Object.keys(changed).length) {
     await supabase.from("unit_events").insert({ unit_id: id, type: changed.contract_id !== undefined ? "contract" : "edited", data: changed });

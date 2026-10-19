@@ -15,7 +15,7 @@ export default async function AssignContractPage({ params, searchParams }: { par
   const { id } = await params;
   const sp = await searchParams;
   const { supabase } = await requireProfile();
-  const { data: c } = await supabase.from("contracts").select("id, number, counterparty, amount, contract_date, items").eq("id", id).maybeSingle();
+  const { data: c } = await supabase.from("contracts").select("id, number, counterparty, amount, contract_date, items, currency").eq("id", id).maybeSingle();
   if (!c) notFound();
   const source = sp.zrodlo === "sprzedaz" ? "sprzedaz" : "magazyn";
   const q = (sp.q ?? "").replace(/[%,()*\\]/g, " ").trim();
@@ -51,7 +51,7 @@ export default async function AssignContractPage({ params, searchParams }: { par
     <>
       <PageHeader
         title={`Przypisz umowę ${c.number ? `nr ${c.number}` : ""} · ${c.counterparty}`}
-        sub={<>{items.length ? items.map((i) => `${i.title} ${i.option}`).join(", ") : "umowa bez pozycji"}{c.amount !== null ? ` · ${money(c.amount)}` : ""}</>}
+        sub={<>{items.length ? items.map((i) => `${i.title} ${i.option}`).join(", ") : "umowa bez pozycji"}{c.amount !== null ? ` · ${money(c.amount, (c as { currency?: string | null }).currency)}` : ""}</>}
         actions={<Link className="btn-secondary" href={`/umowy/${c.id}`}>Wróć do umowy</Link>}
       />
       {sp.blad && <div className="mb-4"><Notice tone="error">{sp.blad}</Notice></div>}

@@ -31,8 +31,10 @@ type Item = { title: string; option: string; qty: number; price: number; unassig
 type Loc = { id: string; label: string };
 
 /** Umowa podpisana: Tak (zatwierdź), Nie (odrzuć) albo Oferta – dopiero wtedy pola z nowymi cenami. */
-export function ContractDecision({ id, back, items, showPrices, locations, needsLocation, accept, reject, offer }: {
+export function ContractDecision({ id, back, items, showPrices, locations, needsLocation, accept, reject, offer, currency }: {
   id: string; back: string; items: Item[]; showPrices: boolean; locations: Loc[]; needsLocation: boolean;
+  /** Waluta umowy (PLN / EUR); brak – PLN. */
+  currency?: string | null;
   accept: (fd: FormData) => Promise<void>; reject: (fd: FormData) => Promise<void>; offer: (fd: FormData) => Promise<void>;
 }) {
   const [offerMode, setOfferMode] = useState(false);
@@ -47,14 +49,14 @@ export function ContractDecision({ id, back, items, showPrices, locations, needs
         <input type="hidden" name="id" value={id} />
         <div className="overflow-x-auto">
           <table className="table">
-            <thead><tr><th>Pozycja</th><th>Rozmiar</th><th className="text-right">Ilość</th>{showPrices && <th className="text-right">Cena sprzedającego</th>}{offerMode && <th>Twoja oferta</th>}</tr></thead>
+            <thead><tr><th>Pozycja</th><th>Rozmiar</th><th className="text-right">Ilość</th>{showPrices && <th className="text-right">Cena sprzedającego</th>}{offerMode && <th>Twoja oferta ({currency || "PLN"})</th>}</tr></thead>
             <tbody>
               {items.map((it, idx) => (
                 <tr key={idx}>
                   <td>{it.title}{it.unassigned && <span className="ml-1 text-xs text-warn">(do przypisania do katalogu)</span>}</td>
                   <td className="font-medium">{it.option}</td>
                   <td className="text-right">{it.qty}</td>
-                  {showPrices && <td className="text-right tabular-nums">{new Intl.NumberFormat("pl-PL", { style: "currency", currency: "PLN" }).format(it.price)}</td>}
+                  {showPrices && <td className="text-right tabular-nums">{new Intl.NumberFormat("pl-PL", { style: "currency", currency: currency || "PLN" }).format(it.price)}</td>}
                   {offerMode && <td className="w-36"><input className="input" name={`p_${idx}`} inputMode="decimal" defaultValue={showPrices ? String(it.price) : ""} aria-label="Nowa cena" autoFocus={idx === 0} /></td>}
                 </tr>
               ))}

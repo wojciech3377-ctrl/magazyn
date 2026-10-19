@@ -103,7 +103,7 @@ export async function AcceptTab() {
               <span className="text-sm text-muted">podpisana {dateTime(c.signed_at)}{c.source === "general" ? " · z ogólnego linku" : ""}{c.location_id ? ` · towar na ${locName(c.location_id)}` : ""}</span>
             </div>
             <ContractDecision
-              id={c.id} back={BACK} showPrices={prices} needsLocation={needsLocation}
+              id={c.id} back={BACK} showPrices={prices} needsLocation={needsLocation} currency={c.currency}
               items={items.map((it) => ({ title: it.title, option: it.option, qty: Number(it.qty ?? 1), price: Number(it.price), unassigned: !it.unit_id && !it.variant_id }))}
               locations={locs.map((l) => ({ id: l.id, label: `${l.store?.name ?? ""} · ${l.name}` }))}
               accept={acceptContract} reject={rejectContract} offer={offerContract}

@@ -99,13 +99,18 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
   // Shopify: SKU rozmiaru, wersja robocza (draft) i tag „reused” produktu w sklepie sztuki.
   const productIds = [...new Set(rows.map((r) => r.variant.product.id))];
   const variantIds = [...new Set(rows.map((r) => r.variant.id))];
-  const [{ data: contractRows }, { data: pLinks }, { data: vLinks }, { data: prodFlags }] = await Promise.all([
+  const [{ data: contractRows }, { data: pLinks }, { data: vLinks }, { data: prodFlags }, { data: unitCur }] = await Promise.all([
     contractIds.length ? supabase.from("contracts").select(CONTRACT_LITE_FIELDS).in("id", contractIds) : Promise.resolve({ data: [] }),
     productIds.length ? supabase.from("product_store_links").select("product_id, store_id, status, tags").in("product_id", productIds) : Promise.resolve({ data: [] }),
     variantIds.length ? supabase.from("variant_store_links").select("variant_id, store_id, sku").in("variant_id", variantIds) : Promise.resolve({ data: [] }),
     // Produkty spoza katalogu Shopify („nieprzypisany do Shopify”) – bez SQL 63 kolumny nie ma, wtedy nic.
     productIds.length ? supabase.from("products").select("*").in("id", productIds).then((r) => r, () => ({ data: [] })) : Promise.resolve({ data: [] }),
+    // Waluta ceny sztuki bez umowy (SQL 67; bez niej – PLN).
+    rows.length ? supabase.from("units").select("*").in("id", rows.map((r) => r.id)).then((r) => r, () => ({ data: [] })) : Promise.resolve({ data: [] }),
   ]);
+  const unitCurrency = new Map(((unitCur ?? []) as { id: string; purchase_currency?: string | null }[]).map((u) => [u.id, u.purchase_currency ?? null]));
+  // Waluta kwot sztuki: z umowy, a bez umowy – zapisana przy przyjęciu.
+  const curOf = (u: { id: string; contract_id: string | null }) => (u.contract_id ? contractById.get(u.contract_id)?.currency : null) ?? unitCurrency.get(u.id) ?? null;
   const unassignedIds = new Set(((prodFlags ?? []) as { id: string; unassigned?: boolean }[]).filter((p) => p.unassigned).map((p) => p.id));
   const contractById = new Map((contractRows ?? []).map((c) => [c.id as string, c as unknown as ContractLite]));
   type PL = { product_id: string; store_id: string; status: string | null; tags: string[] | null };
@@ -354,7 +359,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
                     {u.owner_type === "consignment" ? (
                       <>
                         <Link href={`/magazyn?wlasciciel=consignment&komisant=${u.consignor?.id}`} className="line-clamp-2 break-words text-sm font-medium leading-tight text-accent hover:underline" title={u.consignor?.name}>{u.consignor?.name}</Link>
-                        {profile.can_see_prices && u.payout_amount !== null && <span className="block text-xs text-muted">w komisie {(() => { const ct = u.contract_id ? contractById.get(u.contract_id) : null; return ct?.currency && ct.currency !== "PLN" ? `${Number(u.payout_amount).toFixed(2)} ${ct.currency}` : money(u.payout_amount); })()}</span>}
+                        {profile.can_see_prices && u.payout_amount !== null && <span className="block text-xs text-muted">w komisie {money(u.payout_amount, curOf(u))}</span>}
                       </>
                     ) : (
                       <span className="text-sm text-muted max-md:text-xs">– {OWNER_TYPE.own}</span>
@@ -375,9 +380,8 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
                       {(() => {
                         // Komis bez ceny zakupu: kwota komisanta. Waluta z umowy (np. EUR).
                         const value = u.purchase_price ?? (u.owner_type === "consignment" ? u.payout_amount : null);
-                        const cur = c?.currency && c.currency !== "PLN" ? c.currency : null;
                         if (value === null) return "–";
-                        return <>{cur ? `${Number(value).toFixed(2)} ${cur}` : money(value)}{u.purchase_price === null && <span className="block text-[11px] text-muted">kwota komisanta</span>}</>;
+                        return <>{money(value, curOf(u))}{u.purchase_price === null && <span className="block text-[11px] text-muted">kwota komisanta</span>}</>;
                       })()}
                     </td>
                   )}

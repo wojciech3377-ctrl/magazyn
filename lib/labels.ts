@@ -58,9 +58,11 @@ export const EVENT_TYPE: Record<string, string> = {
   edited: "edycja",
 };
 
-export function money(v: number | string | null | undefined) {
+/** Kwota w walucie (domyślnie PLN; np. umowa w EUR – „500,00 €”). */
+export function money(v: number | string | null | undefined, currency?: string | null) {
   if (v === null || v === undefined || v === "") return "–";
-  return new Intl.NumberFormat("pl-PL", { style: "currency", currency: "PLN" }).format(Number(v));
+  const cur = currency && /^[A-Z]{3}$/.test(currency) ? currency : "PLN";
+  return new Intl.NumberFormat("pl-PL", { style: "currency", currency: cur }).format(Number(v));
 }
 
 export function dateTime(v: string | null | undefined) {

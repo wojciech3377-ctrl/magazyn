@@ -55,8 +55,11 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
     // „Sprawdź stan w Shopify” – na żywo, tylko na żądanie (zapytanie do Shopify).
     sp.shopify === "1" ? diagnoseUnitStock(createAdminClient(), u.id).catch((e) => ({ levels: [], reasons: [], product: null, canAlign: false, master: "shopify" as const, error: errorMessage(e) })) : Promise.resolve(null),
   ]);
-  const cur = contract?.currency && contract.currency !== "PLN" ? contract.currency as string : null;
-  const inCur = (n: number) => (cur ? `${n.toFixed(2).replace(".", ",")} ${cur}` : money(n));
+  // Waluta kwot: z umowy, a bez umowy – zapisana przy przyjęciu (SQL 67).
+  const { data: curRow } = await supabase.from("units").select("*").eq("id", u.id).maybeSingle().then((r) => r, () => ({ data: null }));
+  const curCode = (contract?.currency as string | null | undefined) ?? (curRow as { purchase_currency?: string | null } | null)?.purchase_currency ?? null;
+  const cur = curCode && curCode !== "PLN" ? curCode : null;
+  const inCur = (n: number) => money(n, curCode);
   const fromContract = contract && mates ? expectedPrices(contract, mates as { id: string; variant_id: string }[]).expected.get(u.id) : undefined;
   const ownPrice = u.owner_type === "consignment" ? u.payout_amount : u.purchase_price;
   const priceDiff = fromContract !== undefined && ownPrice !== null && ownPrice !== undefined && Math.abs(Number(ownPrice) - fromContract) >= 0.005;
@@ -199,6 +202,16 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
                       <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted">{cur ?? "zł"}</span>
                     </span>
                   </div>
+                  {/* Bez umowy – walutę kwot wybierasz tu; z umową – waluta umowy. */}
+                  {!u.contract_id ? (
+                    <div>
+                      <label className="label" htmlFor="purchase_currency">Waluta kwot</label>
+                      <select className="input" id="purchase_currency" name="purchase_currency" defaultValue={curCode ?? "PLN"}>
+                        <option value="PLN">PLN – złoty</option>
+                        <option value="EUR">EUR – euro</option>
+                      </select>
+                    </div>
+                  ) : <p className="self-end text-xs text-muted">Waluta kwot z umowy: <b>{curCode ?? "PLN"}</b></p>}
                 </>
               )}
               <div className="md:col-span-2">
