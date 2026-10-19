@@ -33,6 +33,8 @@ export async function createLinkContract(_: unknown, formData: FormData): Promis
     counterparty: "(czeka na podpis)",
     amount: contractTotal(items),
     payment_days: days,
+    // Waluta wybrana przy tworzeniu – sprzedający jej nie zmienia; pusta – wybiera sprzedający.
+    currency: ["PLN", "EUR"].includes(String(formData.get("currency"))) ? String(formData.get("currency")) : null,
     items,
     sale_id: String(formData.get("sale_id") ?? "") || null,
     location_id: locationId,

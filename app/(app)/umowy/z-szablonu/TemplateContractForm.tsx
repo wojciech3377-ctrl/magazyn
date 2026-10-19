@@ -20,6 +20,8 @@ export function TemplateContractForm({
   const [state, action, pending] = useActionState(createLinkContract, null);
   const [lines, setLines] = useState<Line[]>(initialLines);
   const [query, setQuery] = useState("");
+  // Waluta umowy: wybrana tutaj (sprzedający jej nie zmieni) albo pusta – wybierze ją sprzedający przy podpisie.
+  const [currency, setCurrency] = useState("");
   const [hits, setHits] = useState<VariantHit[]>([]);
   const [, start] = useTransition();
   const hasNew = lines.some((l) => !l.unit_id);
@@ -89,6 +91,14 @@ export function TemplateContractForm({
             </div>
           )}
           <div>
+            <label className="label" htmlFor="currency">Waluta</label>
+            <select className="input" id="currency" name="currency" value={currency} onChange={(e) => setCurrency(e.target.value)}>
+              <option value="">wybierze sprzedający przy podpisie</option>
+              <option value="PLN">PLN – złoty</option>
+              <option value="EUR">EUR – euro</option>
+            </select>
+          </div>
+          <div>
             <label className="label" htmlFor="payment_days">Przelew w ciągu (dni)</label>
             <input className="input" id="payment_days" name="payment_days" type="number" min={0} max={60} defaultValue={paymentDays} />
           </div>
@@ -106,7 +116,7 @@ export function TemplateContractForm({
           </div>
         </section>
         <section className="card space-y-3 p-4">
-          <div className="flex items-baseline justify-between"><span className="text-sm text-muted">Razem</span><span className="text-xl font-semibold tabular-nums">{new Intl.NumberFormat("pl-PL", { style: "currency", currency: "PLN" }).format(total)}</span></div>
+          <div className="flex items-baseline justify-between"><span className="text-sm text-muted">Razem</span><span className="text-xl font-semibold tabular-nums">{new Intl.NumberFormat("pl-PL", { style: "currency", currency: currency || "PLN" }).format(total)}</span></div>
           {state?.error && <p className="text-sm text-bad">{state.error}</p>}
           <button className="btn w-full" disabled={pending || !lines.length}>{pending ? "Tworzę…" : "Utwórz umowę i link do podpisu"}</button>
           <p className="text-xs text-muted">Sprzedający sam wpisze swoje dane i podpisze umowę na telefonie.{mailReady ? " Link możesz wysłać e-mailem z aplikacji." : ""}</p>
