@@ -24,6 +24,8 @@ import type { JobView } from "../receipt-actions";
 import { issueOrderReceiptPdf, refreshOrder } from "./actions";
 import { ManualTrackingForm } from "./ManualTrackingForm";
 import { OrderNote } from "./OrderNote";
+import { LineDocEdit } from "./LineDocEdit";
+import { draftFromOrder, orderLineOverrides, type LineOverride } from "@/lib/invoices/service";
 import { ConfirmSubmit } from "@/components/ConfirmSubmit";
 import { PickupPanel } from "./PickupPanel";
 import { isPersonalPickup } from "@/lib/orders/status";
@@ -58,6 +60,11 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
     supabase.from("invoices").select("id, number").eq("order_id", id).eq("kind", "receipt").not("status", "in", "(rejected,cancelled)").limit(1).maybeSingle(),
   ]);
   if (!order) notFound();
+  // Jak pozycje pójdą na paragon / fakturę: nazwa i stawka VAT (z regułami wykluczeń i zmianami w zamówieniu).
+  const [docDraft, lineOv] = await Promise.all([
+    draftFromOrder(createAdminClient(), id).catch(() => null),
+    orderLineOverrides(createAdminClient(), id).catch(() => ({} as Record<string, LineOverride>)),
+  ]);
   const furgonetkaReady = !!furgonetka;
 
   // Umowy linii sprzedaży i rozmiary pozycji – drugi rzut, też równolegle.
@@ -186,7 +193,7 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
       <section className="card mt-5 overflow-x-auto">
         <h2 className="h2 p-4 pb-0">Produkty</h2>
         <table className="table mtable mtable-flow">
-          <thead><tr><th /><th>Produkt</th><th>Rozmiar</th><th>SKU</th><th className="text-right">Ilość</th><th className="text-right">Cena</th><th /></tr></thead>
+          <thead><tr><th /><th>Produkt</th><th>Rozmiar</th><th>SKU</th><th className="text-right">Ilość</th><th className="text-right">Cena</th><th>Na paragonie / fakturze</th><th /></tr></thead>
           <tbody>
             {lines.map((l, i) => (
               <tr key={l.id}>
@@ -196,6 +203,13 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
                 <td className="font-mono text-xs">{l.sku ?? "–"}</td>
                 <td className="text-right tabular-nums">{l.quantity}{refundedLines[l.id] ? <span className="block text-xs text-warn">zwrócono {refundedLines[l.id]}</span> : null}</td>
                 <td className="text-right tabular-nums">{money(l.price)}</td>
+                <td>{(() => {
+                  const its = (docDraft?.items ?? []).filter((x) => x.line_id === l.id);
+                  const defaultName = [l.title, l.variant_title].filter(Boolean).join(" ");
+                  if (!its.length) return <span className="text-xs text-muted">{refundedLines[l.id] ? "zwrócone" : "–"}</span>;
+                  return <LineDocEdit orderId={order.id} lineId={l.id} name={its[0].name} defaultName={defaultName} override={lineOv[l.id] ?? null}
+                    vats={its.map((x) => (x.checkVat ? "check" : x.vat === "23" ? "23" : "margin"))} />;
+                })()}</td>
                 <td>{!l.service && <WtbButton orderId={order.id} line={i} />}</td>
               </tr>
             ))}

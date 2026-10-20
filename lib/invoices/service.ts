@@ -11,7 +11,12 @@ import { KSEF_COUNTRIES } from "./countries";
 export type PaymentMethod = "cash" | "card" | "transfer" | "mobile";
 export type DraftItem = InvoiceItemInput & { unit_id?: string | null; sale_id?: string | null; pos_item_id?: string | null; checkVat?: boolean;
   /** Pozycja wykluczona z magazynu (np. sznurówki rope) – stawka z reguły wykluczenia, na paragonie litera „usług / 23%”. */
-  excluded?: boolean };
+  excluded?: boolean;
+  /** Pozycja zamówienia Shopify (do zmiany nazwy / stawki w zamówieniu) – nie trafia do dokumentu. */
+  line_id?: string };
+
+/** Zmiany pozycji zamówienia wpisane w aplikacji: nazwa na paragonie / fakturze i stawka VAT. */
+export type LineOverride = { name?: string | null; vat?: "23" | "margin" | null };
 export type InvoiceDraft = {
   consignorShipmentId?: string | null; // faktura za wysyłkę rzeczy do komisanta
   buyer: InvoiceParty;
@@ -37,6 +42,13 @@ function dayPl(iso: string) {
 
 type Unit = { id: string; purchase_form: string } | null;
 
+/** Zmiany nazwy / stawki pozycji zamówienia (SQL 70). */
+export async function orderLineOverrides(db: SupabaseClient, orderId: string): Promise<Record<string, LineOverride>> {
+  const { data, error } = await db.from("orders").select("line_overrides").eq("id", orderId).maybeSingle();
+  if (error || !data) return {};
+  return ((data as { line_overrides?: Record<string, LineOverride> | null }).line_overrides ?? {}) as Record<string, LineOverride>;
+}
+
 /** Szkic faktury do zamówienia ze sklepu: nabywca z adresu, pozycje z zamówienia (marża / 23% wg sztuki), wysyłka 23%. */
 export async function draftFromOrder(db: SupabaseClient, orderId: string): Promise<InvoiceDraft | null> {
   const { data: o } = await db.from("orders").select("id, ordered_at, customer_name, email, shipping_address, shipping_method, shipping_price, financial_status, cod, payment_gateways, line_items, refunded_lines").eq("id", orderId).maybeSingle();
@@ -51,15 +63,19 @@ export async function draftFromOrder(db: SupabaseClient, orderId: string): Promi
   // Pozycje wykluczone z magazynu (np. sznurówki rope, usługi) są normalnie na fakturze i paragonie –
   // tylko bez sztuki z magazynu; stawka z reguły wykluczenia (Ustawienia → Wykluczenia).
   const rules = lines.some((l) => l.service) ? await (await import("@/lib/services")).loadExclusionRules(db) : [];
-  const { exclusionVat } = await import("@/lib/services");
+  const { exclusionVat, exclusionName } = await import("@/lib/services");
+  // Nazwa / stawka zmienione w zamówieniu (SQL 70) – bez migracji puste.
+  const ov = await orderLineOverrides(db, orderId);
   for (const l of lines) {
+    const o2 = ov[l.id] ?? {};
+    const name = o2.name?.trim() || null;
     if (l.service) {
       const back = Number((o.refunded_lines as Record<string, number> | null)?.[l.id] ?? 0);
       const qty = l.quantity - back;
       if (qty <= 0 || !(Number(l.price) > 0)) continue;
       items.push({
-        name: [l.title, l.variant_title].filter(Boolean).join(" "), quantity: qty, unit: "szt.", unit_price_gross: Number(l.price),
-        total_gross: Math.round(Number(l.price) * qty * 100) / 100, vat: exclusionVat(rules, l.sku, l.title), unit_id: null, sale_id: null, excluded: true,
+        name: name ?? exclusionName(rules, l.sku, l.title) ?? [l.title, l.variant_title].filter(Boolean).join(" "), quantity: qty, unit: "szt.", unit_price_gross: Number(l.price),
+        total_gross: Math.round(Number(l.price) * qty * 100) / 100, vat: o2.vat ?? exclusionVat(rules, l.sku, l.title), unit_id: null, sale_id: null, excluded: true, line_id: l.id,
       });
       continue;
     }
@@ -72,10 +88,10 @@ export async function draftFromOrder(db: SupabaseClient, orderId: string): Promi
       const idx = pool.findIndex((s) => variantId && s.variant_id === variantId);
       const sale = idx >= 0 ? pool.splice(idx, 1)[0] : null;
       items.push({
-        name: [l.title, l.variant_title].filter(Boolean).join(" "), quantity: 1, unit: "szt.", unit_price_gross: Number(l.price), total_gross: Number(l.price),
-        vat: sale?.unit?.purchase_form === "vat_23" ? "23" : "margin", unit_id: sale?.unit?.id ?? null, sale_id: sale?.id ?? null,
-        // Bez sztuki z magazynu nie wiadomo, czy to towar używany (marża) – do potwierdzenia w formularzu.
-        checkVat: !sale?.unit,
+        name: name ?? [l.title, l.variant_title].filter(Boolean).join(" "), quantity: 1, unit: "szt.", unit_price_gross: Number(l.price), total_gross: Number(l.price),
+        vat: o2.vat ?? (sale?.unit?.purchase_form === "vat_23" ? "23" : "margin"), unit_id: sale?.unit?.id ?? null, sale_id: sale?.id ?? null,
+        // Bez sztuki z magazynu nie wiadomo, czy to towar używany (marża) – do potwierdzenia w formularzu (chyba że stawkę wybrano w zamówieniu).
+        checkVat: !sale?.unit && !o2.vat, line_id: l.id,
       });
     }
   }
@@ -224,7 +240,7 @@ export async function issueInvoice(db: SupabaseClient, d: InvoiceDraft, userId: 
     return { ...i, name: i.name.trim().slice(0, 256), quantity, unit_price_gross, total_gross: Math.round(unit_price_gross * quantity * 100) / 100 };
   }) };
   validate(company, d);
-  d = { ...d, items: d.items.map(({ checkVat: _c, excluded: _e, ...i }) => i) };
+  d = { ...d, items: d.items.map(({ checkVat: _c, excluded: _e, line_id: _l, ...i }) => i) };
   const seller = { name: company.name, nip: onlyDigits(company.nip), address1: company.street, address2: company.city, country: "PL", email: company.email, bank_account: company.bank_account ?? null };
   const t = invoiceTotals(d.items);
   const { data, error } = await db.rpc("create_invoice", {
@@ -275,7 +291,7 @@ export async function issueReceipt(db: SupabaseClient, d: InvoiceDraft, userId: 
   const buyer = opts.withBuyer && d.buyer?.name?.trim() ? { ...d.buyer, name: d.buyer.name.trim() } : RECEIPT_BUYER;
   d = cleanItems({ ...d, buyer, paid: true });
   validate(company, d, true);
-  d = { ...d, items: d.items.map(({ checkVat: _c, excluded: _e, ...i }) => i) };
+  d = { ...d, items: d.items.map(({ checkVat: _c, excluded: _e, line_id: _l, ...i }) => i) };
   const t = invoiceTotals(d.items);
   const { data, error } = await db.rpc("create_invoice", {
     p_invoice: {

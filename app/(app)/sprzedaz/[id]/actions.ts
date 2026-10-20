@@ -569,3 +569,22 @@ export async function saveOrderNote(fd: FormData) {
   revalidatePath("/sprzedaz");
   redirect(`/sprzedaz/${id}?${msg}`);
 }
+
+/** Nazwa / stawka VAT pozycji w tym zamówieniu (paragon, paragon PDF, faktura). Pusta nazwa i „automatycznie” = bez zmian. */
+export async function saveLineOverride(fd: FormData) {
+  await requireSection("sprzedaz");
+  const id = str(fd, "order_id");
+  const lineId = str(fd, "line_id");
+  const db = createAdminClient();
+  const { data: o, error: rErr } = await db.from("orders").select("line_overrides").eq("id", id).maybeSingle();
+  if (rErr || !o) redirect(`/sprzedaz/${id}?blad=${encodeURIComponent(rErr && /line_overrides/.test(rErr.message) ? "Zmiana nazwy / VAT w zamówieniu wymaga SQL 70 w Supabase (0070_receipt_names_line_overrides.sql)." : "Nie ma takiego zamówienia.")}`);
+  const all = { ...((o!.line_overrides ?? {}) as Record<string, { name?: string | null; vat?: string | null }>) };
+  const name = fd.get("reset") ? "" : str(fd, "name").slice(0, 120);
+  const vatRaw = fd.get("reset") ? "" : str(fd, "vat");
+  const vat = vatRaw === "23" || vatRaw === "margin" ? vatRaw : null;
+  if (!name && !vat) delete all[lineId];
+  else all[lineId] = { name: name || null, vat };
+  const { error } = await db.from("orders").update({ line_overrides: all }).eq("id", id);
+  revalidatePath(`/sprzedaz/${id}`);
+  redirect(`/sprzedaz/${id}?${error ? `blad=${encodeURIComponent(error.message)}` : `ok=${encodeURIComponent(!name && !vat ? "Przywrócono nazwę i stawkę z zamówienia." : "Zapisano – nowe paragony i faktury do tego zamówienia użyją tej nazwy / stawki.")}`}`);
+}

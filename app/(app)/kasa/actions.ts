@@ -11,7 +11,7 @@ import { parseProductTagCode } from "@/lib/price-tag-code";
 import { createParShippingOrder, readParShipping } from "@/lib/orders/par-order";
 import { draftFromPos, issueReceipt } from "@/lib/invoices/service";
 import { shopifyGraphql } from "@/lib/integrations/shopify";
-import { exclusionVat, isExcluded, loadExclusionRules } from "@/lib/services";
+import { exclusionName, exclusionVat, isExcluded, loadExclusionRules } from "@/lib/services";
 
 export type PosUnit = {
   id: string;
@@ -133,7 +133,7 @@ export async function searchCatalog(q: string, storeId: string, limit = 10): Pro
  * wykluczone regułą (np. sznurówki rope) oraz bez śledzenia stanu w Shopify (np. Supreme x Hanes – aplikacja ich nie liczy).
  */
 export type ExtraSize = { id: string; option: string; price: number | null; available: number | null };
-export type ExtraHit = { id: string; title: string; image: string | null; vat: "margin" | "23"; sizes: ExtraSize[] };
+export type ExtraHit = { id: string; title: string; image: string | null; vat: "margin" | "23"; sizes: ExtraSize[]; receiptName?: string | null };
 
 const extraCache = new Map<string, { at: number; hits: ExtraHit[] }>();
 
@@ -174,6 +174,7 @@ export async function searchShopifyExtras(q: string, storeId: string): Promise<E
     hits.push({
       id: p.id, title: p.title, image: p.featuredMedia?.preview?.image?.url ?? null,
       vat: exclusionVat(rules, vs[0].sku, p.title),
+      receiptName: exclusionName(rules, vs[0].sku, p.title),
       sizes: vs.map((v) => ({
         id: v.id, option: v.title === "Default Title" ? "" : v.title, price: v.price != null ? Number(v.price) : null,
         available: v.inventoryItem?.tracked === false ? null : v.inventoryQuantity ?? 0,

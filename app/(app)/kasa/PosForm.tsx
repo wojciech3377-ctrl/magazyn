@@ -98,7 +98,7 @@ export function PosForm({ stores, printer, ptu, defaultPtu, ptuFor, printerOnlin
   /** Produkt spoza magazynu ze Shopify (np. sznurówki rope): pozycja z ceną ze sklepu i stawką z reguły wykluczenia. */
   function addExtra(p: ExtraHit, sz: ExtraSize) {
     setLines((prev) => [...prev, {
-      kind: "custom", key: crypto.randomUUID(), name: receiptName(p.title, sz.option || ""), ptu: p.vat === "23" ? ptuFor.vat23 : ptuFor.margin,
+      kind: "custom", key: crypto.randomUUID(), name: p.receiptName || receiptName(p.title, sz.option || ""), ptu: p.vat === "23" ? ptuFor.vat23 : ptuFor.margin,
       qtyInput: "1", priceInput: sz.price !== null ? String(sz.price) : "", product_id: null, save: false, note: "ze Shopify · poza magazynem",
     }]);
     setMessage({ tone: "ok", text: `Dodano ${p.title}${sz.option ? ` ${sz.option}` : ""}` });

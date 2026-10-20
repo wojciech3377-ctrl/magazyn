@@ -10,7 +10,7 @@ import { getBuyerSignature, getCompany } from "@/lib/contracts/settings";
 import { getSmtpSettings, mailConfig } from "@/lib/mail";
 import { ContractSettings } from "./ContractSettings";
 import { FiscalSettings } from "./FiscalSettings";
-import { addExclusion, deleteExclusion, disconnectFurgonetka, purgeExcluded, purgeNonShopify, registerWebhooks, runStockNow, saveSmtp, saveInvoiceSettings, saveLocation, saveSender, saveShopifyLocation, saveStockMaster, saveStore, checkOmnibus, saveOrdersDefaultStore, fixProductStockNow, dismissIssue } from "./actions";
+import { addExclusion, deleteExclusion, setExclusionName, disconnectFurgonetka, purgeExcluded, purgeNonShopify, registerWebhooks, runStockNow, saveSmtp, saveInvoiceSettings, saveLocation, saveSender, saveShopifyLocation, saveStockMaster, saveStore, checkOmnibus, saveOrdersDefaultStore, fixProductStockNow, dismissIssue } from "./actions";
 import { compareStock, getStockMaster, planPushToShopify, shopifyLocations, type ShopifyLocation } from "@/lib/sync/shopify-stock";
 import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/furgonetka";
 import { openIssues } from "@/lib/issues";
@@ -541,6 +541,12 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
                   <span className="text-muted">{e.kind === "sku_prefix" ? "SKU od:" : "nazwa zawiera:"}</span>
                   <b>{e.value}</b>
                   <ExclusionVatSelect id={e.id as string} vat={(e as { vat?: string }).vat === "23" ? "23" : "margin"} letters={{ margin: fiscalCfg.ptuMargin, vat23: fiscalCfg.ptuService }} />
+                  <form action={setExclusionName} className="ml-1 flex items-center gap-1">
+                    <input type="hidden" name="id" value={e.id} />
+                    <input name="receipt_name" defaultValue={(e as { receipt_name?: string | null }).receipt_name ?? ""} placeholder="nazwa na paragonie" maxLength={40}
+                      className="w-32 rounded border border-line bg-white px-1 py-0.5 text-xs" aria-label={`Nazwa na paragonie dla ${e.value}`} />
+                    <button className="rounded px-1 text-xs text-accent hover:bg-panel" aria-label="Zapisz nazwę">✓</button>
+                  </form>
                   <form action={deleteExclusion}>
                     <input type="hidden" name="id" value={e.id} />
                     <button className="ml-1 rounded px-1.5 text-muted hover:bg-panel hover:text-bad" aria-label={`Usuń wykluczenie ${e.value}`}>×</button>

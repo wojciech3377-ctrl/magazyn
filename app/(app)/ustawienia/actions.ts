@@ -125,6 +125,15 @@ export async function setExclusionVat(formData: FormData) {
   await done(`Stawka na paragonie zapisana: ${vat === "23" ? "23%" : "VAT marża"}.`);
 }
 
+/** Nazwa na paragonie dla pozycji z tej reguły (np. „Sznur”); pusta – nazwa produktu. */
+export async function setExclusionName(formData: FormData) {
+  const { supabase } = await requireAdmin();
+  const name = String(formData.get("receipt_name") ?? "").trim().slice(0, 40) || null;
+  const { error } = await supabase.from("catalog_exclusions").update({ receipt_name: name }).eq("id", String(formData.get("id")));
+  if (error) return done(/receipt_name/.test(error.message) ? "Uruchom migrację 0070_receipt_names_line_overrides.sql w Supabase." : error.message, "blad");
+  await done(name ? `Nazwa na paragonie: „${name}”.` : "Na paragonie – nazwa produktu.");
+}
+
 export async function deleteExclusion(formData: FormData) {
   const { supabase } = await requireAdmin();
   const { error } = await supabase.from("catalog_exclusions").delete().eq("id", String(formData.get("id")));
