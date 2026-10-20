@@ -5,6 +5,7 @@ import type { LineItem } from "@/lib/sync/shop-orders";
 import { matchPieces } from "@/lib/orders/pieces";
 import { contractStage, type ContractStage } from "@/lib/contracts/stage";
 import { isParOrder } from "@/lib/orders/par-order";
+import { expectedPrices } from "@/lib/contracts/inherit-price";
 
 /**
  * JPK: sprzedaże z dokumentem – faktury wysłane do KSeF, paragony fiskalne do sprzedaży stacjonarnej i do zamówień
@@ -297,6 +298,33 @@ function correctionLinesFrom(rows: CorrectionRow[]): JpkLine[] {
   });
 }
 
+/**
+ * Kwota zakupu w JPK = kwota z przypiętej umowy (pozycja umowy tej sztuki, „kwota za każdą rzecz” albo cała kwota
+ * umowy przy jednej rzeczy) – w walucie umowy. Cena zakupu wpisana w Magazynie zostaje w Magazynie bez zmian.
+ * Gdy z umowy nie da się ustalić kwoty tej sztuki (np. faktura na kilka rzeczy bez cen pozycji) – kwota ze sztuki.
+ */
+async function withContractPrices(db: SupabaseClient, lines: JpkLine[]) {
+  const ids = [...new Set(lines.filter((l) => l.contractId && l.unitId).map((l) => l.contractId as string))];
+  if (!ids.length) return lines;
+  type C = Parameters<typeof expectedPrices>[0] & { id: string };
+  const [contracts, units] = await Promise.all([
+    inChunks<C>(ids, (part) => db.from("contracts").select("*").in("id", part as string[])),
+    inChunks<{ id: string; variant_id: string; contract_id: string; purchase_currency?: string | null }>(ids, (part) => db.from("units").select("*").in("contract_id", part as string[])),
+  ]).catch(() => [[], []] as [C[], { id: string; variant_id: string; contract_id: string; purchase_currency?: string | null }[]]);
+  const price = new Map<string, number>();
+  for (const c of contracts) {
+    const { expected } = expectedPrices(c, units.filter((u) => u.contract_id === c.id));
+    for (const [unitId, v] of expected) price.set(unitId, v);
+  }
+  const unitCur = new Map(units.map((u) => [u.id, u.purchase_currency ?? null]));
+  return lines.map((l) => {
+    if (!l.unitId || !l.contractId) return l;
+    if (price.has(l.unitId)) return { ...l, purchasePrice: price.get(l.unitId)! };
+    // Kwota ze sztuki – w walucie sztuki (gdy zapisana).
+    return { ...l, currency: unitCur.get(l.unitId) ?? l.currency };
+  });
+}
+
 /** Notatki do linii (jpk_notes). Bez SQL 59 – linie bez notatek. */
 async function withNotes(db: SupabaseClient, lines: JpkLine[]) {
   const keys = lines.map((l) => l.key);
@@ -370,7 +398,7 @@ export async function loadJpkLines(db: SupabaseClient, opts: { from: Date; to: D
   // JPK = tylko sprzedaże z dokumentem: faktury w KSeF, paragony fiskalne (kasa i zamówienia). „Bez dokumentu” to
   // osobny podgląd sprzedaży, do których trzeba jeszcze wystawić paragon / fakturę – nie wchodzą do JPK.
   const filtered = opts.kind === "all" ? lines.filter((l) => !!l.kind) : opts.kind === "none" ? lines.filter((l) => !l.kind) : lines.filter((l) => l.kind === opts.kind);
-  return sortLines(await withNotes(db, filtered));
+  return sortLines(await withNotes(db, await withContractPrices(db, filtered)));
 }
 
 /** Linie po kluczach (eksport zaznaczonych). */
@@ -393,5 +421,5 @@ export async function loadJpkLinesByKeys(db: SupabaseClient, keys: string[]) {
     ...(receiptIds.length ? orphanReceiptLines(await orphanReceipts(db, { ids: receiptIds })) : []),
     ...correctionLinesFrom(await inChunks<CorrectionRow>(correctionIds, (part) => db.from("invoices").select(CORRECTION_FIELDS).in("id", part as string[]).eq("kind", "correction"))),
   ].filter((l) => want.has(l.key));
-  return sortLines(await withNotes(db, lines));
+  return sortLines(await withNotes(db, await withContractPrices(db, lines)));
 }

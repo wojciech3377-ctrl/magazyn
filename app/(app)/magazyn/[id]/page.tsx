@@ -58,9 +58,11 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
   ]);
   // Waluta kwot: z umowy, a bez umowy – zapisana przy przyjęciu (SQL 67).
   const { data: curRow } = await supabase.from("units").select("*").eq("id", u.id).maybeSingle().then((r) => r, () => ({ data: null }));
-  const curCode = (contract?.currency as string | null | undefined) ?? (curRow as { purchase_currency?: string | null } | null)?.purchase_currency ?? null;
+  // Kwota w Magazynie – w walucie sztuki (wpisanej); bez niej – w walucie umowy (sztuki utworzone z umowy).
+  const curCode = (curRow as { purchase_currency?: string | null } | null)?.purchase_currency ?? (contract?.currency as string | null | undefined) ?? null;
   const cur = curCode && curCode !== "PLN" ? curCode : null;
   const inCur = (n: number) => money(n, curCode);
+  const inContractCur = (n: number) => money(n, (contract?.currency as string | null | undefined) ?? null);
   const fromContract = contract && mates ? expectedPrices(contract, mates as { id: string; variant_id: string }[]).expected.get(u.id) : undefined;
   const ownPrice = u.owner_type === "consignment" ? u.payout_amount : u.purchase_price;
   const priceDiff = fromContract !== undefined && ownPrice !== null && ownPrice !== undefined && Math.abs(Number(ownPrice) - fromContract) >= 0.005;
@@ -244,16 +246,14 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
                       <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted">{cur ?? "zł"}</span>
                     </span>
                   </div>
-                  {/* Bez umowy – walutę kwot wybierasz tu; z umową – waluta umowy. */}
-                  {!u.contract_id ? (
-                    <div>
-                      <label className="label" htmlFor="purchase_currency">Waluta kwot</label>
-                      <select className="input" id="purchase_currency" name="purchase_currency" defaultValue={curCode ?? "PLN"}>
-                        <option value="PLN">PLN – złoty</option>
-                        <option value="EUR">EUR – euro</option>
-                      </select>
-                    </div>
-                  ) : <p className="self-end text-xs text-muted">Waluta kwot z umowy: <b>{curCode ?? "PLN"}</b></p>}
+                  {/* Waluta kwot w Magazynie (JPK bierze kwotę i walutę z umowy). */}
+                  <div>
+                    <label className="label" htmlFor="purchase_currency">Waluta kwot</label>
+                    <select className="input" id="purchase_currency" name="purchase_currency" defaultValue={curCode ?? "PLN"}>
+                      <option value="PLN">PLN – złoty</option>
+                      <option value="EUR">EUR – euro</option>
+                    </select>
+                  </div>
                 </>
               )}
               <div className="md:col-span-2">
@@ -284,11 +284,10 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
               <div className="space-y-2 text-sm">
                 <div><Link className="font-medium text-accent hover:underline" href={`/umowy/${contract.id}`}>{contract.counterparty}</Link></div>
                 <div className="text-muted">{CONTRACT_TYPE[contract.type]} · {dateOnly(contract.contract_date)}</div>
-                {profile.can_see_prices && fromContract !== undefined && <div>Kwota w umowie dla tej sztuki: <b className="tabular-nums">{inCur(fromContract)}</b></div>}
+                {profile.can_see_prices && fromContract !== undefined && <div>Kwota w umowie dla tej sztuki (idzie do JPK): <b className="tabular-nums">{inContractCur(fromContract)}</b></div>}
                 {profile.can_see_prices && priceDiff && (
-                  <p className="rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-bad">
-                    Kwoty się różnią: {u.owner_type === "consignment" ? "kwota komisanta" : "cena zakupu"} w magazynie to <b>{inCur(Number(ownPrice))}</b>, a w umowie <b>{inCur(fromContract!)}</b>.
-                    Sprawdź, która jest dobra, i popraw ją w edycji sztuki niżej albo w umowie.
+                  <p className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
+                    W Magazynie {u.owner_type === "consignment" ? "kwota komisanta" : "cena zakupu"} to <b>{inCur(Number(ownPrice))}</b> – zostaje bez zmian. W JPK jako kwota zakupu idzie kwota z umowy: <b>{inContractCur(fromContract!)}</b>.
                   </p>
                 )}
                 {fileUrl ? <a className="btn-secondary w-full" href={fileUrl} target="_blank" rel="noreferrer">Otwórz plik umowy</a> : <Pill tone="amber">bez pliku</Pill>}

@@ -4,14 +4,14 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  * Kwota zakupu sztuki z dołączonej umowy.
  * – Sztuka bez kwoty dostaje kwotę z umowy (pozycja umowy tej sztuki / tego rozmiaru, a przy jednej rzeczy – kwota umowy).
  *   Komis: „kwota komisanta”, własne: „cena zakupu”.
- * – Gdy sztuka ma już inną kwotę niż umowa – nic nie zmieniamy, tylko opis błędu: która kwota gdzie i co zrobić.
+ * – Gdy sztuka ma już inną kwotę niż umowa – w Magazynie zostaje kwota sztuki, a w JPK idzie kwota z umowy (informacja, nie błąd).
  * Umowa na kilka rzeczy bez cen pozycji: suma kwot sztuk musi się zgadzać z kwotą umowy; gdy brakuje kwoty
  * tylko jednej sztuce – dostaje resztę.
  */
 export type PriceResult = { updated: string[]; problems: string[]; notes: string[] };
 
 type C = { id: string; amount_per_item?: boolean | null; amount: number | string | null; items: { unit_id?: string | null; variant_id?: string | null; price?: number | string; qty?: number }[] | null; currency: string | null; number: number | null; doc_number: string | null; template: string | null; type: string | null };
-type U = { id: string; code: string; variant_id: string; owner_type: string; purchase_price: number | string | null; payout_amount: number | string | null };
+type U = { id: string; code: string; variant_id: string; owner_type: string; purchase_price: number | string | null; payout_amount: number | string | null; purchase_currency?: string | null };
 
 const fmtFor = (currency: string | null) => (n: number) => `${n.toFixed(2).replace(".", ",")} ${!currency || currency === "PLN" ? "zł" : currency === "EUR" ? "EUR" : currency}`;
 const num = (v: unknown) => (v === null || v === undefined || v === "" ? null : Number(v));
@@ -21,7 +21,7 @@ export async function inheritContractPrice(db: SupabaseClient, contractId: strin
   const out: PriceResult = { updated: [], problems: [], notes: [] };
   const [{ data: c }, { data: list }] = await Promise.all([
     db.from("contracts").select("*").eq("id", contractId).maybeSingle(),
-    db.from("units").select("id, code, variant_id, owner_type, purchase_price, payout_amount").eq("contract_id", contractId),
+    db.from("units").select("*").eq("contract_id", contractId),
   ]);
   const ct = c as C | null;
   const units = (list ?? []) as U[];
@@ -32,7 +32,6 @@ export async function inheritContractPrice(db: SupabaseClient, contractId: strin
   const zl = fmtFor(ct.currency);
   const field = (u: U) => (u.owner_type === "consignment" ? "payout_amount" : "purchase_price") as "payout_amount" | "purchase_price";
   const fieldName = (u: U) => (u.owner_type === "consignment" ? "kwota komisanta" : "cena zakupu");
-  const fieldAcc = (u: U) => (u.owner_type === "consignment" ? "kwotę komisanta" : "cenę zakupu");
   const current = (u: U) => num(u[field(u)]);
   const check = new Set(unitIds?.length ? unitIds : units.map((u) => u.id));
 
@@ -42,15 +41,23 @@ export async function inheritContractPrice(db: SupabaseClient, contractId: strin
     out.notes.push(`Faktura na ${zl(amount)} – wpisz kwotę zakupu ${units[0].code} (faktura zwykle obejmuje kilka rzeczy, więc cała kwota nie jest przepisywana).`);
   }
   for (const u of units) {
+    // Sztuka miała już swoją kwotę (wpisaną bez umowy = w złotych) – zostaje w swojej walucie, nie w walucie umowy.
+    if (check.has(u.id) && current(u) !== null && !u.purchase_currency && ct.currency && ct.currency !== "PLN") {
+      await db.from("units").update({ purchase_currency: "PLN" }).eq("id", u.id).then(() => null, () => null);
+      u.purchase_currency = "PLN";
+    }
     const want = expected.get(u.id);
     if (want === undefined || !check.has(u.id)) continue;
     const have = current(u);
     if (have === null) {
-      const { error } = await db.from("units").update({ [field(u)]: want }).eq("id", u.id);
+      // Waluta kwoty = waluta umowy (np. 35 EUR), żeby w Magazynie nie wyglądało jak 35 zł.
+      let { error } = await db.from("units").update({ [field(u)]: want, purchase_currency: ct.currency === "EUR" ? "EUR" : null }).eq("id", u.id);
+      if (error && /purchase_currency/.test(error.message)) ({ error } = await db.from("units").update({ [field(u)]: want }).eq("id", u.id));
       if (error) out.problems.push(`${u.code}: nie udało się zapisać kwoty z umowy (${error.message}).`);
       else { out.updated.push(u.code); u[field(u)] = want; }
     } else if (!same(have, want)) {
-      out.problems.push(`${u.code}: ${fieldName(u)} w magazynie to ${zl(have)}, a w ${label}: ${zl(want)}. Kwota nie została zmieniona – sprawdź, która jest dobra, i popraw ${fieldAcc(u)} w sztuce albo kwotę w umowie.`);
+      const own = fmtFor(u.purchase_currency ?? null);
+      out.notes.push(`${u.code}: w Magazynie zostaje ${fieldName(u)} ${own(have)}, a w JPK będzie kwota podana w ${label}: ${zl(want)}.`);
     }
   }
 

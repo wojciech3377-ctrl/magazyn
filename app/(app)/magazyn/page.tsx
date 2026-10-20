@@ -109,8 +109,8 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
     rows.length ? supabase.from("units").select("*").in("id", rows.map((r) => r.id)).then((r) => r, () => ({ data: [] })) : Promise.resolve({ data: [] }),
   ]);
   const unitCurrency = new Map(((unitCur ?? []) as { id: string; purchase_currency?: string | null }[]).map((u) => [u.id, u.purchase_currency ?? null]));
-  // Waluta kwot sztuki: z umowy, a bez umowy – zapisana przy przyjęciu.
-  const curOf = (u: { id: string; contract_id: string | null }) => (u.contract_id ? contractById.get(u.contract_id)?.currency : null) ?? unitCurrency.get(u.id) ?? null;
+  // Waluta kwot sztuki: zapisana przy sztuce, a bez niej – z umowy.
+  const curOf = (u: { id: string; contract_id: string | null }) => unitCurrency.get(u.id) ?? (u.contract_id ? contractById.get(u.contract_id)?.currency : null) ?? null;
   const unassignedIds = new Set(((prodFlags ?? []) as { id: string; unassigned?: boolean }[]).filter((p) => p.unassigned).map((p) => p.id));
   const contractById = new Map((contractRows ?? []).map((c) => [c.id as string, c as unknown as ContractLite]));
   type PL = { product_id: string; store_id: string; status: string | null; tags: string[] | null };
