@@ -19,6 +19,8 @@ export type LineItem = {
   shopify_variant_id: string | null;
   price: number;
   service: boolean;
+  /** Produkt wykluczony z magazynu robiony z pary z magazynu (np. AF1 „Rope Laces” z AF1 Low White): oryginalny wariant Shopify. */
+  made_from?: string | null;
 };
 
 function toRow(storeId: string, o: ShopifyOrder, ex: Exclusions) {
@@ -119,6 +121,8 @@ async function saveOrderBatch(db: SupabaseClient, storeId: string, orders: Shopi
   // wykluczone pozycje nie tworzą tylko linii sprzedaży sztuk.
   const rows = orders.map((o) => toRow(storeId, o, exclusions).row);
   if (!rows.length) return [] as string[];
+  // Pary robione z butów z magazynu (np. AF1 „Rope Laces”) – pozycja jak bazowy model (sztuka z magazynu, umowa).
+  const madeFrom = await mapMadeFromBase(db, storeId, rows.flatMap((r) => r.line_items));
   // Anulowane w Shopify poza aplikacją (wcześniej nieanulowane u nas) → sprzedane sztuki wracają na stan.
   const { data: before } = await db.from("orders").select("shopify_order_id, cancelled_at").in("shopify_order_id", rows.map((r) => r.shopify_order_id));
   const wasOpen = new Set((before ?? []).filter((o) => !o.cancelled_at).map((o) => o.shopify_order_id as string));
@@ -133,9 +137,70 @@ async function saveOrderBatch(db: SupabaseClient, storeId: string, orders: Shopi
   }
   await refreshOrderStatus(db, ids);
   // Nowe zamówienia: linie sprzedaży i sztuki z magazynu od razu ze Shopify.
+  const startedAt = new Date(Date.now() - 2000).toISOString();
   const { error: salesErr } = await db.rpc("register_shopify_sales", { p_order_ids: ids });
   if (salesErr) throw salesErr;
+  // Para z magazynu zużyta na produkt „z bazowego modelu”: w Shopify stan bazowego modelu nie spadł sam – zdejmujemy.
+  if (madeFrom.size) await settleMadeFromStock(db, ids, startedAt).catch(() => null);
   return ids;
+}
+
+/**
+ * Pozycja wykluczona z magazynu (np. „Nike Air Force 1 Low Black "Black Rope Laces"”, SKU CW2288-001-BLACK-ROPE-…),
+ * która jest robiona z pary z magazynu: model bazowy po początku SKU (CW2288-001) i rozmiarze. Pozycja dostaje
+ * wariant bazowego modelu – sztuka z magazynu, umowa, paragon jak zwykły but; produkt nadal nie jest w Magazynie.
+ */
+async function mapMadeFromBase(db: SupabaseClient, storeId: string, lines: LineItem[]) {
+  const done = new Set<string>();
+  const todo = lines.filter((l) => l.service && l.sku && /^[A-Z0-9]{3,}-[A-Z0-9]{3}-/i.test(l.sku) && l.variant_title);
+  if (!todo.length) return done;
+  const { normOption } = await import("@/lib/unassigned");
+  const cache = new Map<string, string | null>();
+  for (const l of todo) {
+    const base = l.sku!.split("-").slice(0, 2).join("-").toUpperCase();
+    const size = normOption(l.variant_title!.split("/").pop());
+    const key = `${base}|${size}`;
+    if (!cache.has(key)) {
+      const { data: links } = await db.from("variant_store_links")
+        .select("shopify_variant_id, sku, variant:variants!inner(id, option, product:products!inner(title, unassigned))")
+        .eq("store_id", storeId).eq("inventory_tracked", true).ilike("sku", `%${base}%`).limit(200);
+      type Row = { shopify_variant_id: string | null; sku: string | null; variant: { id: string; option: string; product: { title: string; unassigned: boolean | null } } };
+      const hit = ((links ?? []) as unknown as Row[]).filter((x) =>
+        x.shopify_variant_id && !x.variant.product.unassigned && normOption(x.variant.option) === size
+        && (x.sku ?? "").toUpperCase().split(/[/\s,;]+/).some((t) => t === base || t.startsWith(`${base}-`)));
+      // Kilka produktów z tym SKU (np. osobne używane pary) – ten, który ma sztuki na stanie.
+      let pick = hit[0] ?? null;
+      if (hit.length > 1) {
+        const { data: st } = await db.from("units").select("variant_id").in("variant_id", hit.map((h) => h.variant.id)).eq("status", "in_stock");
+        const withStock = new Set((st ?? []).map((u) => u.variant_id as string));
+        pick = hit.find((h) => withStock.has(h.variant.id)) ?? pick;
+      }
+      cache.set(key, pick?.shopify_variant_id ?? null);
+    }
+    const gid = cache.get(key);
+    if (!gid) continue;
+    l.made_from = l.shopify_variant_id;
+    l.shopify_variant_id = gid;
+    l.service = false;
+    done.add(l.id);
+  }
+  return done;
+}
+
+/** Sztuki z magazynu przypięte w tym przebiegu do pozycji „z bazowego modelu” – stan w Shopify bazowego modelu −1. */
+async function settleMadeFromStock(db: SupabaseClient, orderIds: string[], since: string) {
+  const { data: orders } = await db.from("orders").select("id, line_items").in("id", orderIds);
+  const lineIds = new Set((orders ?? []).flatMap((o) => ((o.line_items ?? []) as LineItem[]).filter((l) => l.made_from).map((l) => l.id)));
+  if (!lineIds.size) return;
+  const { data: sales } = await db.from("sales").select("variant_id, shopify_line_id, unit:units(location_id)")
+    .in("order_id", orderIds).gte("created_at", since).not("unit_id", "is", null);
+  const changes = ((sales ?? []) as unknown as { variant_id: string; shopify_line_id: string | null; unit: { location_id: string } | null }[])
+    .filter((x) => x.shopify_line_id && lineIds.has(x.shopify_line_id) && x.unit)
+    .map((x) => ({ variantId: x.variant_id, locationId: x.unit!.location_id, delta: -1 }));
+  if (!changes.length) return;
+  const { getStockMaster, pushStockToShopify } = await import("@/lib/sync/shopify-stock");
+  if ((await getStockMaster(db)) === "app") await pushStockToShopify(db, 500, new Set(changes.map((c) => c.variantId)));
+  else await (await import("@/lib/stock")).adjustStock(db, changes);
 }
 
 /** Odczyt zamówień ze sklepów Shopify zmienionych od ostatniego razu. */
