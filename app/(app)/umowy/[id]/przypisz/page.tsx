@@ -4,7 +4,7 @@ import { SearchInput } from "@/components/SearchInput";
 import { notFound } from "next/navigation";
 import { requireProfile } from "@/lib/auth";
 import { dateTime, money, UNIT_STATUS } from "@/lib/labels";
-import { Notice, PageHeader } from "@/components/ui";
+import { Notice, PageHeader, Thumb } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
 import { matchPieces } from "@/lib/orders/pieces";
 import type { LineItem } from "@/lib/sync/shop-orders";
@@ -20,11 +20,11 @@ export default async function AssignContractPage({ params, searchParams }: { par
   const source = sp.zrodlo === "sprzedaz" ? "sprzedaz" : "magazyn";
   const q = (sp.q ?? "").replace(/[%,()*\\]/g, " ").trim();
 
-  let units: { id: string; code: string; title: string; option: string; status: string; identifier: string | null; location_name: string; received_at: string; sold_at: string | null }[] = [];
+  let units: { id: string; code: string; title: string; image_url: string | null; option: string; status: string; identifier: string | null; location_name: string; received_at: string; sold_at: string | null }[] = [];
   let orders: { id: string; name: string; ordered_at: string; customer_name: string | null; line_items: LineItem[]; store: { name: string } | null }[] = [];
   let piecesOf = new Map<string, ReturnType<typeof matchPieces>>();
   if (source === "magazyn") {
-    let query = supabase.from("units_list").select("id, code, title, option, status, identifier, location_name, received_at, sold_at")
+    let query = supabase.from("units_list").select("id, code, title, option, status, identifier, location_name, received_at, sold_at, image_url")
       .is("contract_id", null).eq("owner_type", "own").in("status", ["in_stock", "reserved", "in_transit", "sold", "shipped"])
       .order("received_at", { ascending: false }).limit(60);
     const ex = wordsOr(["title", "code", "identifier", "style_sku", "base_sku", "option"], searchWords(q));
@@ -45,7 +45,7 @@ export default async function AssignContractPage({ params, searchParams }: { par
       .filter((p) => p.sale?.status !== "cancelled" && !(p.sale as { unit?: { contract_id: string | null } | null } | null)?.unit?.contract_id)]));
   }
   const items = (c.items ?? []) as { title: string; option: string }[];
-  const { data: attached } = await supabase.from("units_list").select("id, code, title, option, status, sold_at, received_at").eq("contract_id", c.id).order("received_at");
+  const { data: attached } = await supabase.from("units_list").select("id, code, title, option, status, sold_at, received_at, image_url").eq("contract_id", c.id).order("received_at");
 
   return (
     <>
@@ -62,6 +62,7 @@ export default async function AssignContractPage({ params, searchParams }: { par
           <ul className="divide-y divide-line">
             {attached.map((u) => (
               <li key={u.id} className="flex flex-wrap items-center gap-3 py-2 text-sm">
+                <Thumb src={u.image_url as string | null} alt="" />
                 <Link className="text-accent hover:underline" href={`/magazyn/${u.id}`}>{u.title} · <b>{u.option}</b></Link>
                 <span className="font-mono text-xs text-muted">{u.code}</span>
                 <span className="text-muted">{UNIT_STATUS[u.status] ?? u.status}</span>
@@ -90,11 +91,12 @@ export default async function AssignContractPage({ params, searchParams }: { par
       {source === "magazyn" ? (
         <div className="card overflow-x-auto">
           <table className="table mtable mtable-flow">
-            <thead><tr><th>Produkt</th><th>Rozmiar</th><th>Kod</th><th>Status</th><th>Lokalizacja</th><th>Data</th><th /></tr></thead>
+            <thead><tr><th /><th>Produkt</th><th>Rozmiar</th><th>Kod</th><th>Status</th><th>Lokalizacja</th><th>Data</th><th /></tr></thead>
             <tbody>
-              {!units.length && <tr><td colSpan={7} className="py-8 text-center text-muted">Brak sztuk bez umowy{q ? " dla tego wyszukiwania" : ""}.</td></tr>}
+              {!units.length && <tr><td colSpan={8} className="py-8 text-center text-muted">Brak sztuk bez umowy{q ? " dla tego wyszukiwania" : ""}.</td></tr>}
               {units.map((u) => (
                 <tr key={u.id}>
+                  <td className="w-12"><Thumb src={u.image_url} alt="" /></td>
                   <td>{u.title}</td>
                   <td className="font-medium">{u.option}</td>
                   <td className="font-mono text-xs">{u.code}{u.identifier && <span className="block text-muted">{u.identifier}</span>}</td>

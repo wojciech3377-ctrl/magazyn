@@ -213,10 +213,17 @@ export async function attachUnits(formData: FormData) {
   } catch (e) {
     redirect(`/umowy/${id}?blad=${encodeURIComponent(errorMessage(e))}`);
   }
+  // Nic nie przypięte, a wpisano nazwę (nie same kody / IMEI) → wyszukiwanie sztuk po nazwie na stronie umowy.
+  const typed = String(formData.get("units") ?? "").trim();
+  if (!r.attached && typed && !/^[\s,;]*(S\d{3,}|\d{6,})([\s,;]+(S\d{3,}|\d{6,}))*[\s,;]*$/i.test(typed)) {
+    redirect(`/umowy/${id}?szukaj=${encodeURIComponent(typed.slice(0, 100))}#dopnij`);
+  }
   revalidatePath(`/umowy/${id}`);
   const pm = priceMessage(r.price);
   const text = [`Przypięto ${r.attached} szt.`, r.missing.length ? `Nie znaleziono: ${r.missing.join(", ")}.` : "", pm].filter(Boolean).join(" ");
-  redirect(`/umowy/${id}?${r.missing.length || r.price.problems.length ? "blad" : "ok"}=${encodeURIComponent(text)}`);
+  // Dopięte z wyników wyszukiwania – wyniki zostają (można dopiąć kolejną sztukę).
+  const szukaj = String(formData.get("szukaj") ?? "").trim().slice(0, 100);
+  redirect(`/umowy/${id}?${szukaj ? `szukaj=${encodeURIComponent(szukaj)}&` : ""}${r.missing.length || r.price.problems.length ? "blad" : "ok"}=${encodeURIComponent(text)}${szukaj ? "#dopnij" : ""}`);
 }
 
 /** Odpięcie umowy od rzeczy. Gdy przy umowie nie zostaje żadna rzecz, wraca do niewykorzystanych umów. */

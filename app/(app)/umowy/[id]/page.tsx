@@ -3,7 +3,9 @@ import { SearchInput } from "@/components/SearchInput";
 import { notFound } from "next/navigation";
 import { requireProfile } from "@/lib/auth";
 import { CONTRACT_TYPE, dateOnly, dateTime, money } from "@/lib/labels";
-import { Field, Notice, PageHeader, StatusBadge } from "@/components/ui";
+import { Field, Notice, PageHeader, StatusBadge, Thumb } from "@/components/ui";
+import { searchWords, wordsOr } from "@/lib/search";
+import { UNIT_STATUS } from "@/lib/labels";
 import { SubmitButton } from "@/components/SubmitButton";
 import { acceptContract, addContractItem, removeContractItem, attachUnits, decideConsignorInvoice, cancelContract, deleteContract, detachUnit, markPaid, rejectContract, replaceFile, retryFinalize, sendSigningEmail, setContractPayment, setTemplateCurrency, updateContractMeta } from "../actions";
 import { appUrl } from "@/lib/app-url";
@@ -29,9 +31,21 @@ export default async function ContractPage({ params, searchParams }: { params: P
   const stockLocations = (locRows ?? []).map((l) => ({ id: l.id as string, label: `${(l.store as unknown as { name: string } | null)?.name ?? ""} · ${l.name}` }));
   const { data: units } = await supabase
     .from("units")
-    .select("id, code, status, identifier, variant:variants(option, product:products(id, title))")
+    .select("id, code, status, identifier, variant:variants(option, product:products(id, title, image_url))")
     .eq("contract_id", id)
     .order("number");
+  // „Dopnij sztuki” po nazwie: sztuki własne bez umowy pasujące do wyszukiwania (ze zdjęciem).
+  const szukaj = (sp.szukaj ?? "").replace(/[%,()*\\]/g, " ").trim().slice(0, 100);
+  const found: { id: string; code: string; title: string; option: string; status: string; identifier: string | null; location_name: string; image_url: string | null }[] = [];
+  if (szukaj && !c.template) {
+    const ex = wordsOr(["title", "code", "identifier", "style_sku", "base_sku", "option"], searchWords(szukaj));
+    if (ex) {
+      const { data } = await supabase.from("units_list").select("id, code, title, option, status, identifier, location_name, image_url")
+        .is("contract_id", null).eq("owner_type", "own").in("status", ["in_stock", "reserved", "in_transit", "sold", "shipped"])
+        .or(ex).order("received_at", { ascending: false }).limit(30);
+      found.push(...((data ?? []) as typeof found));
+    }
+  }
   // Sztuki „nieprzypisane do Shopify” (select * – działa także bez SQL 63).
   const prodOf = (x: { variant: unknown }) => (x.variant as { product?: { id?: string } } | null)?.product?.id ?? "";
   const pids = [...new Set((units ?? []).map(prodOf).filter(Boolean))];
@@ -182,14 +196,15 @@ export default async function ContractPage({ params, searchParams }: { params: P
               {c.template && <p className="text-sm text-muted">Sztuki utworzone z tej umowy – ich status (w drodze, na stanie, sprzedana).</p>}
             </div>
             <table className="table mtable mtable-flow">
-              <thead><tr><th>Kod</th><th>Produkt</th><th>Rozmiar</th><th>Status</th><th /></tr></thead>
+              <thead><tr><th>Kod</th><th /><th>Produkt</th><th>Rozmiar</th><th>Status</th><th /></tr></thead>
               <tbody>
-                {!units?.length && <tr><td colSpan={5} className="py-6 text-center text-muted">Brak przypiętych sztuk.</td></tr>}
+                {!units?.length && <tr><td colSpan={6} className="py-6 text-center text-muted">Brak przypiętych sztuk.</td></tr>}
                 {units?.map((u) => {
-                  const v = u.variant as unknown as { option: string; product: { title: string } };
+                  const v = u.variant as unknown as { option: string; product: { title: string; image_url: string | null } };
                   return (
                     <tr key={u.id}>
                       <td className="font-mono text-xs"><Link className="text-accent hover:underline" href={`/magazyn/${u.id}`}>{u.code}</Link>{u.identifier && <span className="block text-muted">{u.identifier}</span>}</td>
+                      <td className="w-12"><Thumb src={v.product.image_url} alt="" /></td>
                       <td>{v.product.title}</td>
                       <td className="font-medium">{v.option}</td>
                       <td><StatusBadge status={u.status} /></td>
@@ -205,11 +220,38 @@ export default async function ContractPage({ params, searchParams }: { params: P
                 })}
               </tbody>
             </table>
-            {!c.template && <form action={attachUnits} className="flex flex-wrap gap-2 border-t border-line p-4">
+            {!c.template && <form id="dopnij" action={attachUnits} className="flex flex-wrap gap-2 border-t border-line p-4">
               <input type="hidden" name="id" value={c.id} />
-              <SearchInput noIcon wrapperClassName="flex-1" className="font-mono" type="text" name="units" placeholder="Dopnij sztuki: kody S000123 lub IMEI" aria-label="Kody sztuk" />
-              <SubmitButton className="btn-secondary">Dopnij</SubmitButton>
+              <SearchInput noIcon wrapperClassName="flex-1" type="text" name="units" defaultValue={szukaj} placeholder="Dopnij sztuki: nazwa, kod S000123 lub IMEI" aria-label="Nazwa albo kody sztuk" />
+              <SubmitButton className="btn-secondary">Szukaj / dopnij</SubmitButton>
             </form>}
+            {!c.template && szukaj && (
+              <div className="border-t border-line">
+                <div className="flex items-center justify-between px-4 pt-3 text-sm">
+                  <span className="font-medium">Sztuki bez umowy dla „{szukaj}” ({found.length}{found.length === 30 ? "+" : ""})</span>
+                  <Link className="text-muted hover:underline" href={`/umowy/${c.id}`}>wyczyść</Link>
+                </div>
+                {!found.length ? <p className="p-4 text-sm text-muted">Nic nie znaleziono – sprawdź nazwę albo wpisz kod sztuki.</p> : (
+                  <ul className="divide-y divide-line">
+                    {found.map((u) => (
+                      <li key={u.id} className="flex flex-wrap items-center gap-3 px-4 py-2 text-sm">
+                        <Thumb src={u.image_url} alt="" />
+                        <span className="min-w-0 flex-1">
+                          <Link className="text-accent hover:underline" href={`/magazyn/${u.id}`}>{u.title}</Link> · <b>{u.option}</b>
+                          <span className="block text-xs text-muted"><span className="font-mono">{u.code}</span>{u.identifier ? ` · ${u.identifier}` : ""} · {UNIT_STATUS[u.status] ?? u.status} · {u.location_name}</span>
+                        </span>
+                        <form action={attachUnits}>
+                          <input type="hidden" name="id" value={c.id} />
+                          <input type="hidden" name="units" value={u.code} />
+                          <input type="hidden" name="szukaj" value={szukaj} />
+                          <SubmitButton className="btn-secondary px-2.5 py-1 text-xs" pendingText="…">Dopnij</SubmitButton>
+                        </form>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
           </section>}
         </div>
 
