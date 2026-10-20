@@ -1,4 +1,5 @@
 import "server-only";
+import { PURCHASE_FORM } from "@/lib/labels";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export type HistoryItem = { at: string; who: string | null; text: string; contractId: string; label: string | null; filePath?: string | null; deleted?: boolean };
@@ -17,7 +18,10 @@ function val(v: unknown): string {
   if (v === null || v === undefined || v === "") return "–";
   if (Array.isArray(v)) return `${v.length} poz.`;
   if (typeof v === "object") return "zmienione";
+  if (v === true || v === "true") return "tak";
+  if (v === false || v === "false") return "nie";
   const s = String(v);
+  if (PURCHASE_FORM[s]) return PURCHASE_FORM[s];
   return /^\d{4}-\d{2}-\d{2}T/.test(s) ? s.slice(0, 10) : s.slice(0, 60);
 }
 

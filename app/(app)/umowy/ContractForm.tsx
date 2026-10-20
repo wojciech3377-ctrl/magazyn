@@ -69,7 +69,7 @@ export function ContractForm({ consignors, defaultUnits, canSeePrices, returnTo 
           <label className="label" htmlFor="amount">Kwota</label>
           <input className="input" id="amount" name="amount" inputMode="decimal" />
           <label className="mt-1.5 flex items-start gap-2 text-xs text-muted">
-            <input type="checkbox" name="amount_per_item" value="1" className="mt-0.5" />
+            <input type="checkbox" name="amount_per_item" value="1" defaultChecked className="mt-0.5" />
             <span>Kwota za <b>każdą rzecz</b> (np. faktura: każda przypięta rzecz kosztowała tyle samo). Bez zaznaczenia – kwota za całą umowę.</span>
           </label>
         </div>
