@@ -36,12 +36,17 @@ type Row = {
   items: { title: string; option: string; qty?: number }[] | null;
 };
 
-function StatePill({ c }: { c: Row }) {
+type Sold = { sold: number; total: number };
+/** Wszystkie rzeczy z umowy sprzedane (są w sprzedaży / JPK). */
+const allSold = (s: Sold | undefined) => !!s && s.total > 0 && s.sold === s.total;
+
+function StatePill({ c, sold }: { c: Row; sold?: Sold }) {
   if (c.status === "sent") return <Pill tone="amber">czeka na podpis</Pill>;
   if (c.status === "offer") return <Pill tone="blue">oferta – czeka na odpowiedź</Pill>;
   if (c.status === "signed") return <Pill tone="red">do zatwierdzenia</Pill>;
   if (c.status === "rejected") return <Pill tone="slate">odrzucona</Pill>;
   if (c.status === "cancelled") return <Pill tone="slate">anulowana</Pill>;
+  if (allSold(sold)) return <Pill tone="slate">sprzedana{sold!.total > 1 ? ` (${sold!.total} szt.)` : ""}</Pill>;
   if (c.category === "done") return <Pill tone="green">{c.template ? "opłacona" : "wgrana"}</Pill>;
   if (c.category === "in_transit") return <Pill tone="blue">w drodze ({c.units_in_transit} szt.)</Pill>;
   if (c.source === "general" && !c.units_created_at) return <Pill tone="blue">do przypisania</Pill>;
@@ -96,6 +101,18 @@ export default async function UmowyPage({ searchParams }: { searchParams: Promis
   for (const u of scanUnits ?? []) {
     const v = u.variant as unknown as { option: string; product: { title: string } };
     productsOf.get(u.contract_id as string)?.push(`${v.product.title} · ${v.option}`);
+  }
+  // Sprzedane rzeczy z umowy (sprzedana / wydana) – umowa w sprzedaży i w JPK. Wycofane i oddane komisantowi się nie liczą.
+  const { data: soldRows } = rows.length
+    ? await supabase.from("units").select("contract_id, status").in("contract_id", rows.map((r) => r.id)).not("status", "in", "(removed,consignor_returned)")
+    : { data: [] };
+  const soldOf = new Map<string, Sold>();
+  for (const u of soldRows ?? []) {
+    const k = u.contract_id as string;
+    const s = soldOf.get(k) ?? { sold: 0, total: 0 };
+    s.total++;
+    if (u.status === "sold" || u.status === "shipped") s.sold++;
+    soldOf.set(k, s);
   }
   const href = (k: string) => `/umowy${k ? `?kategoria=${k}` : ""}`;
   // Dane sprzedającego (z podpisu) do kolumn i podglądu.
@@ -186,14 +203,20 @@ export default async function UmowyPage({ searchParams }: { searchParams: Promis
             {!rows.length && <tr><td colSpan={12} className="py-10 text-center text-muted">Brak umów w tej kategorii.</td></tr>}
             {rows.map((c) => {
               const e = extra.get(c.id);
+              const sold = soldOf.get(c.id);
+              const done = allSold(sold) && !["sent", "offer", "signed", "rejected", "cancelled"].includes(c.status);
               return (
-                <tr key={c.id} className="group relative hover:bg-sky-50">
+                <tr key={c.id} className={`group relative ${done ? "bg-slate-100 text-slate-500 hover:bg-slate-200" : "hover:bg-sky-50"}`}>
                   <td className="whitespace-nowrap font-medium">
                     <Link className="text-accent after:absolute after:inset-0 after:content-[''] hover:underline" href={`/umowy/${c.id}`}>{nr(c)}</Link>
                     <ContractPreview c={c} e={e} nr={nr(c)} person={person(c)} amount={profile.can_see_prices ? amountText(c) : null} products={productsOf.get(c.id) ?? []} />
                   </td>
                   <td className="min-w-32 max-md:font-medium">{person(c)}</td>
-                  <td><StatePill c={c} /></td>
+                  <td>
+                    <StatePill c={c} sold={sold} />
+                    {sold && sold.sold > 0 && !allSold(sold) && <span className="mt-1 block text-xs text-muted">sprzedane {sold.sold} z {sold.total}</span>}
+                    {done && toPay(c) && <span className="mt-1 block text-xs font-medium text-warn">do opłaty</span>}
+                  </td>
                   {profile.can_see_prices && <td className="whitespace-nowrap text-right tabular-nums">{toPay(c) ? <b>{amountText(c)}</b> : "–"}</td>}
                   <td className="max-w-40 break-all text-xs max-md:hidden">{e?.payment_method === "cash" ? "gotówka" : e?.seller_bank_account ? e.seller_bank_account : e?.payment_method === "transfer" ? <span className="text-warn">przelew – brak konta</span> : "–"}</td>
                   <td className="whitespace-nowrap">
