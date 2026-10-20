@@ -252,7 +252,7 @@ export async function TransitTab() {
             <b><Link className="text-accent hover:underline" href={`/umowy/${cid}`}>Umowa NR{us[0].contract.number}</Link> · {us[0].contract.seller_name ?? us[0].contract.counterparty}</b>
             <span className="text-sm text-muted">{us.length} szt. w drodze{us[0].location ? ` · do ${us[0].location.name}` : ""}</span>
           </div>
-          <ReceiveChecklist action={receiveContractUnits} hidden={{ contract_id: cid }}
+          <ReceiveChecklist action={receiveContractUnits} hidden={{ contract_id: cid }} noUnitOption
             units={us.map((u) => ({ id: u.id, title: u.variant.product.title, option: u.variant.option, code: u.code, productId: u.variant.product.id, storeId: u.location?.store_id }))} />
         </div>
       ))}

@@ -171,6 +171,22 @@ export async function receiveContractUnits(fd: FormData) {
   const picked = new Set(fd.getAll("unit").map(String));
   const ids = (units ?? []).map((u) => u.id as string).filter((id) => picked.has(id));
   if (!ids.length) back("w-drodze", "Zaznacz sztuki, które dotarły (albo ta umowa nie ma już towaru „w drodze”).", false);
+  if (fd.get("no_unit")) {
+    // Rzecz już jest w Magazynie (np. dodana w Shopify): sztuki „w drodze” z tej umowy znikają, umowa (albo jej
+    // wydzielone części – po jednej na rzecz) trafia do niewykorzystanych – przypina się ją na karcie sztuki.
+    const admin = createAdminClient();
+    const { data: sold } = await admin.from("sales").select("unit_id").in("unit_id", ids);
+    const skip = new Set((sold ?? []).map((x) => x.unit_id as string));
+    const del = ids.filter((x) => !skip.has(x));
+    const { data: gone, error: dErr } = del.length
+      ? await admin.from("units").delete().in("id", del).eq("status", "in_transit").select("id")
+      : { data: [], error: null };
+    if (dErr) back("w-drodze", dErr.message, false);
+    revalidatePath("/dostawa");
+    revalidatePath("/magazyn");
+    revalidatePath("/umowy");
+    back("w-drodze", `Bez nowych sztuk: ${gone?.length ?? 0} poz. – umowa jest w Umowach → „Bez rzeczy (niewykorzystane)”. Przypnij ją na karcie sztuki w Magazynie.${skip.size ? ` ${skip.size} szt. pod zamówienie pominięto.` : ""}`, true);
+  }
   const { data: received, error } = await supabase.rpc("receive_in_transit", { p_unit_ids: ids });
   if (error) back("w-drodze", error.message, false);
   const rows = (received ?? []) as { unit_id: string; variant_id: string; location_id: string; to_status: string }[];

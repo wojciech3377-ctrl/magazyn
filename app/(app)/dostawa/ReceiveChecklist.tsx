@@ -9,13 +9,16 @@ export type ChecklistUnit = { id: string; title: string; option: string; code: s
  * Lista rzeczy w drodze z zaznaczaniem (domyślnie wszystkie) i połączonymi przyciskami dla zaznaczonych:
  * Przyjmij na magazyn · Drukuj etykietę magazynową · Drukuj metkę sklepową.
  */
-export function ReceiveChecklist({ units, action, hidden = {}, receiveLabel = "Przyjmij na magazyn" }: {
+export function ReceiveChecklist({ units, action, hidden = {}, receiveLabel = "Przyjmij na magazyn", noUnitOption = false }: {
   units: ChecklistUnit[];
   action: (fd: FormData) => Promise<void>;
   hidden?: Record<string, string>;
   receiveLabel?: string;
+  /** „Nie dodawaj jako przedmiot w magazynie” – sztuki w drodze znikają, umowa idzie do niewykorzystanych. */
+  noUnitOption?: boolean;
 }) {
   const [sel, setSel] = useState<Set<string>>(new Set(units.map((u) => u.id)));
+  const [noUnit, setNoUnit] = useState(false);
   const picked = units.filter((u) => sel.has(u.id));
   const n = picked.length;
   const toggle = (id: string) => setSel((s) => { const x = new Set(s); if (x.has(id)) x.delete(id); else x.add(id); return x; });
@@ -38,9 +41,19 @@ export function ReceiveChecklist({ units, action, hidden = {}, receiveLabel = "P
           </li>
         ))}
       </ul>
-      <PrintGroup units={picked}>
-        <SubmitButton className="btn rounded-none shadow-none" pendingText="Przyjmuję…" disabled={!n}>{receiveLabel} ({n})</SubmitButton>
-      </PrintGroup>
+      {noUnitOption && (
+        <label className="flex items-start gap-2 text-sm">
+          <input type="checkbox" name="no_unit" value="1" checked={noUnit} onChange={(e) => setNoUnit(e.target.checked)} className="mt-0.5 h-4 w-4" />
+          <span><b>Nie dodawaj jako przedmiot w magazynie</b> <span className="text-muted">– rzecz już jest w Magazynie (np. dodana w Shopify); zaznaczone pozycje nie tworzą nowej sztuki, a umowa trafia do niewykorzystanych – przypniesz ją na karcie sztuki.</span></span>
+        </label>
+      )}
+      {noUnit ? (
+        <SubmitButton className="btn" pendingText="Zapisuję…" disabled={!n}>Bez nowej sztuki – umowa do niewykorzystanych ({n})</SubmitButton>
+      ) : (
+        <PrintGroup units={picked}>
+          <SubmitButton className="btn rounded-none shadow-none" pendingText="Przyjmuję…" disabled={!n}>{receiveLabel} ({n})</SubmitButton>
+        </PrintGroup>
+      )}
     </form>
   );
 }

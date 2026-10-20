@@ -182,7 +182,10 @@ export async function reconcileFromShopify(db: SupabaseClient, opts: { force?: b
  * sztuki od razu; przy pozostałych nadwyżka czeka na potwierdzenie przy odczycie co 15 min.
  */
 export async function reconcileShopifyLevel(db: SupabaseClient, storeId: string, inventoryItemId: string, locationId: string, available: number) {
-  if ((await getStockMaster(db)) !== "shopify" || available <= 0) {
+  const master = await getStockMaster(db);
+  // Aplikacja główna: tylko zupełnie nowy produkt (rozmiar bez żadnej sztuki w historii) dostaje sztuki od razu.
+  if (master === "app" && available > 0) return seedNewVariantLevel(db, storeId, inventoryItemId, locationId, available);
+  if (master !== "shopify" || available <= 0) {
     // Sprzedane ponad stan (−1, −2…) – w Shopify od razu 0.
     if (available < 0) {
       const { data: st } = await db.from("stores").select("code, shopify_domain").eq("id", storeId).maybeSingle();
@@ -208,9 +211,9 @@ export async function reconcileShopifyLevel(db: SupabaseClient, storeId: string,
 type Change = { inventoryItemId: string; locationId: string; quantity: number; changeFromQuantity: number };
 
 /** Różnice, gdyby aplikacja była główna: ile pozycji w Shopify trzeba zmienić (bez zapisu). */
-export async function planPushToShopify(db: SupabaseClient, onlyVariants?: Set<string>) {
+export async function planPushToShopify(db: SupabaseClient, onlyVariants?: Set<string>, opts: { seed?: boolean } = {}) {
   const { stores, locs } = await storesAndLocations(db);
-  const plan: { store: Store; changes: Change[]; note?: string }[] = [];
+  const plan: { store: Store; changes: Change[]; note?: string; seeded?: number; seedError?: string }[] = [];
   for (const s of stores) {
     const mapped = locs.filter((l) => l.store_id === s.id && l.active && l.shopify_location_id);
     if (!mapped.length) { plan.push({ store: s, changes: [], note: "brak lokalizacji Shopify przy lokalizacjach aplikacji" }); continue; }
@@ -230,12 +233,52 @@ export async function planPushToShopify(db: SupabaseClient, onlyVariants?: Set<s
       : { data: [] };
     const hold = new Set((recentLinks ?? []).map((l) => l.variant_id as string));
     const changes: Change[] = [];
+    // Nowe rozmiary, którym nie udało się dodać sztuk – nie zerujemy ich w Shopify (lepiej sprzedać niż ukryć).
+    const protect = new Set<string>();
+    let seeded = 0;
+    let seedError: string | undefined;
     for (const shopLoc of new Set(mapped.map((l) => l.shopify_location_id!))) {
       const levels = await readLevels(s.shopify_domain, s.code, shopLoc);
       // Duplikaty (dwa produkty Shopify na ten sam rozmiar): stan dostaje jeden, pozostałe 0 – bez sprzedaży dwa razy tej samej sztuki.
       const owner = new Map<string, string>();
       for (const l of [...links].sort((a, b) => a.shopify_inventory_item_id.localeCompare(b.shopify_inventory_item_id))) {
         if (levels.has(l.shopify_inventory_item_id) && !owner.has(l.variant_id)) owner.set(l.variant_id, l.shopify_inventory_item_id);
+      }
+      // Nowy produkt dodany w Shopify (rozmiar, który nigdy nie miał sztuk w aplikacji) ze stanem > 0:
+      // zamiast zerować stan w Shopify – sztuki w Magazynie (własne, bez umowy; umowę przypniesz później).
+      if (opts.seed) {
+        const group = mapped.filter((l) => l.shopify_location_id === shopLoc);
+        const cand = [...owner.entries()]
+          .map(([variant_id, item]) => ({ variant_id, qty: levels.get(item) ?? 0 }))
+          .filter((c) => c.qty > 0 && !(want.get(`${c.variant_id}|${shopLoc}`) ?? 0) && (!onlyVariants || onlyVariants.has(c.variant_id)));
+        const fresh: typeof cand = [];
+        for (let i = 0; i < cand.length; i += 200) {
+          const part = cand.slice(i, i + 200);
+          const { data: had } = await db.from("units").select("variant_id").in("variant_id", part.map((c) => c.variant_id));
+          const hadSet = new Set((had ?? []).map((u) => u.variant_id as string));
+          fresh.push(...part.filter((c) => !hadSet.has(c.variant_id)));
+        }
+        if (fresh.length) {
+          const { data, error } = await db.rpc("reconcile_stock", {
+            p_rows: fresh.map((c) => ({ variant_id: c.variant_id, location_id: group[0].id, qty: c.qty, count_locations: group.map((g) => g.id) })),
+            p_limit: 500, p_source: `Shopify ${s.name} (nowy produkt)`, p_scope: null, p_confirm_minutes: 0, p_remove: false,
+          });
+          fresh.forEach((c) => protect.add(c.variant_id));
+          if (error) seedError = error.message;
+          else {
+            seeded += Number((data as { created?: number } | null)?.created ?? 0);
+            // Stan aplikacji po dodaniu – żeby zapis do Shopify go nie wyzerował.
+            const ids = fresh.map((c) => c.variant_id);
+            for (let i = 0; i < ids.length; i += 200) {
+              const { data: now } = await db.from("units").select("variant_id, location_id").in("variant_id", ids.slice(i, i + 200)).eq("status", "in_stock");
+              for (const u of now ?? []) {
+                const key = `${u.variant_id}|${shopLocOf.get(u.location_id as string)}`;
+                if (shopLocOf.has(u.location_id as string)) want.set(key, (want.get(key) ?? 0) + 1);
+                protect.delete(u.variant_id as string);
+              }
+            }
+          }
+        }
       }
       for (const l of links) {
         if (onlyVariants && !onlyVariants.has(l.variant_id)) continue;
@@ -244,20 +287,22 @@ export async function planPushToShopify(db: SupabaseClient, onlyVariants?: Set<s
         const current = levels.get(l.shopify_inventory_item_id)!;
         const target = owner.get(l.variant_id) === l.shopify_inventory_item_id ? want.get(`${l.variant_id}|${shopLoc}`) ?? 0 : 0;
         if (target > current && hold.has(l.variant_id)) continue;
+        if (protect.has(l.variant_id)) continue;
         if (current !== target) changes.push({ inventoryItemId: l.shopify_inventory_item_id, locationId: shopLoc, quantity: target, changeFromQuantity: current });
       }
     }
-    plan.push({ store: s, changes });
+    plan.push({ store: s, changes, ...(seeded ? { seeded } : {}), ...(seedError ? { seedError } : {}) });
   }
   return plan;
 }
 
 /** Aplikacja jest główna: zapis stanów do Shopify (porcjami, z kontrolą, że stan w Shopify się w międzyczasie nie zmienił). */
 export async function pushStockToShopify(db: SupabaseClient, maxChanges = 500, onlyVariants?: Set<string>) {
-  const plan = await planPushToShopify(db, onlyVariants);
+  const plan = await planPushToShopify(db, onlyVariants, { seed: true });
   const results: Record<string, unknown> = {};
   for (const p of plan) {
     if (p.note) { results[p.store.name] = p.note; continue; }
+    const seededInfo = { ...(p.seeded ? { nowe_ze_shopify: p.seeded } : {}), ...(p.seedError ? { blad_nowych: p.seedError } : {}) };
     const todo = p.changes.slice(0, maxChanges);
     let done = 0;
     const errors: string[] = [];
@@ -278,7 +323,7 @@ export async function pushStockToShopify(db: SupabaseClient, maxChanges = 500, o
         else done++;
       }
     }
-    results[p.store.name] = { changed: done, left: p.changes.length - todo.length, ...(errors.length ? { failed: errors.length, errors: [...new Set(errors)].slice(0, 3) } : {}) };
+    results[p.store.name] = { changed: done, left: p.changes.length - todo.length, ...seededInfo, ...(errors.length ? { failed: errors.length, errors: [...new Set(errors)].slice(0, 3) } : {}) };
   }
   return results;
 }
@@ -415,4 +460,23 @@ export async function reconcileRecentFromShopify(db: SupabaseClient) {
     }
   }
   return out;
+}
+
+/** Aplikacja główna, webhook stanu: nowy produkt ze Shopify (bez sztuk w historii) → sztuki w Magazynie od razu. */
+async function seedNewVariantLevel(db: SupabaseClient, storeId: string, inventoryItemId: string, locationId: string, available: number) {
+  const [{ data: links }, { data: group }] = await Promise.all([
+    db.from("variant_store_links").select("variant_id").eq("store_id", storeId).eq("shopify_inventory_item_id", inventoryItemId).eq("inventory_tracked", true).limit(1),
+    db.from("locations").select("id").eq("store_id", storeId).eq("active", true).eq("shopify_location_id", locationId).order("created_at"),
+  ]);
+  const link = links?.[0];
+  if (!link || !group?.length) return null;
+  const { count } = await db.from("units").select("id", { count: "exact", head: true }).eq("variant_id", link.variant_id);
+  if (count) return null;
+  const { data: store } = await db.from("stores").select("name").eq("id", storeId).maybeSingle();
+  const { data, error } = await db.rpc("reconcile_stock", {
+    p_rows: [{ variant_id: link.variant_id, location_id: group[0].id, qty: available, count_locations: group.map((g) => g.id) }],
+    p_limit: 100, p_source: `Shopify ${store?.name ?? ""} (nowy produkt)`.trim(), p_scope: null, p_confirm_minutes: 0, p_remove: false,
+  });
+  if (error) throw error;
+  return data;
 }
