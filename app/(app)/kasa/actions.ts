@@ -376,7 +376,11 @@ export async function finishPosOrder(_: unknown, formData: FormData): Promise<{ 
         await admin.from("pos_orders").update({ note: [note, `Wysyłka – zamówienie ${row.number}`].filter(Boolean).join(" · ") }).eq("id", orderId);
         msg = `Paragon ${row.number} (PDF) i zamówienie do wysyłki w Sprzedaż → Zamówienia – poza JPK.${r.freedContracts ? ` Umowy wróciły do niewykorzystanych: ${r.freedContracts}.` : ""}`;
       } else {
-        msg = `Paragon ${row.number} (PDF, bez paragonu fiskalnego) – poza JPK.`;
+        // Poza JPK – umowy sprzedanych sztuk wracają do niewykorzystanych (jak przy wysyłce z paragonu).
+        const { data: its } = await admin.from("pos_order_items").select("unit_id").eq("order_id", orderId).not("unit_id", "is", null);
+        const { releaseContracts } = await import("@/lib/contracts/release");
+        const freed = await releaseContracts(admin, (its ?? []).map((i) => i.unit_id as string), `paragon PDF ${row.number} (poza JPK) – umowa wraca do niewykorzystanych`);
+        msg = `Paragon ${row.number} (PDF, bez paragonu fiskalnego) – poza JPK.${freed ? ` Umowy wróciły do niewykorzystanych: ${freed}.` : ""}`;
       }
     } catch (e) {
       redirect(`/kasa/${orderId}?blad=${encodeURIComponent(`Sprzedaż zapisana, ale paragon PDF nie powstał: ${errorMessage(e)}`)}`);
