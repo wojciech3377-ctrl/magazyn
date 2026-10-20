@@ -22,9 +22,9 @@ async function pickedUnits(fd: FormData) {
   raw = raw.filter((r) => UUID.test(String(r.unit_id))).slice(0, 100);
   if (!raw.length) back("blad", "Zaznacz rzeczy w drodze.");
   const db = createAdminClient();
-  const { data } = await db.from("units").select("id, code, identifier, variant_id, location_id, purchase_price, contract_id, status, variant:variants(option, product:products(title))")
+  const { data } = await db.from("units").select("*, variant:variants(option, product:products(title))")
     .in("id", raw.map((r) => r.unit_id));
-  type U = { id: string; code: string; identifier: string | null; variant_id: string; location_id: string; purchase_price: number | null; contract_id: string | null; status: string; variant: { option: string; product: { title: string } } };
+  type U = { id: string; code: string; identifier: string | null; variant_id: string; location_id: string; purchase_price: number | null; contract_id: string | null; status: string; supplier?: string | null; variant: { option: string; product: { title: string } } };
   const units = ((data ?? []) as unknown as U[]).filter((u) => !u.contract_id);
   if (!units.length) back("blad", "Te rzeczy mają już umowę albo fakturę.");
   const price = (u: U) => {
@@ -50,7 +50,7 @@ export async function transitContract(fd: FormData) {
   const currency = ["PLN", "EUR"].includes(String(fd.get("currency"))) ? String(fd.get("currency")) : null;
   const token = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
   const { data: c, error } = await supabase.from("contracts").insert({
-    type: "purchase", template: "purchase_v1", source: "link", status: "sent", counterparty: "(czeka na podpis)",
+    type: "purchase", template: "purchase_v1", source: "link", status: "sent", counterparty: units.find((u) => u.supplier)?.supplier ?? "(czeka na podpis)",
     amount: contractTotal(items), payment_days: company.payment_days ?? 7, items, currency,
     location_id: units[0].location_id,
     seller_email: String(fd.get("seller_email") ?? "").trim() || null,

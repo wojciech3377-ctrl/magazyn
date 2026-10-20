@@ -171,6 +171,8 @@ export async function updateUnit(formData: FormData) {
   }
 
   const { data: before } = await supabase.from("units").select("*").eq("id", id).single();
+  // Od kogo (SQL 71) – pole jest w formularzu tylko po migracji.
+  if (formData.has("supplier")) patch.supplier = String(formData.get("supplier") ?? "").trim().slice(0, 120) || null;
   const { error } = await supabase.from("units").update(patch).eq("id", id);
   if (error) back(path, error.message, "error");
   // Waluta kwot sztuki bez umowy (SQL 67; bez niej – pomijane).
@@ -350,7 +352,8 @@ export async function assignUnitToShopify(formData: FormData) {
   const { supabase } = await requireSection("magazyn", "dostawa");
   const id = String(formData.get("id") ?? "");
   const variant = String(formData.get("variant_id") ?? "");
-  const go = (k: "ok" | "blad", m: string) => redirect(`/magazyn/${id}?${k}=${encodeURIComponent(m)}`);
+  const backTo = String(formData.get("back") ?? "") === "/do-zrobienia" ? "/do-zrobienia" : `/magazyn/${id}`;
+  const go = (k: "ok" | "blad", m: string) => redirect(`${backTo}?${k}=${encodeURIComponent(m)}`);
   if (!/^[0-9a-f-]{36}$/.test(variant)) return go("blad", "Wybierz produkt i rozmiar z katalogu.");
   const pairs: { unit: string; variant: string }[] = [{ unit: id, variant }];
   const skipped: string[] = [];
@@ -393,10 +396,19 @@ export async function assignUnitToShopify(formData: FormData) {
       changes.set(key, ch);
     }
   }
-  const results = changes.size ? await adjustStock(supabase, [...changes.values()]) : [];
+  // Aplikacja główna: stan w Shopify = liczba sztuk w aplikacji (produkt mógł już dostać stan ręcznie w Shopify –
+  // bez dodawania +1 na wierzch). Shopify główny: +1 za każdą sztukę na stanie.
+  const { getStockMaster, pushStockToShopify } = await import("@/lib/sync/shopify-stock");
+  let results: { ok: boolean; message: string }[] = [];
+  if (changes.size && (await getStockMaster(supabase)) === "app") {
+    const r = await pushStockToShopify(createAdminClient(), 500, new Set([...changes.values()].map((c) => c.variantId))).catch((e) => ({ błąd: errorMessage(e) }));
+    const errs = "błąd" in r ? [String(r.błąd)] : Object.values(r as Record<string, unknown>).flatMap((x) => (x && typeof x === "object" ? (x as { errors?: string[] }).errors ?? [] : []));
+    results = errs.length ? errs.map((m) => ({ ok: false, message: m })) : [{ ok: true, message: "" }];
+  } else if (changes.size) results = await adjustStock(supabase, [...changes.values()]);
   const plus = results.filter((r) => r.ok).length;
   const bad = results.filter((r) => !r.ok).map((r) => r.message);
   revalidatePath("/magazyn");
+  revalidatePath("/do-zrobienia");
   const msg = [
     done > 1 ? `Przypisano do produktu z Shopify ${done} szt.` : "Sztuka przypisana do produktu z Shopify.",
     plus ? "Stan w Shopify zwiększony." : "",

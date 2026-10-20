@@ -7,7 +7,7 @@ export type ChecklistUnit = { id: string; title: string; option: string; code: s
 
 /**
  * Lista rzeczy w drodze z zaznaczaniem (domyślnie wszystkie) i połączonymi przyciskami dla zaznaczonych:
- * Przyjmij na magazyn · Drukuj etykietę magazynową · Drukuj metkę sklepową.
+ * Przyjmij na magazyn · Drukuj metkę magazynową · Drukuj metkę sklepową.
  */
 export function ReceiveChecklist({ units, action, hidden = {}, receiveLabel = "Przyjmij na magazyn", noUnitOption = false }: {
   units: ChecklistUnit[];
@@ -59,8 +59,8 @@ export function ReceiveChecklist({ units, action, hidden = {}, receiveLabel = "P
 }
 
 /**
- * Połączone przyciski dla zaznaczonych sztuk: [akcja] · etykieta magazynowa (jak „Drukuj etykietę” w Magazynie)
- * · metka sklepowa (jak „Stan produktu + metka”: jedna metka na produkt z kodem PR…, ceny ze sklepu sztuki).
+ * Połączone przyciski dla zaznaczonych sztuk: [akcja] · metka magazynowa (jak „Wydrukuj metki” w Magazynie – „Metki sklepowe”,
+ * jedna na sztukę) · metka sklepowa (jak „Stan produktu + metka”: jedna metka na produkt z kodem PR…, ceny ze sklepu sztuki).
  */
 export function PrintGroup({ units, children, back = "/dostawa?zakladka=w-drodze" }: { units: { id: string; productId?: string | null; storeId?: string | null }[]; children?: React.ReactNode; back?: string }) {
   const ids = units.map((u) => u.id).join(",");
@@ -78,7 +78,7 @@ export function PrintGroup({ units, children, back = "/dostawa?zakladka=w-drodze
   return (
     <div className="flex w-full flex-col overflow-hidden rounded-lg border border-line shadow-sm *:w-full sm:inline-flex sm:w-auto sm:flex-row sm:*:w-auto">
       {children}
-      {link(`/etykiety?ids=${ids}`, "Drukuj etykietę magazynową", units.length)}
+      {link(`/metka?ids=${ids}`, "Drukuj metkę magazynową", units.length)}
       {link(tagHref, "Drukuj metkę sklepową", store ? products.length : 0)}
     </div>
   );

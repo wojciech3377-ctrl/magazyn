@@ -191,6 +191,10 @@ export function DeliveryForm({
             <label className="label" htmlFor="shelf">Regał / półka (opcjonalnie)</label>
             <input className="input" id="shelf" name="shelf" />
           </div>
+          <div>
+            <label className="label" htmlFor="supplier">Od kogo (sprzedający / dostawca, opcjonalnie)</label>
+            <input className="input" id="supplier" name="supplier" maxLength={120} placeholder="np. Jan Kowalski albo firma" />
+          </div>
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" name="in_transit" checked={inTransit} onChange={(e) => setInTransit(e.target.checked)} className="h-4 w-4" />
             Towar jeszcze w drodze (nie podnoś stanu w Shopify)

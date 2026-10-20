@@ -213,7 +213,7 @@ type Change = { inventoryItemId: string; locationId: string; quantity: number; c
 /** Różnice, gdyby aplikacja była główna: ile pozycji w Shopify trzeba zmienić (bez zapisu). */
 export async function planPushToShopify(db: SupabaseClient, onlyVariants?: Set<string>, opts: { seed?: boolean } = {}) {
   const { stores, locs } = await storesAndLocations(db);
-  const plan: { store: Store; changes: Change[]; note?: string; seeded?: number; seedError?: string }[] = [];
+  const plan: { store: Store; changes: Change[]; note?: string; seeded?: number; waitingMatch?: number; seedError?: string }[] = [];
   for (const s of stores) {
     const mapped = locs.filter((l) => l.store_id === s.id && l.active && l.shopify_location_id);
     if (!mapped.length) { plan.push({ store: s, changes: [], note: "brak lokalizacji Shopify przy lokalizacjach aplikacji" }); continue; }
@@ -236,6 +236,7 @@ export async function planPushToShopify(db: SupabaseClient, onlyVariants?: Set<s
     // Nowe rozmiary, którym nie udało się dodać sztuk – nie zerujemy ich w Shopify (lepiej sprzedać niż ukryć).
     const protect = new Set<string>();
     let seeded = 0;
+    let waitingMatch = 0;
     let seedError: string | undefined;
     for (const shopLoc of new Set(mapped.map((l) => l.shopify_location_id!))) {
       const levels = await readLevels(s.shopify_domain, s.code, shopLoc);
@@ -257,6 +258,24 @@ export async function planPushToShopify(db: SupabaseClient, onlyVariants?: Set<s
           const { data: had } = await db.from("units").select("variant_id").in("variant_id", part.map((c) => c.variant_id));
           const hadSet = new Set((had ?? []).map((u) => u.variant_id as string));
           fresh.push(...part.filter((c) => !hadSet.has(c.variant_id)));
+        }
+        // Pasuje do rzeczy z umowy „nieprzypisanej do Shopify” – bez nowych sztuk (podpowiedź do ręcznego zatwierdzenia
+        // w Do zrobienia / na karcie sztuki); stanu w Shopify też nie zerujemy.
+        if (fresh.length) {
+          const { unassignedRefs, matchesUnassigned } = await import("@/lib/unassigned");
+          const refs = await unassignedRefs(db);
+          if (refs.length) {
+            const names = new Map<string, { title: string; option: string }>();
+            const ids = fresh.map((c) => c.variant_id);
+            for (let i = 0; i < ids.length; i += 200) {
+              const { data } = await db.from("variants").select("id, option, product:products(title)").in("id", ids.slice(i, i + 200));
+              for (const v of data ?? []) names.set(v.id as string, { title: (v.product as unknown as { title: string } | null)?.title ?? "", option: v.option as string });
+            }
+            for (let i = fresh.length - 1; i >= 0; i--) {
+              const n = names.get(fresh[i].variant_id);
+              if (n && matchesUnassigned(refs, n.title, n.option)) { protect.add(fresh[i].variant_id); waitingMatch++; fresh.splice(i, 1); }
+            }
+          }
         }
         if (fresh.length) {
           const { data, error } = await db.rpc("reconcile_stock", {
@@ -291,7 +310,7 @@ export async function planPushToShopify(db: SupabaseClient, onlyVariants?: Set<s
         if (current !== target) changes.push({ inventoryItemId: l.shopify_inventory_item_id, locationId: shopLoc, quantity: target, changeFromQuantity: current });
       }
     }
-    plan.push({ store: s, changes, ...(seeded ? { seeded } : {}), ...(seedError ? { seedError } : {}) });
+    plan.push({ store: s, changes, ...(seeded ? { seeded } : {}), ...(waitingMatch ? { waitingMatch } : {}), ...(seedError ? { seedError } : {}) });
   }
   return plan;
 }
@@ -302,7 +321,7 @@ export async function pushStockToShopify(db: SupabaseClient, maxChanges = 500, o
   const results: Record<string, unknown> = {};
   for (const p of plan) {
     if (p.note) { results[p.store.name] = p.note; continue; }
-    const seededInfo = { ...(p.seeded ? { nowe_ze_shopify: p.seeded } : {}), ...(p.seedError ? { blad_nowych: p.seedError } : {}) };
+    const seededInfo = { ...(p.seeded ? { nowe_ze_shopify: p.seeded } : {}), ...(p.waitingMatch ? { pasuje_do_nieprzypisanych: p.waitingMatch } : {}), ...(p.seedError ? { blad_nowych: p.seedError } : {}) };
     const todo = p.changes.slice(0, maxChanges);
     let done = 0;
     const errors: string[] = [];
@@ -472,6 +491,10 @@ async function seedNewVariantLevel(db: SupabaseClient, storeId: string, inventor
   if (!link || !group?.length) return null;
   const { count } = await db.from("units").select("id", { count: "exact", head: true }).eq("variant_id", link.variant_id);
   if (count) return null;
+  // Pasuje do rzeczy z umowy „nieprzypisanej do Shopify” – czeka na ręczne zatwierdzenie (Do zrobienia).
+  const { unassignedRefs, matchesUnassigned } = await import("@/lib/unassigned");
+  const { data: v } = await db.from("variants").select("option, product:products(title)").eq("id", link.variant_id).maybeSingle();
+  if (v && matchesUnassigned(await unassignedRefs(db), (v.product as unknown as { title: string } | null)?.title ?? "", v.option as string)) return { waiting: "pasuje do rzeczy nieprzypisanej" };
   const { data: store } = await db.from("stores").select("name").eq("id", storeId).maybeSingle();
   const { data, error } = await db.rpc("reconcile_stock", {
     p_rows: [{ variant_id: link.variant_id, location_id: group[0].id, qty: available, count_locations: group.map((g) => g.id) }],

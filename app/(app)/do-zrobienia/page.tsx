@@ -2,6 +2,7 @@ import Link from "next/link";
 import { requireProfile } from "@/lib/auth";
 import { Notice, PageHeader } from "@/components/ui";
 import { AddTask, TaskItem, type Person, type Task } from "./TaskForms";
+import { UnassignedTodo } from "./Unassigned";
 
 export const metadata = { title: "Do zrobienia" };
 
@@ -52,10 +53,13 @@ export default async function TodoPage({ searchParams }: { searchParams: Promise
       <PageHeader title="Do zrobienia" sub="Zadania dla zespołu. Bez wybranych osób zadanie widzą wszyscy pracownicy." />
       {error && <div className="mb-4"><Notice tone="error">Uruchom migrację <b>0040_tasks.sql</b> w Supabase (SQL Editor) – wtedy zadziała lista zadań.</Notice></div>}
       <div className="mx-auto max-w-3xl space-y-4">
+        {sp.ok && <Notice tone="ok">{sp.ok}</Notice>}
+        {sp.blad && <Notice tone="error">{sp.blad}</Notice>}
         <AddTask people={people} />
         <nav className="segmented" aria-label="Zadania">
           {TABS.map((t) => <Link key={t.key} href={t.key ? `/do-zrobienia?widok=${t.key}` : "/do-zrobienia"} aria-current={tab === t.key ? "page" : undefined}>{t.label}</Link>)}
         </nav>
+        {tab !== "zrobione" && <UnassignedTodo />}
         {!sorted.length && !error && (
           <p className="py-12 text-center text-sm text-muted">{tab === "zrobione" ? "Nic jeszcze nie zostało zrobione." : "Nic do zrobienia. 🎉"}</p>
         )}

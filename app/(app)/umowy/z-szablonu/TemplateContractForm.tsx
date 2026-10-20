@@ -112,6 +112,10 @@ export function TemplateContractForm({
             <input className="input" id="payment_days" name="payment_days" type="number" min={0} max={60} defaultValue={paymentDays} />
           </div>
           <div>
+            <label className="label" htmlFor="supplier">Od kogo (opcjonalnie)</label>
+            <input className="input" id="supplier" name="supplier" maxLength={120} placeholder="imię i nazwisko / firma – do czasu podpisu" />
+          </div>
+          <div>
             <label className="label" htmlFor="seller_email">E-mail sprzedającego (opcjonalnie)</label>
             <input className="input" id="seller_email" name="seller_email" type="email" />
           </div>

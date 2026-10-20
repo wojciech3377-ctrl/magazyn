@@ -207,6 +207,12 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
                 <label className="label" htmlFor="shelf">Regał / półka</label>
                 <input className="input" id="shelf" name="shelf" defaultValue={u.shelf ?? ""} />
               </div>
+              {curRow && "supplier" in curRow && (
+                <div>
+                  <label className="label" htmlFor="supplier">Od kogo</label>
+                  <input className="input" id="supplier" name="supplier" maxLength={120} defaultValue={(curRow as { supplier?: string | null }).supplier ?? ""} placeholder={contract?.counterparty ?? "sprzedający / dostawca"} />
+                </div>
+              )}
               <OwnerFields ownerType={u.owner_type} consignorId={u.consignor?.id ?? null} consignors={(consignors ?? []) as { id: string; name: string }[]} />
               <div>
                 <label className="label" htmlFor="purchase_form">Forma sprzedaży</label>

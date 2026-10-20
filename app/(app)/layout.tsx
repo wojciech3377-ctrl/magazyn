@@ -65,6 +65,16 @@ async function automationIssues() {
   return n;
 }
 
+let unassignedCache: { at: number; n: number } | null = null;
+/** Sztuki „nieprzypisane do Shopify” – plakietka przy Do zrobienia. */
+async function unassignedBadge() {
+  if (unassignedCache && Date.now() - unassignedCache.at < 60_000) return unassignedCache.n;
+  const { unassignedUnitCount } = await import("@/lib/unassigned");
+  const n = await unassignedUnitCount(createAdminClient()).catch(() => 0);
+  unassignedCache = { at: Date.now(), n };
+  return n;
+}
+
 /** Otwarte zadania osoby (przypisane do niej albo do wszystkich). */
 async function myOpenTasks(db: Awaited<ReturnType<typeof requireProfile>>["supabase"], userId: string) {
   try {
@@ -79,9 +89,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const { supabase, profile } = await requireProfile();
   // Hasło startowe (nowe konto albo nadane przez administratora) – najpierw własne hasło.
   if (profile.must_change_password) redirect("/haslo");
-  const [[alerts, delivery, newOrders], todo, issues, ownConsignor] = await Promise.all([
+  const [[alerts, delivery, newOrders], todo, issues, ownConsignor, unassigned] = await Promise.all([
     badges(), myOpenTasks(supabase, profile.id), profile.role === "admin" ? automationIssues() : Promise.resolve(0),
-    isConsignorToo(profile.id),
+    isConsignorToo(profile.id), unassignedBadge(),
   ]);
   // Menu: działy z uprawnień (Faktury są zakładką w Sprzedaży), Ustawienia i Pracownicy – administrator.
   const allowed = [
@@ -97,7 +107,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         allowed={allowed}
         consignorPanel={ownConsignor}
         badges={{
-          "/do-zrobienia": [{ n: todo, tone: "orange", title: "Twoje otwarte zadania" }],
+          "/do-zrobienia": [{ n: todo, tone: "orange", title: "Twoje otwarte zadania" }, { n: unassigned, tone: "red", title: "Rzeczy nieprzypisane do Shopify" }],
           ...(can(profile, "sprzedaz") ? { "/sprzedaz": [{ n: newOrders, tone: "orange" as const, title: "Nowe zamówienia" }] } : {}),
           "/komisanci": [{ n: alerts, tone: "red", title: "Zgłoszenia komisantów do obsłużenia" }],
           "/dostawa": [{ n: delivery.accept, tone: "green", title: "Do akceptacji" }, { n: delivery.transit, tone: "orange", title: "W drodze" }],

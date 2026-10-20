@@ -30,7 +30,8 @@ export async function createLinkContract(_: unknown, formData: FormData): Promis
     template: "purchase_v1",
     source: "link",
     status: "sent",
-    counterparty: "(czeka na podpis)",
+    // Od kogo (wpisane przez nas) – do czasu podpisu; po podpisie dane sprzedającego.
+    counterparty: String(formData.get("supplier") ?? "").trim().slice(0, 120) || "(czeka na podpis)",
     amount: contractTotal(items),
     payment_days: days,
     // Waluta wybrana przy tworzeniu – sprzedający jej nie zmienia; pusta – wybiera sprzedający.

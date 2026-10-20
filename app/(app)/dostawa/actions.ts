@@ -124,6 +124,9 @@ export async function createDelivery(_: unknown, formData: FormData): Promise<{ 
     }
     // Waluta cen sztuk (bez SQL 67 – pomijane; wtedy PLN albo waluta umowy).
     if (deliveryId) await supabase.from("units").update({ purchase_currency: currency }).eq("delivery_id", deliveryId).then(() => null, () => null);
+    // Od kogo (SQL 71) – bez migracji pomijane.
+    const supplier = String(formData.get("supplier") ?? "").trim().slice(0, 120);
+    if (deliveryId && supplier) await supabase.from("units").update({ supplier }).eq("delivery_id", deliveryId).then(() => null, () => null);
 
     // Stan w Shopify: +N dla każdego rozmiaru.
     if (status === "in_stock") {

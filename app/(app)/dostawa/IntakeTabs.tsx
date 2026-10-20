@@ -155,10 +155,10 @@ export async function TransitTab() {
     ? (await supabase.from("units").select(unitFields).eq("status", "in_transit").not("contract_id", "is", null).order("received_at").limit(500)).data
     : unitsRes.data;
   // Rzeczy w drodze bez umowy / faktury (np. z Przyjęcia dostawy z opcją „w drodze”) – do „Umowa” / „Faktura” jednym kliknięciem.
-  const noDocRes = await supabase.from("units").select("id, code, purchase_price, variant:variants(option, product:products(id, title)), location:locations(name, store_id)")
+  const noDocRes = await supabase.from("units").select("*, variant:variants(option, product:products(id, title)), location:locations(name, store_id)")
     .eq("status", "in_transit").is("contract_id", null).is("transfer_id", null).order("received_at").limit(300);
-  const noDoc: TransitUnit[] = ((noDocRes.error ? [] : noDocRes.data ?? []) as unknown as { id: string; code: string; purchase_price: number | null; variant: { option: string; product: { id: string; title: string } }; location: { name: string; store_id: string } | null }[])
-    .map((u) => ({ id: u.id, code: u.code, title: u.variant.product.title, option: u.variant.option, location: u.location?.name ?? "–", price: profile.can_see_prices && u.purchase_price != null ? Number(u.purchase_price) : null, productId: u.variant.product.id, storeId: u.location?.store_id ?? null }));
+  const noDoc: TransitUnit[] = ((noDocRes.error ? [] : noDocRes.data ?? []) as unknown as { id: string; code: string; purchase_price: number | null; supplier?: string | null; variant: { option: string; product: { id: string; title: string } }; location: { name: string; store_id: string } | null }[])
+    .map((u) => ({ id: u.id, code: u.code, title: u.variant.product.title, option: u.variant.option, location: u.location?.name ?? "–", price: profile.can_see_prices && u.purchase_price != null ? Number(u.purchase_price) : null, productId: u.variant.product.id, storeId: u.location?.store_id ?? null, supplier: u.supplier ?? null }));
   const transfers = (transfersRes.error ? [] : transfersRes.data ?? []) as { id: string; number: number; note: string | null; created_at: string; from_location_id: string; to_location_id: string }[];
   const { data: tItems } = transfers.length ? await supabase.from("stock_transfer_items").select("transfer_id, unit_id, received_at").in("transfer_id", transfers.map((t) => t.id)) : { data: [] };
   const tIds = (tItems ?? []).map((i) => i.unit_id as string);
