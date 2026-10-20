@@ -66,6 +66,29 @@ export default async function AttachContractPage({ searchParams }: { searchParam
     const b = boundTo.get(c.id as string);
     return !b?.sale_id || b.sale_id === saleId;
   });
+  // Umowy „kwota za każdą rzecz” (bez pozycji), które mają już rzeczy – obejmują kilka rzeczy w tej samej cenie,
+  // więc można je dołączać do kolejnych sprzedaży.
+  const usedCount = new Map<string, number>();
+  {
+    let pq = supabase.from("contracts").select("id, number, counterparty, amount, currency, contract_date, created_at, status, template, items, doc_number, sale_id")
+      .eq("amount_per_item", true).eq("status", "accepted").order("created_at", { ascending: false }).limit(60);
+    const pex = wordsOr(["counterparty", "doc_number"], searchWords(q), /^\d+$/.test(q) ? [`number.eq.${q}`] : []);
+    if (q && pex) pq = pq.or(pex);
+    const { data: per } = await pq.then((r) => r, () => ({ data: [] }));
+    const known = new Set(list.map((c) => c.id as string));
+    type PerRow = (typeof list)[number] & { doc_number: string | null; sale_id: string | null };
+    const more = ((per ?? []) as PerRow[])
+      .filter((c) => !known.has(c.id as string) && !((c.items ?? []) as unknown[]).length && (!c.sale_id || c.sale_id === saleId));
+    if (more.length) {
+      const { data: us } = await supabase.from("units").select("contract_id").in("contract_id", more.map((c) => c.id as string)).not("status", "in", "(removed,consignor_returned)");
+      for (const u of us ?? []) usedCount.set(u.contract_id as string, (usedCount.get(u.contract_id as string) ?? 0) + 1);
+      for (const c of more) {
+        if (!usedCount.has(c.id as string)) continue;
+        boundTo.set(c.id as string, { id: c.id, sale_id: c.sale_id, doc_number: c.doc_number });
+        list.push(c);
+      }
+    }
+  }
 
   return (
     <>
@@ -93,7 +116,7 @@ export default async function AttachContractPage({ searchParams }: { searchParam
       </div>
 
       <h2 className="h2 mb-2">Dołącz gotową umowę</h2>
-      <p className="mb-3 text-sm text-muted">Umowy zatwierdzone, do których nie ma jeszcze żadnej rzeczy w magazynie.</p>
+      <p className="mb-3 text-sm text-muted">Umowy zatwierdzone, do których nie ma jeszcze żadnej rzeczy w magazynie, oraz umowy „kwota za każdą rzecz” (jedna umowa na kilka rzeczy w tej samej cenie).</p>
       <form className="mb-3 flex flex-wrap gap-2" method="get">
         {saleId ? <input type="hidden" name="sprzedaz" value={saleId} /> : <input type="hidden" name="sztuka" value={unitParam!} />}
         <input type="hidden" name="back" value={back} />
@@ -124,7 +147,7 @@ export default async function AttachContractPage({ searchParams }: { searchParam
                 <tr key={c.id}>
                   <td className="whitespace-nowrap"><Link className="text-accent hover:underline" href={`/umowy/${c.id}`} target="_blank">{docNumber ?? (c.number ? `NR${c.number}` : "bez numeru")}</Link></td>
                   <td>{c.counterparty}</td>
-                  <td className="max-w-80 text-sm text-muted"><span className="line-clamp-2">{items.length ? items.map((i) => `${i.title ?? ""} ${i.option ?? ""}`.trim()).join(", ") : "–"}</span></td>
+                  <td className="max-w-80 text-sm text-muted"><span className="line-clamp-2">{items.length ? items.map((i) => `${i.title ?? ""} ${i.option ?? ""}`.trim()).join(", ") : "–"}</span>{usedCount.has(c.id as string) && <span className="mt-0.5 block text-xs font-medium text-accent">kwota za każdą rzecz · już {usedCount.get(c.id as string)} szt.</span>}</td>
                   <td className="whitespace-nowrap text-sm text-muted">{dateOnly(c.contract_date ?? c.created_at)}</td>
                   <td className="whitespace-nowrap text-right tabular-nums">{c.amount !== null ? (c.currency && c.currency !== "PLN" ? `${Number(c.amount).toFixed(2)} ${c.currency}` : money(c.amount)) : "–"}</td>
                   <td><button className="btn-secondary px-2.5 py-1 text-xs" name="contract_id" value={c.id}>Dołącz</button></td>

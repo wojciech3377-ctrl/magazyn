@@ -82,11 +82,19 @@ export async function attachExistingContract(formData: FormData) {
   const fail = (m: string) => redirect(`${self}&blad=${encodeURIComponent(m)}`);
 
   const [{ data: c }, { data: unused }] = await Promise.all([
-    supabase.from("contracts").select("id, amount, status, sale_id, number, counterparty").eq("id", contractId).maybeSingle(),
+    supabase.from("contracts").select("id, amount, status, sale_id, number, doc_number, counterparty").eq("id", contractId).maybeSingle(),
     supabase.from("contracts_unused").select("id").eq("id", contractId).maybeSingle(),
   ]);
   if (!c || ["cancelled", "rejected", "sent"].includes(c.status as string)) return fail("Ta umowa jest anulowana, czeka na podpis albo nie istnieje.");
-  if (!unused) return fail("Ta umowa jest już przypisana do innej rzeczy.");
+  // Umowa „kwota za każdą rzecz” (bez pozycji) obejmuje kilka rzeczy – można ją dołączać do kolejnych sprzedaży.
+  if (!unused) {
+    const { contractTakenError } = await import("@/lib/contracts/free");
+    const { data: full } = await supabase.from("contracts").select("*").eq("id", contractId).maybeSingle();
+    const perItem = !!(full as { amount_per_item?: boolean } | null)?.amount_per_item && !((full as { items?: unknown[] } | null)?.items ?? []).length;
+    if (!perItem) return fail("Ta umowa jest już przypisana do innej rzeczy.");
+    const taken = await contractTakenError(supabase, contractId, 1);
+    if (taken) return fail(taken);
+  }
   if (c.sale_id && c.sale_id !== saleId) return fail("Ta umowa jest przygotowana do innej sprzedaży.");
 
   type U = { id: string; contract_id: string | null; owner_type: string; purchase_price: number | null; status: string };
@@ -105,7 +113,7 @@ export async function attachExistingContract(formData: FormData) {
       revalidatePath("/sprzedaz");
       revalidatePath("/umowy");
       const { data: nu } = newUnit ? await supabase.from("units").select("status").eq("id", newUnit as string).maybeSingle() : { data: null };
-      const text = [`Umowa ${c.number ? `NR${c.number} ` : ""}przypisana do sprzedaży.`, nu?.status === "in_transit" ? "Rzecz jest w Przyjęcie dostawy → W drodze (pod zamówienie) – po przyjściu trafi do zamówienia." : "", price ? priceMessage(price) : ""].filter(Boolean).join(" ");
+      const text = [`Umowa ${c.doc_number ? `${c.doc_number} ` : c.number ? `NR${c.number} ` : ""}przypisana do sprzedaży.`, nu?.status === "in_transit" ? "Rzecz jest w Przyjęcie dostawy → W drodze (pod zamówienie) – po przyjściu trafi do zamówienia." : "", price ? priceMessage(price) : ""].filter(Boolean).join(" ");
       redirect(`${back}${back.includes("?") ? "&" : "?"}${price?.problems.length ? "blad" : "ok"}=${encodeURIComponent(text)}`);
     }
   } else {
@@ -121,7 +129,7 @@ export async function attachExistingContract(formData: FormData) {
   const price = await inheritContractPrice(supabase, contractId, [unit.id]);
   revalidatePath("/sprzedaz");
   revalidatePath("/umowy");
-  const text = [`Umowa ${c.number ? `NR${c.number} ` : ""}przypisana.`, priceMessage(price)].filter(Boolean).join(" ");
+  const text = [`Umowa ${c.doc_number ? `${c.doc_number} ` : c.number ? `NR${c.number} ` : ""}przypisana.`, priceMessage(price)].filter(Boolean).join(" ");
   redirect(`${back}${back.includes("?") ? "&" : "?"}${price.problems.length ? "blad" : "ok"}=${encodeURIComponent(text)}`);
 }
 
