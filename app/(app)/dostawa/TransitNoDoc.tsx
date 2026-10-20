@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { ContractFileInput } from "@/components/ContractFileInput";
 import { SubmitButton } from "@/components/SubmitButton";
-import { receiveNoDocUnits, transitContract, transitInvoice } from "./transit-doc-actions";
+import { dropNoDocUnits, receiveNoDocUnits, transitContract, transitInvoice } from "./transit-doc-actions";
 import { PrintGroup } from "./ReceiveChecklist";
 import { DateField } from "@/components/DateField";
 
@@ -18,6 +18,7 @@ export function TransitNoDoc({ units, prices }: { units: TransitUnit[]; prices: 
   const [sel, setSel] = useState<Set<string>>(new Set(units.map((u) => u.id)));
   const [price, setPrice] = useState<Record<string, string>>(Object.fromEntries(units.map((u) => [u.id, u.price != null ? String(u.price) : ""])));
   const [mode, setMode] = useState<"none" | "invoice">("none");
+  const [noUnit, setNoUnit] = useState(false);
   const picked = units.filter((u) => sel.has(u.id));
   const payload = JSON.stringify(picked.map((u) => ({ unit_id: u.id, price: price[u.id] ?? "" })));
   const toggle = (id: string) => setSel((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
@@ -39,15 +40,27 @@ export function TransitNoDoc({ units, prices }: { units: TransitUnit[]; prices: 
           </li>
         ))}
       </ul>
-      <form action={receiveNoDocUnits}>
-        {picked.map((u) => <input key={u.id} type="hidden" name="unit" value={u.id} />)}
-        <PrintGroup units={picked}>
-          <SubmitButton className="btn rounded-none shadow-none" pendingText="Przyjmuję…" disabled={!picked.length}>Przyjmij na magazyn ({picked.length})</SubmitButton>
-        </PrintGroup>
-      </form>
+      <label className="flex items-start gap-2 text-sm">
+        <input type="checkbox" checked={noUnit} onChange={(e) => setNoUnit(e.target.checked)} className="mt-0.5 h-4 w-4" />
+        <span><b>Nie dodawaj jako przedmiot w magazynie</b> <span className="text-muted">– rzeczy już są w Magazynie (np. dodane w Shopify); zaznaczone nie tworzą nowych sztuk. Umowa / faktura trafi do niewykorzystanych – przypniesz ją na karcie sztuki.</span></span>
+      </label>
+      {noUnit ? (
+        <form action={dropNoDocUnits}>
+          {picked.map((u) => <input key={u.id} type="hidden" name="unit" value={u.id} />)}
+          <SubmitButton className="btn-secondary" pendingText="Usuwam…" disabled={!picked.length}>Tylko usuń z W drodze, bez dokumentu ({picked.length})</SubmitButton>
+        </form>
+      ) : (
+        <form action={receiveNoDocUnits}>
+          {picked.map((u) => <input key={u.id} type="hidden" name="unit" value={u.id} />)}
+          <PrintGroup units={picked}>
+            <SubmitButton className="btn rounded-none shadow-none" pendingText="Przyjmuję…" disabled={!picked.length}>Przyjmij na magazyn ({picked.length})</SubmitButton>
+          </PrintGroup>
+        </form>
+      )}
       <div className="flex flex-wrap items-center gap-2">
         <form action={transitContract} className="flex flex-wrap items-center gap-2">
           <input type="hidden" name="units" value={payload} />
+          {noUnit && <input type="hidden" name="no_unit" value="1" />}
           <input className="input w-56" type="email" name="seller_email" placeholder="e-mail sprzedającego (opcjonalnie)" aria-label="E-mail sprzedającego" />
           <select className="input w-auto" name="currency" defaultValue="" aria-label="Waluta umowy" title="Waluta umowy">
             <option value="">waluta: wybierze sprzedający</option>
@@ -62,6 +75,7 @@ export function TransitNoDoc({ units, prices }: { units: TransitUnit[]; prices: 
       {mode === "invoice" && (
         <form action={transitInvoice} className="grid gap-3 rounded-lg border border-line p-3 sm:grid-cols-2">
           <input type="hidden" name="units" value={payload} />
+          {noUnit && <input type="hidden" name="no_unit" value="1" />}
           <div className="sm:col-span-2"><ContractFileInput label="Plik faktury (PDF lub zdjęcie)" /></div>
           <div><label className="label" htmlFor="doc_number">Numer faktury</label><input id="doc_number" name="doc_number" className="input" required /></div>
           <div><label className="label" htmlFor="doc_date">Data faktury</label><DateField id="doc_date" name="doc_date" /></div>

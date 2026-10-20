@@ -58,6 +58,13 @@ export async function transitContract(fd: FormData) {
     notes: "Umowa do rzeczy w drodze (Przyjęcie dostawy → W drodze).",
   }).select("id").single();
   if (error) back("blad", errorMessage(error));
+  if (fd.get("no_unit")) {
+    // „Nie dodawaj jako przedmiot w magazynie”: rzeczy już są w Magazynie – sztuki „w drodze” znikają,
+    // umowa po podpisie i zatwierdzeniu trafia do niewykorzystanych (przypinasz ją na karcie sztuki).
+    const gone = await dropTransitUnits(db, units.map((u) => u.id));
+    revalidatePath("/dostawa");
+    redirect(`/umowy/${c!.id}?ok=${encodeURIComponent(`Umowa na ${items.length} szt. gotowa – bez nowych sztuk w magazynie (${gone} usunięte z W drodze). Po zatwierdzeniu trafi do niewykorzystanych.`)}`);
+  }
   await db.from("units").update({ contract_id: c!.id }).in("id", units.map((u) => u.id)).is("contract_id", null);
   revalidatePath("/dostawa");
   redirect(`/umowy/${c!.id}?ok=${encodeURIComponent(`Umowa na ${items.length} szt. gotowa – wyślij sprzedającemu link do podpisu. Po zatwierdzeniu każda para dostanie osobną umowę.`)}`);
@@ -83,6 +90,11 @@ export async function transitInvoice(fd: FormData) {
     notes: `Faktura do ${units.length} szt. w drodze – ten sam dokument przy każdej rzeczy.`,
   }).select("id").single();
   if (error) back("blad", errorMessage(error));
+  if (fd.get("no_unit")) {
+    const gone = await dropTransitUnits(db, units.map((u) => u.id));
+    revalidatePath("/dostawa");
+    back("ok", `Faktura ${docNumber} zapisana bez nowych sztuk w magazynie (${gone} usunięte z W drodze) – jest w Umowach → „Bez rzeczy (niewykorzystane)”.`);
+  }
   await db.from("units").update({ contract_id: c!.id }).in("id", units.map((u) => u.id)).is("contract_id", null);
   // Waluta cen sztuk jak na fakturze (bez SQL 67 – pomijane).
   await db.from("units").update({ purchase_currency: fd.get("currency") === "EUR" ? "EUR" : "PLN" }).in("id", units.map((u) => u.id)).then(() => null, () => null);
@@ -109,4 +121,25 @@ export async function receiveNoDocUnits(fd: FormData) {
   revalidatePath("/magazyn");
   const failed = results.filter((r) => !r.ok);
   back(failed.length ? "blad" : "ok", `Przyjęto ${rows.length} szt.: na stan ${toStock.length}${rows.length - toStock.length ? `, do zamówień ${rows.length - toStock.length}` : ""}. Bez umowy – dopniesz ją w Magazynie.${failed.length ? ` Shopify: ${failed.map((f) => f.message).join("; ")}` : ""}`);
+}
+
+/** Sztuki „w drodze” bez umowy i bez sprzedaży – usunięcie (rzecz już jest w Magazynie). Zwraca liczbę usuniętych. */
+async function dropTransitUnits(db: ReturnType<typeof createAdminClient>, ids: string[]) {
+  const { data: sold } = await db.from("sales").select("unit_id").in("unit_id", ids);
+  const skip = new Set((sold ?? []).map((x) => x.unit_id as string));
+  const del = ids.filter((x) => !skip.has(x));
+  if (!del.length) return 0;
+  const { data } = await db.from("units").delete().in("id", del).eq("status", "in_transit").is("contract_id", null).select("id");
+  revalidatePath("/magazyn");
+  return data?.length ?? 0;
+}
+
+/** „Nie dodawaj jako przedmiot w magazynie” bez dokumentu – zaznaczone rzeczy znikają z W drodze. */
+export async function dropNoDocUnits(fd: FormData) {
+  await requireSection("dostawa");
+  const ids = fd.getAll("unit").map(String).filter((x) => UUID.test(x)).slice(0, 300);
+  if (!ids.length) back("blad", "Zaznacz rzeczy.");
+  const gone = await dropTransitUnits(createAdminClient(), ids);
+  revalidatePath("/dostawa");
+  back("ok", `Usunięto z W drodze ${gone} szt. – bez nowych sztuk w magazynie.`);
 }
