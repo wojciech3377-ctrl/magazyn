@@ -166,6 +166,12 @@ export async function TransitTab() {
   const unitById = new Map((tUnits ?? []).map((u) => [u.id as string, u as { id: string; code: string; title: string; option: string; status: string; product_id: string; store_id: string }]));
   const locs = (locations ?? []) as unknown as Loc[];
   type TU = { id: string; code: string; contract_id: string; variant: { option: string; product: { id: string; title: string } }; contract: { id: string; number: number | null; counterparty: string; seller_name: string | null }; location: { name: string; store_id: string } | null };
+  // Rzeczy pod zamówienie (sprzedane przed przyjściem) – po przyjęciu idą do zamówienia, nie na stan.
+  const tuIds = ((units ?? []) as unknown as { id: string }[]).map((u) => u.id);
+  const { data: forOrder } = tuIds.length
+    ? await supabase.from("sales").select("unit_id, order_ref, order_id").in("unit_id", tuIds.slice(0, 500)).neq("status", "cancelled")
+    : { data: [] };
+  const orderOf = new Map((forOrder ?? []).map((x) => [x.unit_id as string, (x.order_ref as string | null) ?? "zamówienie"]));
   const byContract = new Map<string, TU[]>();
   for (const u of (units ?? []) as unknown as TU[]) byContract.set(u.contract_id, [...(byContract.get(u.contract_id) ?? []), u]);
   const list = (intakes ?? []) as unknown as IntakeRow[];
@@ -253,7 +259,7 @@ export async function TransitTab() {
             <span className="text-sm text-muted">{us.length} szt. w drodze{us[0].location ? ` · do ${us[0].location.name}` : ""}</span>
           </div>
           <ReceiveChecklist action={receiveContractUnits} hidden={{ contract_id: cid }} noUnitOption
-            units={us.map((u) => ({ id: u.id, title: u.variant.product.title, option: u.variant.option, code: u.code, productId: u.variant.product.id, storeId: u.location?.store_id }))} />
+            units={us.map((u) => ({ id: u.id, title: u.variant.product.title, option: u.variant.option, code: u.code, productId: u.variant.product.id, storeId: u.location?.store_id, extra: orderOf.has(u.id) ? `pod zamówienie ${orderOf.get(u.id)} – po przyjęciu do wysyłki` : undefined }))} />
         </div>
       ))}
     </div>

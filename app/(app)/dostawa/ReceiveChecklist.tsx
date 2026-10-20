@@ -36,7 +36,7 @@ export function ReceiveChecklist({ units, action, hidden = {}, receiveLabel = "P
           <li key={u.id}>
             <label className="flex items-center gap-2">
               <input type="checkbox" name="unit" value={u.id} checked={sel.has(u.id)} onChange={() => toggle(u.id)} className="h-4 w-4" />
-              <span>{u.title} · <b>{u.option}</b> <span className="font-mono text-xs text-muted">{u.code}</span>{u.extra && <span className="text-xs text-muted"> · {u.extra}</span>}</span>
+              <span>{u.title} · <b>{u.option}</b> <span className="font-mono text-xs text-muted">{u.code}</span>{u.extra && <span className={`text-xs ${/^pod zamówienie/.test(u.extra) ? "font-medium text-accent" : "text-muted"}`}> · {u.extra}</span>}</span>
             </label>
           </li>
         ))}

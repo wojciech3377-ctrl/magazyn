@@ -92,9 +92,11 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
     let stockErr = "";
     if (stockLoc && (catalogItems.length || manualItems.length)) {
       const { stockContractItems } = await import("@/lib/contracts/stock-items");
-      const r = await stockContractItems(supabase, id, [...catalogItems, ...manualItems], stockLoc).catch((e: unknown) => ({ items: null, created: 0, error: errorMessage(e) }));
+      const r = await stockContractItems(supabase, id, [...catalogItems, ...manualItems], stockLoc, formData.get("stock_status") === "in_stock" ? "in_stock" : "in_transit").catch((e: unknown) => ({ items: null, created: 0, error: errorMessage(e) }));
       if (r.items && r.created) await supabase.from("contracts").update({ items: r.items }).eq("id", id);
-      if (r.created) okNote = `Dodano do magazynu ${r.created} szt. „nieprzypisane do Shopify” – przypiszesz je, gdy produkt będzie w Shopify.`;
+      if (r.created) okNote = formData.get("stock_status") === "in_stock"
+        ? `Dodano na stan ${r.created} szt. „nieprzypisane do Shopify” – przypiszesz je, gdy produkt będzie w Shopify.`
+        : `${r.created} szt. „nieprzypisane do Shopify” w Przyjęcie dostawy → W drodze – przyjmiesz je, gdy dojdą.`;
       if (r.error) stockErr = `Umowa zapisana, ale ${r.created ? "nie wszystkie rzeczy" : "rzeczy nie"} trafiły do magazynu: ${r.error}`;
     }
     // Kilka jednakowych umów z tym samym plikiem (np. jedna faktura na kilka osobnych umów). Rzeczy, sprzedaż
@@ -115,7 +117,9 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
       if (attachErr) note = `?blad=${encodeURIComponent(`Umowa zapisana, ale nie przypięta do sprzedaży: ${attachErr.message}`)}`;
       else if (newUnit) {
         const pm = priceMessage(await inheritContractPrice(supabase, id, [newUnit as string]));
-        if (pm) okNote = [okNote, pm].filter(Boolean).join(" ");
+        const { data: nu } = await supabase.from("units").select("status").eq("id", newUnit as string).maybeSingle();
+        const tr = nu?.status === "in_transit" ? "Rzecz jest w Przyjęcie dostawy → W drodze (pod zamówienie)." : "";
+        okNote = [okNote, tr, pm].filter(Boolean).join(" ");
       }
     }
     // Umowa już zapisana – błąd przypinania (np. inna forma VAT) nie może jej cofnąć, tylko trafia do komunikatu.
@@ -174,9 +178,9 @@ export async function addContractItem(formData: FormData) {
   let msg = "";
   if (stockLoc) {
     const { stockContractItems } = await import("@/lib/contracts/stock-items");
-    const r = await stockContractItems(supabase, id, [item!], stockLoc).catch((e: unknown) => ({ items: [item!], created: 0, error: errorMessage(e) }));
+    const r = await stockContractItems(supabase, id, [item!], stockLoc, formData.get("stock_status") === "in_stock" ? "in_stock" : "in_transit").catch((e: unknown) => ({ items: [item!], created: 0, error: errorMessage(e) }));
     added = r.items;
-    msg = r.error ? `blad=${encodeURIComponent(`Rzecz nie trafiła do magazynu: ${r.error}`)}` : `ok=${encodeURIComponent(`Dodano do magazynu ${r.created} szt. „nieprzypisane do Shopify”.`)}`;
+    msg = r.error ? `blad=${encodeURIComponent(`Rzecz nie trafiła do magazynu: ${r.error}`)}` : `ok=${encodeURIComponent(formData.get("stock_status") === "in_stock" ? `Dodano na stan ${r.created} szt. „nieprzypisane do Shopify”.` : `${r.created} szt. „nieprzypisane do Shopify” w W drodze.`)}`;
   }
   const { error } = await supabase.from("contracts").update({ items: [...((c.items ?? []) as unknown[]), ...added] }).eq("id", id);
   if (error) redirect(`/umowy/${id}?blad=${encodeURIComponent(error.message)}`);

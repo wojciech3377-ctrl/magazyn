@@ -104,7 +104,8 @@ export async function attachExistingContract(formData: FormData) {
       const price = newUnit ? await inheritContractPrice(supabase, contractId, [newUnit as string]) : null;
       revalidatePath("/sprzedaz");
       revalidatePath("/umowy");
-      const text = [`Umowa ${c.number ? `NR${c.number} ` : ""}przypisana do sprzedaży.`, price ? priceMessage(price) : ""].filter(Boolean).join(" ");
+      const { data: nu } = newUnit ? await supabase.from("units").select("status").eq("id", newUnit as string).maybeSingle() : { data: null };
+      const text = [`Umowa ${c.number ? `NR${c.number} ` : ""}przypisana do sprzedaży.`, nu?.status === "in_transit" ? "Rzecz jest w Przyjęcie dostawy → W drodze (pod zamówienie) – po przyjściu trafi do zamówienia." : "", price ? priceMessage(price) : ""].filter(Boolean).join(" ");
       redirect(`${back}${back.includes("?") ? "&" : "?"}${price?.problems.length ? "blad" : "ok"}=${encodeURIComponent(text)}`);
     }
   } else {

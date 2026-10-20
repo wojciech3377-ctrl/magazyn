@@ -446,3 +446,43 @@ export async function pushPendingTracking(db: SupabaseClient) {
   }
   return { sent, ...(errors.length ? { errors } : {}) };
 }
+
+/**
+ * Jednorazowo (z kursorem) dla zamówień zapisanych wcześniej: pozycje „z bazowego modelu” (np. AF1 Rope) dostają wariant
+ * bazowego modelu – w zamówieniu i JPK jest „Dołącz umowę”. Sztuki z magazynu rezerwujemy tylko w zamówieniach
+ * jeszcze niewysłanych (status „nowe”); w wysłanych umowę dołączasz ręcznie.
+ */
+export async function remapMadeFromOrders(db: SupabaseClient, deadline = Date.now() + 40_000) {
+  const key = "made_from_remap_v1";
+  const { data: st } = await db.from("sync_state").select("value").eq("key", key).maybeSingle();
+  const state = (st?.value ?? {}) as { done?: boolean; after?: string };
+  if (state.done) return null;
+  let after = state.after ?? "1970-01-01T00:00:00Z";
+  let changed = 0;
+  const open: string[] = [];
+  for (;;) {
+    const { data, error } = await db.from("orders").select("id, store_id, status, cancelled_at, ordered_at, line_items")
+      .filter("line_items", "cs", JSON.stringify([{ service: true }])).gt("ordered_at", after).order("ordered_at").limit(100);
+    if (error) throw error;
+    const rows = (data ?? []) as { id: string; store_id: string; status: string; cancelled_at: string | null; ordered_at: string; line_items: LineItem[] }[];
+    for (const o of rows) {
+      const lines = o.line_items.map((l) => ({ ...l }));
+      const hit = await mapMadeFromBase(db, o.store_id, lines);
+      if (hit.size) {
+        await db.from("orders").update({ line_items: lines }).eq("id", o.id);
+        changed++;
+        if (o.status === "new" && !o.cancelled_at) open.push(o.id);
+      }
+      after = o.ordered_at;
+    }
+    const finished = rows.length < 100;
+    await db.from("sync_state").upsert({ key, value: { done: finished, after }, updated_at: new Date().toISOString() });
+    if (finished || Date.now() > deadline) break;
+  }
+  if (open.length) {
+    const since = new Date(Date.now() - 2000).toISOString();
+    await db.rpc("register_shopify_sales", { p_order_ids: open });
+    await settleMadeFromStock(db, open, since).catch(() => null);
+  }
+  return { changed, open: open.length };
+}

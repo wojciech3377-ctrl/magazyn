@@ -113,13 +113,19 @@ export function StockOption({ locations, compact = false }: { locations: { id: s
       <label className="flex items-start gap-2 text-sm">
         <input type="checkbox" name="to_stock" value="1" checked={on} onChange={(e) => setOn(e.target.checked)} className="mt-0.5" />
         {compact
-          ? <span>dodaj do magazynu (na stanie, „nieprzypisane do Shopify”)</span>
-          : <span><b>Rzeczy wpisane ręcznie i spoza katalogu Shopify – dodaj od razu do magazynu</b> <span className="text-muted">(na stanie, status „nieprzypisane do Shopify”; gdy produkt pojawi się w Shopify, połączysz go na karcie sztuki)</span></span>}
+          ? <span>dodaj do magazynu („nieprzypisane do Shopify”)</span>
+          : <span><b>Rzeczy wpisane ręcznie i spoza katalogu Shopify – dodaj do magazynu</b> <span className="text-muted">(status „nieprzypisane do Shopify”; domyślnie w drodze – przyjmiesz je w Przyjęcie dostawy → W drodze; gdy produkt pojawi się w Shopify, połączysz go w Do zrobienia)</span></span>}
       </label>
       {on && (
-        <select className={compact ? "input w-64" : "input sm:w-80"} name="stock_location_id" defaultValue={locations[0]?.id} aria-label="Lokalizacja dla nowych sztuk">
-          {locations.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
-        </select>
+        <div className="flex flex-wrap items-center gap-2">
+          <select className="input w-auto" name="stock_status" defaultValue="in_transit" aria-label="Status nowych sztuk">
+            <option value="in_transit">w drodze (przyjmiesz w W drodze)</option>
+            <option value="in_stock">od razu na stan – towar już jest</option>
+          </select>
+          <select className={compact ? "input w-64" : "input sm:w-80"} name="stock_location_id" defaultValue={locations[0]?.id} aria-label="Lokalizacja dla nowych sztuk">
+            {locations.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
+          </select>
+        </div>
       )}
     </div>
   );

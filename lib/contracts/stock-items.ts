@@ -16,7 +16,7 @@ const norm = (s: string) => s.trim().replace(/\s+/g, " ").toLowerCase();
  * Każda sztuka dostaje własną pozycję umowy (ilość 1, unit_id) – usunięcie sztuki wydziela dokładnie ją.
  * Rzeczy z katalogu Shopify zostają bez zmian (do nich dopinasz istniejące sztuki).
  */
-export async function stockContractItems(db: SupabaseClient, contractId: string, items: ContractItem[], locationId: string) {
+export async function stockContractItems(db: SupabaseClient, contractId: string, items: ContractItem[], locationId: string, status: "in_transit" | "in_stock" = "in_transit") {
   const todo = items.map((it, k) => ({ it, k })).filter(({ it }) => !it.unit_id);
   if (!todo.length) return { items, created: 0, error: null };
   const admin = createAdminClient();
@@ -72,7 +72,7 @@ export async function stockContractItems(db: SupabaseClient, contractId: string,
     const price = Number(it.price ?? 0) > 0 ? Number(it.price) : null;
     const variantId = it.variant_id ?? (await variantFor(it.title, it.option ?? ""));
     const { data, error } = await db.rpc("receive_delivery", {
-      p_store_id: loc.store_id, p_location_id: loc.id, p_variant_id: variantId, p_quantity: qty, p_status: "in_stock",
+      p_store_id: loc.store_id, p_location_id: loc.id, p_variant_id: variantId, p_quantity: qty, p_status: status,
       p_owner_type: consignment ? "consignment" : "own", p_consignor_id: consignment ? c.consignor_id : null,
       p_purchase_form: c.vat_form === "vat_23" ? "vat_23" : "vat_margin",
       p_purchase_price: consignment ? null : price, p_payout_amount: consignment ? price : null,
