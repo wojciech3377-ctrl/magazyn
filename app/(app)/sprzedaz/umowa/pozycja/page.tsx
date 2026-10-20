@@ -55,9 +55,12 @@ export default async function LineContractPage({ searchParams }: { searchParams:
       <form action={createUnitForLine} className="card max-w-xl space-y-3 p-4">
         <input type="hidden" name="ref" value={sp.ref} />
         <input type="hidden" name="back" value={back} />
-        <Notice>Ta pozycja nie ma sztuki z magazynu (była wpisana z nazwy). Wybierz produkt i rozmiar z katalogu – powstanie sprzedana sztuka z datą tej sprzedaży, a potem dołączysz do niej umowę: gotową, skan albo do podpisu.</Notice>
-        <VariantPick name="variant_id" storeId={info.storeId} label="Produkt z katalogu" />
-        <SubmitButton className="btn" pendingText="Tworzę sztukę…">Dalej – wybór umowy</SubmitButton>
+        <Notice>Ta pozycja nie ma sztuki z magazynu (była wpisana z nazwy). Wybierz produkt i rozmiar z katalogu – albo, jeśli go nie ma w katalogu, kliknij „Bez katalogu – dalej”. Powstanie sprzedana sztuka z datą tej sprzedaży, a potem dołączysz do niej umowę: wolną (niewykorzystaną), skan albo do podpisu.</Notice>
+        <VariantPick name="variant_id" storeId={info.storeId} label="Produkt z katalogu (opcjonalnie)" />
+        <div className="flex flex-wrap gap-2">
+          <SubmitButton className="btn" pendingText="Tworzę sztukę…">Dalej – wybór umowy</SubmitButton>
+          <SubmitButton className="btn-secondary" name="offcatalog" value="1" formNoValidate pendingText="Tworzę sztukę…">Bez katalogu – dalej („{info.name}”)</SubmitButton>
+        </div>
       </form>
     </>
   );

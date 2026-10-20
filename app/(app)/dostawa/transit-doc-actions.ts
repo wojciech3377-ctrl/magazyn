@@ -161,6 +161,9 @@ export async function toggleTransitNote(fd: FormData) {
   const id = String(fd.get("id") ?? "");
   if (!UUID.test(id)) back("blad", "Zła notatka.");
   if (fd.get("delete")) {
+    // Usuwa autor albo administrator.
+    const { data: n } = await supabase.from("transit_notes").select("created_by").eq("id", id).maybeSingle();
+    if (profile.role !== "admin" && n?.created_by !== profile.id) back("blad", "Notatkę może usunąć jej autor albo administrator.");
     await supabase.from("transit_notes").delete().eq("id", id);
   } else {
     const arrived = fd.get("arrived") === "1";
@@ -168,4 +171,17 @@ export async function toggleTransitNote(fd: FormData) {
   }
   revalidatePath("/dostawa");
   redirect("/dostawa?zakladka=w-drodze");
+}
+
+/** Edycja treści notatki – tylko administrator. */
+export async function editTransitNote(fd: FormData) {
+  const { requireAdmin } = await import("@/lib/auth");
+  const { supabase } = await requireAdmin();
+  const id = String(fd.get("id") ?? "");
+  const text = String(fd.get("text") ?? "").trim().slice(0, 500);
+  if (!UUID.test(id) || !text) back("blad", "Wpisz treść notatki.");
+  const { error } = await supabase.from("transit_notes").update({ text }).eq("id", id);
+  if (error) back("blad", error.message);
+  revalidatePath("/dostawa");
+  back("ok", "Notatka zmieniona.");
 }

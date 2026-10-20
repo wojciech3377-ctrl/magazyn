@@ -1,11 +1,11 @@
-import { addTransitNote, toggleTransitNote } from "./transit-doc-actions";
+import { addTransitNote, editTransitNote, toggleTransitNote } from "./transit-doc-actions";
 import { SubmitButton } from "@/components/SubmitButton";
 import { dateTime } from "@/lib/labels";
 
-export type TransitNote = { id: string; text: string; created_at: string; arrived_at: string | null; author: string | null; arrivedBy: string | null };
+export type TransitNote = { id: string; text: string; created_at: string; arrived_at: string | null; author: string | null; arrivedBy: string | null; mine?: boolean };
 
 /** W drodze → notatki z „Doszło” (np. paczka bez rzeczy w magazynie). Doszłe – szare, widoczne 7 dni. */
-export function TransitNotes({ notes }: { notes: TransitNote[] }) {
+export function TransitNotes({ notes, isAdmin = false }: { notes: TransitNote[]; isAdmin?: boolean }) {
   const open = notes.filter((n) => !n.arrived_at);
   const done = notes.filter((n) => n.arrived_at);
   return (
@@ -31,15 +31,26 @@ export function TransitNotes({ notes }: { notes: TransitNote[] }) {
                   Doszło
                 </button>
               </form>
-              <span className={`min-w-0 flex-1 ${n.arrived_at ? "line-through" : ""}`}>{n.text}</span>
+              {isAdmin ? (
+                <details className="min-w-0 flex-1">
+                  <summary className={`cursor-pointer list-none ${n.arrived_at ? "line-through" : ""}`} title="Kliknij, żeby edytować">{n.text} <span className="text-xs text-accent no-underline">edytuj</span></summary>
+                  <form action={editTransitNote} className="mt-2 flex flex-wrap gap-2">
+                    <input type="hidden" name="id" value={n.id} />
+                    <input name="text" defaultValue={n.text} maxLength={500} className="input min-w-64 flex-1" aria-label="Treść notatki" />
+                    <SubmitButton className="btn-secondary" pendingText="…">Zapisz</SubmitButton>
+                  </form>
+                </details>
+              ) : <span className={`min-w-0 flex-1 ${n.arrived_at ? "line-through" : ""}`}>{n.text}</span>}
               <span className="text-xs text-muted">
                 {dateTime(n.created_at)}{n.author ? ` · ${n.author}` : ""}{n.arrived_at ? ` · doszło ${dateTime(n.arrived_at)}${n.arrivedBy ? ` (${n.arrivedBy})` : ""}` : ""}
               </span>
-              <form action={toggleTransitNote}>
-                <input type="hidden" name="id" value={n.id} />
-                <input type="hidden" name="delete" value="1" />
-                <button className="text-xs text-muted hover:text-bad" aria-label="Usuń notatkę">usuń</button>
-              </form>
+              {(isAdmin || n.mine) && (
+                <form action={toggleTransitNote}>
+                  <input type="hidden" name="id" value={n.id} />
+                  <input type="hidden" name="delete" value="1" />
+                  <button className="text-xs text-muted hover:text-bad" aria-label="Usuń notatkę">usuń</button>
+                </form>
+              )}
             </li>
           ))}
         </ul>

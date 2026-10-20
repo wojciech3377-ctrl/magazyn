@@ -55,14 +55,14 @@ export function titlesMatch(a: string, b: string) {
 
 export type UnassignedRef = { productId: string; title: string; options: Set<string> };
 
-/** Rzeczy „nieprzypisane do Shopify” z aktywnymi sztukami (bez wycofanych) – do podpowiedzi i ochrony przed duplikatem. */
+/** Rzeczy „nieprzypisane do Shopify” z aktywnymi sztukami (bez wycofanych i sprzedanych) – do podpowiedzi i ochrony przed duplikatem. */
 export async function unassignedRefs(db: SupabaseClient): Promise<UnassignedRef[]> {
   const { data: prods, error } = await db.from("products").select("id, title, variants(id, option)").eq("unassigned", true).limit(500);
   if (error || !prods?.length) return [];
   const vids = prods.flatMap((p) => ((p.variants ?? []) as { id: string }[]).map((v) => v.id));
   const live = new Set<string>();
   for (let i = 0; i < vids.length; i += 200) {
-    const { data } = await db.from("units").select("variant_id").in("variant_id", vids.slice(i, i + 200)).not("status", "in", "(removed,consignor_returned)");
+    const { data } = await db.from("units").select("variant_id").in("variant_id", vids.slice(i, i + 200)).not("status", "in", "(removed,consignor_returned,sold)");
     for (const u of data ?? []) live.add(u.variant_id as string);
   }
   return prods.map((p) => ({
@@ -82,7 +82,7 @@ export type UnassignedGroup = {
   units: { id: string; code: string; option: string; status: string; contract: string | null; supplier: string | null }[];
 };
 
-/** Rzeczy „nieprzypisane do Shopify” (bez wycofanych) pogrupowane po produkcie – lista w Do zrobienia. */
+/** Rzeczy „nieprzypisane do Shopify” (bez wycofanych i sprzedanych) pogrupowane po produkcie – lista w Do zrobienia. */
 export async function unassignedGroups(db: SupabaseClient, limit = 60): Promise<UnassignedGroup[]> {
   const { data: prods, error } = await db.from("products").select("id, title, variants(id, option)").eq("unassigned", true).order("created_at", { ascending: false }).limit(500);
   if (error || !prods?.length) return [];
@@ -92,7 +92,7 @@ export async function unassignedGroups(db: SupabaseClient, limit = 60): Promise<
   const units: { id: string; code: string; status: string; variant_id: string; location: { store_id: string; store: { name: string } | null } | null; contract: { number: number | null; doc_number: string | null; counterparty: string | null; seller_name: string | null } | null; supplier?: string | null }[] = [];
   for (let i = 0; i < vids.length; i += 200) {
     const { data } = await db.from("units").select("*, location:locations(store_id, store:stores(name)), contract:contracts(number, doc_number, counterparty, seller_name)")
-      .in("variant_id", vids.slice(i, i + 200)).not("status", "in", "(removed,consignor_returned)").order("number");
+      .in("variant_id", vids.slice(i, i + 200)).not("status", "in", "(removed,consignor_returned,sold)").order("number");
     units.push(...((data ?? []) as unknown as typeof units));
   }
   const groups = new Map<string, UnassignedGroup>();
@@ -111,14 +111,14 @@ export async function unassignedGroups(db: SupabaseClient, limit = 60): Promise<
   return [...groups.values()].slice(0, limit);
 }
 
-/** Liczba sztuk „nieprzypisanych do Shopify” (bez wycofanych) – plakietka przy Do zrobienia. */
+/** Liczba sztuk „nieprzypisanych do Shopify” (bez wycofanych i sprzedanych) – plakietka przy Do zrobienia. */
 export async function unassignedUnitCount(db: SupabaseClient) {
   const { data: prods, error } = await db.from("products").select("variants(id)").eq("unassigned", true).limit(1000);
   if (error || !prods?.length) return 0;
   const vids = prods.flatMap((p) => ((p.variants ?? []) as { id: string }[]).map((v) => v.id));
   let n = 0;
   for (let i = 0; i < vids.length; i += 200) {
-    const { count } = await db.from("units").select("id", { count: "exact", head: true }).in("variant_id", vids.slice(i, i + 200)).not("status", "in", "(removed,consignor_returned)");
+    const { count } = await db.from("units").select("id", { count: "exact", head: true }).in("variant_id", vids.slice(i, i + 200)).not("status", "in", "(removed,consignor_returned,sold)");
     n += count ?? 0;
   }
   return n;

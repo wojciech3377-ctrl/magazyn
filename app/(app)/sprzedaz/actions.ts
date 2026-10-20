@@ -226,8 +226,20 @@ export async function createUnitForLine(formData: FormData) {
   const m = /^(pos|fv):([0-9a-f-]{36})$/.exec(ref);
   const self = `/sprzedaz/umowa/pozycja?ref=${encodeURIComponent(ref)}&back=${encodeURIComponent(back)}`;
   if (!m) redirect(back);
-  if (!/^[0-9a-f-]{36}$/.test(variant)) redirect(`${self}&blad=${encodeURIComponent("Wybierz produkt i rozmiar z katalogu.")}`);
-  const { data: unitId, error } = await supabase.rpc("create_line_unit", { p_kind: m[1] === "pos" ? "pos" : "invoice", p_item: m[2], p_variant: variant });
+  let variantId = variant;
+  if (formData.get("offcatalog")) {
+    // Rzecz spoza katalogu (np. skarpety wpisane w Kasie z nazwy): produkt „nieprzypisany” z nazwą pozycji.
+    const { data: line } = m[1] === "pos"
+      ? await supabase.from("pos_order_items").select("name").eq("id", m[2]).maybeSingle()
+      : await supabase.from("invoice_items").select("name").eq("id", m[2]).maybeSingle();
+    if (!line) redirect(back);
+    const { data: vid, error: verr } = await supabase.rpc("create_unassigned_variant", { p_title: String(line.name ?? "pozycja"), p_option: "jeden rozmiar" });
+    if (verr || !vid) redirect(`${self}&blad=${encodeURIComponent(verr && /create_unassigned_variant|schema cache/i.test(verr.message) ? "Ta funkcja wymaga SQL 63 w Supabase." : verr?.message ?? "Nie udało się utworzyć sztuki.")}`);
+    variantId = vid as string;
+  } else if (!/^[0-9a-f-]{36}$/.test(variant)) {
+    redirect(`${self}&blad=${encodeURIComponent("Wybierz produkt i rozmiar z listy podpowiedzi – albo kliknij „Bez katalogu – dalej”.")}`);
+  }
+  const { data: unitId, error } = await supabase.rpc("create_line_unit", { p_kind: m[1] === "pos" ? "pos" : "invoice", p_item: m[2], p_variant: variantId });
   if (error || !unitId) {
     const msg = error && /create_line_unit|schema cache/i.test(error.message) ? "Ta funkcja wymaga SQL 59 w Supabase." : error?.message ?? "Nie udało się utworzyć sztuki.";
     redirect(`${self}&blad=${encodeURIComponent(msg)}`);

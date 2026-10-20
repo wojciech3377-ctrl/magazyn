@@ -180,7 +180,7 @@ export async function TransitTab() {
   const people = [...new Set(noteRows.flatMap((n) => [n.created_by, n.arrived_by]).filter(Boolean))] as string[];
   const { data: who } = people.length ? await supabase.from("profiles").select("id, full_name, email").in("id", people) : { data: [] };
   const nameOf = (id: string | null) => { const p = (who ?? []).find((x) => x.id === id); return p ? ((p.full_name as string | null) || (p.email as string | null)) : null; };
-  const notes: TransitNote[] = noteRows.map((n) => ({ id: n.id, text: n.text, created_at: n.created_at, arrived_at: n.arrived_at, author: nameOf(n.created_by), arrivedBy: nameOf(n.arrived_by) }));
+  const notes: TransitNote[] = noteRows.map((n) => ({ id: n.id, text: n.text, created_at: n.created_at, arrived_at: n.arrived_at, author: nameOf(n.created_by), arrivedBy: nameOf(n.arrived_by), mine: n.created_by === profile.id }));
   const byContract = new Map<string, TU[]>();
   for (const u of (units ?? []) as unknown as TU[]) byContract.set(u.contract_id, [...(byContract.get(u.contract_id) ?? []), u]);
   const list = (intakes ?? []) as unknown as IntakeRow[];
@@ -192,7 +192,7 @@ export async function TransitTab() {
         <Link className="btn" href="/dostawa?w_drodze=1">Dodaj rzeczy w drodze</Link>
         <span className="text-sm text-muted">Przyjęcie dostawy z zaznaczonym „w drodze” – potem tu: umowa albo faktura jednym kliknięciem.</span>
       </div>
-      <TransitNotes notes={notes} />
+      <TransitNotes notes={notes} isAdmin={profile.role === "admin"} />
       {!list.length && !byContract.size && !transfers.length && !noDoc.length && <p className="text-sm text-muted">Nic nie jest w drodze.</p>}
       {noDoc.length > 0 && <TransitNoDoc units={noDoc} prices={profile.can_see_prices} />}
 
