@@ -60,22 +60,31 @@ export default async function UmowyPage({ searchParams }: { searchParams: Promis
   const tab = TABS.some((t) => t.key === sp.kategoria) ? sp.kategoria ?? "" : "";
 
   const sort = CONTRACT_SORTS[sp.sort ?? ""] ? sp.sort! : "najnowsze";
-  let query = supabase
-    .from(sp.kategoria === "bez-rzeczy" ? "contract_overview_unused" : "contract_overview")
-    .select("*", { count: "exact" })
-    .order(CONTRACT_SORTS[sort].column, { ascending: CONTRACT_SORTS[sort].asc, nullsFirst: false })
-    .range((page - 1) * PER_PAGE, page * PER_PAGE - 1);
   const active = TABS.find((t) => t.key === tab)!;
-  if (active.categories.length) query = query.in("category", [...active.categories]);
   // „Magazyn umów”: umowy, z którymi żadna rzecz nie jest w magazynie, nie jest sprzedana ani w drodze.
   const { count: unusedCount } = await supabase.from("contracts_unused").select("id", { count: "exact", head: true });
   const qWords = searchWords(sp.q);
-  const qex = wordsOr(["counterparty"], qWords, qWords.length === 1 && /^\d+$/.test(qWords[0]) ? [`number.eq.${qWords[0]}`] : []);
-  if (qex) query = query.or(qex);
-  if (sp.typ) query = query.eq("type", sp.typ);
-  if (sp.plik === "brak") query = query.is("file_path", null);
-  if (sp.oplacona === "tak") query = query.not("paid_at", "is", null);
-  if (sp.oplacona === "nie") query = query.is("paid_at", null);
+  // Szukanie po wszystkim w umowie (SQL 76: search_text); bez SQL 76 – po osobie / firmie i numerze.
+  const numEq = qWords.length === 1 && /^\d+$/.test(qWords[0]) ? [`number.eq.${qWords[0]}`] : [];
+  const build = (columns: string[]) => {
+    let query = supabase
+      .from(sp.kategoria === "bez-rzeczy" ? "contract_overview_unused" : "contract_overview")
+      .select("*", { count: "exact" })
+      .order(CONTRACT_SORTS[sort].column, { ascending: CONTRACT_SORTS[sort].asc, nullsFirst: false })
+      .range((page - 1) * PER_PAGE, page * PER_PAGE - 1);
+    if (active.categories.length) query = query.in("category", [...active.categories]);
+    const qex = wordsOr(columns, qWords, numEq);
+    if (qex) query = query.or(qex);
+    if (sp.typ) query = query.eq("type", sp.typ);
+    if (sp.plik === "brak") query = query.is("file_path", null);
+    if (sp.oplacona === "tak") query = query.not("paid_at", "is", null);
+    if (sp.oplacona === "nie") query = query.is("paid_at", null);
+    return query;
+  };
+  const runList = async () => {
+    const r = await build(["search_text"]);
+    return r.error && qWords.length && /search_text/.test(r.error.message) ? await build(["counterparty"]) : r;
+  };
   const listParams = { kategoria: tab || undefined, q: sp.q, typ: sp.typ, plik: sp.plik, oplacona: sp.oplacona, sort: sp.sort };
 
   const counts = await Promise.all(
@@ -87,7 +96,7 @@ export default async function UmowyPage({ searchParams }: { searchParams: Promis
     }),
   );
   const [{ data, count }, { count: noContract }] = await Promise.all([
-    query,
+    runList(),
     supabase.from("units").select("id", { count: "exact", head: true }).is("contract_id", null).in("status", ["in_stock", "in_transit", "reserved"]),
   ]);
   const rows = (data ?? []) as Row[];
@@ -156,7 +165,7 @@ export default async function UmowyPage({ searchParams }: { searchParams: Promis
 
       <ListToolbar
         q={sp.q}
-        placeholder="Osoba lub firma"
+        placeholder="Szukaj w umowach: numer, osoba, produkt, kod sztuki, IMEI, adres, konto…"
         hidden={{ kategoria: tab || undefined }}
         sort={{ value: sort, options: Object.entries(CONTRACT_SORTS).map(([value, o]) => ({ value, label: o.label })) }}
         dirParam={null}

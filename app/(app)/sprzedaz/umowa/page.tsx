@@ -54,11 +54,15 @@ export default async function AttachContractPage({ searchParams }: { searchParam
 
   // Gotowe umowy: niewykorzystane (żadna rzecz z nimi nie jest w magazynie), nieprzypisane do innej sprzedaży.
   const q = (sp.q ?? "").replace(/[%,()*\\]/g, " ").trim();
-  let query = supabase.from("contract_overview_unused").select("id, number, counterparty, amount, currency, contract_date, created_at, status, template, items")
-    .order("created_at", { ascending: false }).limit(60);
-  const qex = wordsOr(["counterparty", "items_text"], searchWords(q), /^\d+$/.test(q) ? [`number.eq.${q}`] : []);
-  if (q && qex) query = query.or(qex);
-  const { data: candidates } = await query;
+  // Szukanie po wszystkim w umowie (SQL 76); bez niego – sprzedający i pozycje.
+  const unusedQuery = (columns: string[]) => {
+    const query = supabase.from("contract_overview_unused").select("id, number, counterparty, amount, currency, contract_date, created_at, status, template, items")
+      .order("created_at", { ascending: false }).limit(60);
+    const qex = wordsOr(columns, searchWords(q), /^\d+$/.test(q) ? [`number.eq.${q}`] : []);
+    return q && qex ? query.or(qex) : query;
+  };
+  let { data: candidates, error: candErr } = await unusedQuery(["search_text"]);
+  if (candErr && /search_text/.test(candErr.message)) ({ data: candidates } = await unusedQuery(["counterparty", "items_text"]));
   const ids = (candidates ?? []).map((c) => c.id as string);
   const { data: bound } = ids.length ? await supabase.from("contracts").select("id, sale_id, doc_number").in("id", ids) : { data: [] };
   const boundTo = new Map((bound ?? []).map((b) => [b.id as string, b]));
@@ -120,7 +124,7 @@ export default async function AttachContractPage({ searchParams }: { searchParam
       <form className="mb-3 flex flex-wrap gap-2" method="get">
         {saleId ? <input type="hidden" name="sprzedaz" value={saleId} /> : <input type="hidden" name="sztuka" value={unitParam!} />}
         <input type="hidden" name="back" value={back} />
-        <SearchInput wrapperClassName="w-full sm:w-96" name="q" defaultValue={sp.q} placeholder="Sprzedający, produkt (nazwa, rozmiar) albo numer umowy" />
+        <SearchInput wrapperClassName="w-full sm:w-96" name="q" defaultValue={sp.q} placeholder="Szukaj w umowach: numer, sprzedający, produkt, rozmiar…" />
         <button className="btn">Szukaj</button>
         {variant && !q && (
           <Link className="btn-secondary" href={`/sprzedaz/umowa?${saleId ? `sprzedaz=${saleId}` : `sztuka=${unitParam}`}&back=${encodeURIComponent(back)}&q=${encodeURIComponent(variant.product.title.split(" ").slice(0, 4).join(" "))}`}>Pokaż umowy z „{variant.product.title.split(" ").slice(0, 4).join(" ")}”</Link>
