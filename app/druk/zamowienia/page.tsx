@@ -19,7 +19,7 @@ export default async function PrintNewOrders() {
   type S = { order_id: string; shopify_line_id: string | null; unit: { code: string; shelf: string | null; location: { name: string } | null } | null };
   const byLine = new Map<string, S[]>();
   for (const s of (sales ?? []) as unknown as S[]) byLine.set(`${s.order_id}|${s.shopify_line_id}`, [...(byLine.get(`${s.order_id}|${s.shopify_line_id}`) ?? []), s]);
-  const pieces = (orders ?? []).reduce((n, o) => n + ((o.line_items ?? []) as LineItem[]).filter((l) => !l.service).reduce((m, l) => m + l.quantity, 0), 0);
+  const pieces = (orders ?? []).reduce((n, o) => n + ((o.line_items ?? []) as LineItem[]).reduce((m, l) => m + l.quantity, 0), 0);
 
   return (
     <main className="mx-auto max-w-4xl p-6 text-black">
@@ -41,7 +41,7 @@ export default async function PrintNewOrders() {
             </div>
             <table className="w-full text-sm">
               <tbody>
-                {((o.line_items ?? []) as LineItem[]).filter((l) => !l.service).map((l) => {
+                {((o.line_items ?? []) as LineItem[]).map((l) => {
                   const units = byLine.get(`${o.id}|${l.id}`) ?? [];
                   return (
                     <tr key={l.id} className="align-top">

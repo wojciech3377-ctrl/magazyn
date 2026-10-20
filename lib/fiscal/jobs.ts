@@ -106,14 +106,7 @@ export async function enqueueOrderReceipt(db: SupabaseClient, orderId: string, u
     const ptu = i.unit === "usł." ? s.ptuService : i.vat === "23" ? s.ptu23 : s.ptuMargin;
     return { name: fiscalName(i.name), qty: i.quantity, price: round(i.unit_price_gross), ptu, rate: rateOf(s, ptu) };
   });
-  // Pozycje wykluczone z magazynu (np. sznurówki rope, usługi) – na fakturze pomijane, na paragonie muszą być.
-  // Stawka z reguły wykluczenia (Ustawienia → Wykluczenia): domyślnie VAT marża (F), albo 23% (A).
-  const { loadExclusionRules, exclusionVat } = await import("@/lib/services");
-  const rules = await loadExclusionRules(db);
-  for (const l of ((o.line_items ?? []) as LineItem[]).filter((x) => x.service && Number(x.price) > 0)) {
-    const ptu = exclusionVat(rules, l.sku, l.title) === "23" ? s.ptuService : s.ptuMargin;
-    lines.push({ name: fiscalName([l.title, l.variant_title].filter(Boolean).join(" ")), qty: l.quantity, price: round(Number(l.price)), ptu, rate: rateOf(s, ptu) });
-  }
+  // Pozycje wykluczone z magazynu (np. sznurówki rope) są już w szkicu – ze stawką z reguły wykluczenia.
   return insertJob(db, { source: "order", order_id: orderId, lines, payment: d.paymentMethod, created_by: userId });
 }
 

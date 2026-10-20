@@ -65,7 +65,8 @@ export function refundState(o: RefundFields): { money: "none" | "pending" | "par
   const refunded = Number(o.refunded_amount ?? 0) || 0;
   const pending = Number(o.refund_pending ?? 0) || 0;
   const total = Number(o.total ?? 0) || 0;
-  const goods = (o.line_items ?? []).filter((l) => !l.service);
+  // Wszystkie pozycje – także spoza magazynu (np. sznurówki rope).
+  const goods = o.line_items ?? [];
   const qty = goods.reduce((s, l) => s + l.quantity, 0);
   const back = goods.reduce((s, l) => s + Math.min(l.quantity, o.refunded_lines?.[l.id] ?? 0), 0);
   const allItems = qty > 0 && back >= qty;

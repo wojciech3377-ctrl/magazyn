@@ -418,6 +418,8 @@ export async function returnOrderAction(_: OrderOpState, fd: FormData): Promise<
     const used = new Set<string>();
     const saleIds: string[] = [];
     picked.forEach((p, i) => {
+      // Pozycja spoza magazynu (np. sznurówki rope) – bez sztuki do zwrotu na stan.
+      if (p.line.service) return;
       const free = (sales ?? []).filter((s) => !used.has(s.id) && s.status !== "cancelled");
       const pool = [
         ...free.filter((s) => s.shopify_line_id === p.line.id),
@@ -491,21 +493,6 @@ export async function issueOrderReceiptPdf(fd: FormData) {
   try {
     const draft = await draftFromOrder(db, orderId);
     if (!draft) throw new Error("Nie ma takiego zamówienia.");
-    // Pozycje spoza magazynu (np. sznurówki rope) – w szkicu faktury pominięte, na paragonie muszą być
-    // (jak na paragonie fiskalnym). Stawka z reguły wykluczenia; bez pozycji już zwróconych.
-    const { data: o } = await db.from("orders").select("line_items, refunded_lines").eq("id", orderId).maybeSingle();
-    const { loadExclusionRules, exclusionVat } = await import("@/lib/services");
-    const rules = await loadExclusionRules(db);
-    const refunded = (o?.refunded_lines ?? {}) as Record<string, number>;
-    const extra = ((o?.line_items ?? []) as LineItem[]).filter((l) => l.service && Number(l.price) > 0).flatMap((l) => {
-      const qty = l.quantity - Number(refunded[l.id] ?? 0);
-      if (qty <= 0) return [];
-      const price = Number(l.price);
-      return [{ name: [l.title, l.variant_title].filter(Boolean).join(" "), quantity: qty, unit: "szt.", unit_price_gross: price, total_gross: Math.round(price * qty * 100) / 100, vat: exclusionVat(rules, l.sku, l.title) }];
-    });
-    // Wysyłka zostaje na końcu.
-    const ship = draft.items.filter((i) => i.unit === "usł.");
-    draft.items = [...draft.items.filter((i) => i.unit !== "usł."), ...extra, ...ship];
     if (!draft.items.length) throw new Error("Zamówienie nie ma pozycji do paragonu.");
     const row = await issueReceipt(db, { ...draft, orderId, notes: null }, profile.id, { withBuyer: true });
     id = row.id as string;

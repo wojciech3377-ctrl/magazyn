@@ -222,8 +222,8 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
             )}
             {orders?.map((o) => {
               const allLines = ((o.line_items ?? []) as LineItem[]).map((l, i) => ({ ...l, i }));
-              // Pozycje wykluczone z magazynu (usługi itp.) – widoczne, gdy zamówienie ma tylko takie.
-              const lines = allLines.some((l) => !l.service) ? allLines.filter((l) => !l.service) : allLines;
+              // Wszystkie pozycje – także wykluczone z magazynu (np. sznurówki rope): pakuje się je razem z resztą.
+              const lines = allLines;
               const pay = paymentLabel(o);
               const oSales = salesBy.get(o.id) ?? [];
               const ship = shipBy.get(o.id);

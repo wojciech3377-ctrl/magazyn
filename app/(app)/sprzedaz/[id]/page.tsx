@@ -189,9 +189,9 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
           <thead><tr><th /><th>Produkt</th><th>Rozmiar</th><th>SKU</th><th className="text-right">Ilość</th><th className="text-right">Cena</th><th /></tr></thead>
           <tbody>
             {lines.map((l, i) => (
-              <tr key={l.id} className={l.service ? "text-muted" : ""}>
+              <tr key={l.id}>
                 <td className="w-14">{l.image ? <img src={`${l.image}${l.image.includes("?") ? "&" : "?"}width=96`} alt="" className="h-12 w-12 rounded object-contain" /> : null}</td>
-                <td>{l.title}{l.service && <span className="ml-1 text-xs">(usługa)</span>}</td>
+                <td>{l.title}{l.service && <span className="ml-1 text-xs text-muted">(poza magazynem)</span>}</td>
                 <td className="font-medium">{l.variant_title ?? "–"}</td>
                 <td className="font-mono text-xs">{l.sku ?? "–"}</td>
                 <td className="text-right tabular-nums">{l.quantity}{refundedLines[l.id] ? <span className="block text-xs text-warn">zwrócono {refundedLines[l.id]}</span> : null}</td>
@@ -285,7 +285,7 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
           <p className="mb-3 text-sm text-muted">Zmiana trafia do Shopify (zwrot pieniędzy, e-mail do klienta), a sztuki wracają na stan w magazynie.</p>
           <OrderOps
             orderId={order.id}
-            lines={lines.filter((l) => !l.service).map((l) => ({ id: l.id, title: l.title, variant_title: l.variant_title, quantity: l.quantity, price: Number(l.price), refunded: refundedLines[l.id] ?? 0 }))}
+            lines={lines.map((l) => ({ id: l.id, title: l.title, variant_title: l.variant_title, quantity: l.quantity, price: Number(l.price), refunded: refundedLines[l.id] ?? 0 }))}
             paid={["PAID", "PARTIALLY_REFUNDED", "PARTIALLY_PAID"].includes(String(order.financial_status ?? "").toUpperCase())}
             shippingPrice={Number(order.shipping_price ?? 0)}
             hasLabels={activeShipments.length > 0}

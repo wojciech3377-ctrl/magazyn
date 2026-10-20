@@ -46,8 +46,21 @@ export async function draftFromOrder(db: SupabaseClient, orderId: string): Promi
   const variantOf = new Map((links ?? []).map((l) => [l.shopify_variant_id as string, l.variant_id as string]));
   const pool = [...(sales ?? [])].filter((s) => s.status !== "cancelled") as unknown as { id: string; variant_id: string | null; unit: Unit }[];
   const items: DraftItem[] = [];
+  // Pozycje wykluczone z magazynu (np. sznurówki rope, usługi) są normalnie na fakturze i paragonie –
+  // tylko bez sztuki z magazynu; stawka z reguły wykluczenia (Ustawienia → Wykluczenia).
+  const rules = lines.some((l) => l.service) ? await (await import("@/lib/services")).loadExclusionRules(db) : [];
+  const { exclusionVat } = await import("@/lib/services");
   for (const l of lines) {
-    if (l.service) continue;
+    if (l.service) {
+      const back = Number((o.refunded_lines as Record<string, number> | null)?.[l.id] ?? 0);
+      const qty = l.quantity - back;
+      if (qty <= 0 || !(Number(l.price) > 0)) continue;
+      items.push({
+        name: [l.title, l.variant_title].filter(Boolean).join(" "), quantity: qty, unit: "szt.", unit_price_gross: Number(l.price),
+        total_gross: Math.round(Number(l.price) * qty * 100) / 100, vat: exclusionVat(rules, l.sku, l.title), unit_id: null, sale_id: null,
+      });
+      continue;
+    }
     const variantId = l.shopify_variant_id ? variantOf.get(l.shopify_variant_id) : undefined;
     // Pozycje zwrócone (zwrot w Shopify) nie trafiają na fakturę / paragon.
     const back = Number((o.refunded_lines as Record<string, number> | null)?.[l.id] ?? 0);
