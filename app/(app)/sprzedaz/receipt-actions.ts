@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { requireSection } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { enqueueOrderReceipt, enqueuePosReceipt } from "@/lib/fiscal/jobs";
+import { enqueueOrderReceipt, enqueuePosReceipt, orderReceiptLines, posReceiptLines } from "@/lib/fiscal/jobs";
 import { errorMessage } from "@/lib/errors";
 
 export type JobView = { id: string; status: string; receipt_number: string | null; error: string | null; claimed_at: string | null; number: number };
@@ -40,7 +40,18 @@ export async function retryReceiptJob(id: string): Promise<{ job?: JobView; erro
   if (!UUID.test(id)) return { error: "Złe zadanie." };
   const db = createAdminClient();
   const stuck = new Date(Date.now() - 120_000).toISOString();
-  const { data, error } = await db.from("receipt_jobs").update({ status: "queued", error: null, printer_id: null, claimed_at: null })
+  // Po błędzie – pozycje od nowa z bieżących danych i ustawień (np. zmieniona stawka PTU w Wykluczeniach).
+  const { data: job } = await db.from("receipt_jobs").select("status, source, order_id, pos_order_id").eq("id", id).maybeSingle();
+  let fresh: { lines: unknown; payment: string } | null = null;
+  if (job?.status === "error") {
+    try {
+      fresh = job.source === "order" && job.order_id ? await orderReceiptLines(db, job.order_id as string)
+        : job.source === "pos" && job.pos_order_id ? await posReceiptLines(db, job.pos_order_id as string) : null;
+    } catch (e) {
+      return { error: errorMessage(e) };
+    }
+  }
+  const { data, error } = await db.from("receipt_jobs").update({ status: "queued", error: null, printer_id: null, claimed_at: null, ...(fresh ? { lines: fresh.lines, payment: fresh.payment } : {}) })
     .eq("id", id).or(`status.eq.error,and(status.eq.printing,claimed_at.lt.${stuck})`).select("id, status, receipt_number, error, claimed_at, number").maybeSingle();
   if (error) return { error: errorMessage(error) };
   if (!data) return { error: "Tego paragonu nie można teraz ponowić." };

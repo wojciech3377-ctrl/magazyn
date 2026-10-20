@@ -9,7 +9,9 @@ import { buildFa3, invoiceTotals, nipValid, onlyDigits, type InvoiceItemInput, t
 import { KSEF_COUNTRIES } from "./countries";
 
 export type PaymentMethod = "cash" | "card" | "transfer" | "mobile";
-export type DraftItem = InvoiceItemInput & { unit_id?: string | null; sale_id?: string | null; pos_item_id?: string | null; checkVat?: boolean };
+export type DraftItem = InvoiceItemInput & { unit_id?: string | null; sale_id?: string | null; pos_item_id?: string | null; checkVat?: boolean;
+  /** Pozycja wykluczona z magazynu (np. sznurówki rope) – stawka z reguły wykluczenia, na paragonie litera „usług / 23%”. */
+  excluded?: boolean };
 export type InvoiceDraft = {
   consignorShipmentId?: string | null; // faktura za wysyłkę rzeczy do komisanta
   buyer: InvoiceParty;
@@ -57,7 +59,7 @@ export async function draftFromOrder(db: SupabaseClient, orderId: string): Promi
       if (qty <= 0 || !(Number(l.price) > 0)) continue;
       items.push({
         name: [l.title, l.variant_title].filter(Boolean).join(" "), quantity: qty, unit: "szt.", unit_price_gross: Number(l.price),
-        total_gross: Math.round(Number(l.price) * qty * 100) / 100, vat: exclusionVat(rules, l.sku, l.title), unit_id: null, sale_id: null,
+        total_gross: Math.round(Number(l.price) * qty * 100) / 100, vat: exclusionVat(rules, l.sku, l.title), unit_id: null, sale_id: null, excluded: true,
       });
       continue;
     }
@@ -222,7 +224,7 @@ export async function issueInvoice(db: SupabaseClient, d: InvoiceDraft, userId: 
     return { ...i, name: i.name.trim().slice(0, 256), quantity, unit_price_gross, total_gross: Math.round(unit_price_gross * quantity * 100) / 100 };
   }) };
   validate(company, d);
-  d = { ...d, items: d.items.map(({ checkVat: _c, ...i }) => i) };
+  d = { ...d, items: d.items.map(({ checkVat: _c, excluded: _e, ...i }) => i) };
   const seller = { name: company.name, nip: onlyDigits(company.nip), address1: company.street, address2: company.city, country: "PL", email: company.email, bank_account: company.bank_account ?? null };
   const t = invoiceTotals(d.items);
   const { data, error } = await db.rpc("create_invoice", {
@@ -273,7 +275,7 @@ export async function issueReceipt(db: SupabaseClient, d: InvoiceDraft, userId: 
   const buyer = opts.withBuyer && d.buyer?.name?.trim() ? { ...d.buyer, name: d.buyer.name.trim() } : RECEIPT_BUYER;
   d = cleanItems({ ...d, buyer, paid: true });
   validate(company, d, true);
-  d = { ...d, items: d.items.map(({ checkVat: _c, ...i }) => i) };
+  d = { ...d, items: d.items.map(({ checkVat: _c, excluded: _e, ...i }) => i) };
   const t = invoiceTotals(d.items);
   const { data, error } = await db.rpc("create_invoice", {
     p_invoice: {

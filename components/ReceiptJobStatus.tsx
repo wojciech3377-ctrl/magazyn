@@ -41,6 +41,9 @@ export function ReceiptJobStatus({ job: initial, compact, onReset }: { job: JobV
     <span className={`relative z-10 inline-flex flex-wrap items-center gap-1.5 ${compact ? "text-xs" : "text-sm"}`}>
       <Pill tone={st.tone}>{st.text}{job.receipt_number ? ` nr ${job.receipt_number}` : ""}</Pill>
       {job.status === "error" && job.error && <span className="max-w-64 text-xs text-bad">{job.error}</span>}
+      {job.status === "error" && /zablokowan/i.test(job.error ?? "") && (
+        <span className="max-w-80 text-xs text-warn">Drukarka fiskalna nie pozwala sprzedać tej samej nazwy towaru z niższą stawką PTU niż wcześniej (wymóg przepisów). Ustaw dla tej pozycji stawkę, z jaką była sprzedawana (Ustawienia → Wykluczenia, np. sznurówki 23%), i kliknij „Ponów”.</span>
+      )}
       {(job.status === "error" || stuck) && (
         <button type="button" className="text-xs font-medium text-accent hover:underline" disabled={pending}
           onClick={act(retryReceiptJob, stuck ? "Program drukarki nie odpowiada od 2 minut. Sprawdź na drukarce, czy paragon nie wyszedł – ponowić wydruk?" : undefined)}>Ponów</button>

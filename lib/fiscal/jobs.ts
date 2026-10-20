@@ -74,8 +74,8 @@ async function insertJob(db: SupabaseClient, row: { source: "pos" | "order"; pos
   return data as { id: string; number: number; status: string };
 }
 
-/** Paragon do sprzedaży w Kasie: sztuki z magazynu (23% albo marża) i pozycje spoza magazynu z wybraną stawką. */
-export async function enqueuePosReceipt(db: SupabaseClient, posOrderId: string, userId: string) {
+/** Pozycje paragonu do sprzedaży w Kasie: sztuki z magazynu (23% albo marża) i pozycje spoza magazynu z wybraną stawką. */
+export async function posReceiptLines(db: SupabaseClient, posOrderId: string) {
   const { data: o } = await db.from("pos_orders").select("id, payment_method").eq("id", posOrderId).maybeSingle();
   if (!o) throw new Error("Nie ma takiej sprzedaży.");
   const { data: items, error } = await db.from("pos_order_items")
@@ -90,24 +90,38 @@ export async function enqueuePosReceipt(db: SupabaseClient, posOrderId: string, 
     const name = i.name?.trim() ? i.name : i.unit?.variant ? receiptName(i.unit.variant.product.title, i.unit.variant.option) : "Towar";
     return { name: fiscalName(name), qty: Number(i.quantity ?? 1), price: round(Number(i.price)), ptu, rate: rateOf(s, ptu) };
   });
-  return insertJob(db, { source: "pos", pos_order_id: posOrderId, lines, payment: PAYMENT[o.payment_method as string] ?? "cash", created_by: userId });
+  return { lines, payment: PAYMENT[o.payment_method as string] ?? "cash" };
 }
 
-/** Paragon do zamówienia ze sklepu: towary (marża / 23% wg sztuki), usługi i wysyłka 23%. */
-export async function enqueueOrderReceipt(db: SupabaseClient, orderId: string, userId: string) {
-  const { data: o } = await db.from("orders").select("id, cancelled_at, line_items, receipt_id").eq("id", orderId).maybeSingle();
-  if (!o) throw new Error("Nie ma takiego zamówienia.");
-  if (o.cancelled_at) throw new Error("Zamówienie jest anulowane.");
-  if (o.receipt_id) throw new Error(`Paragon do tego zamówienia już jest (nr ${o.receipt_id}).`);
+/** Paragon do sprzedaży w Kasie – do kolejki drukarki. */
+export async function enqueuePosReceipt(db: SupabaseClient, posOrderId: string, userId: string) {
+  const { lines, payment } = await posReceiptLines(db, posOrderId);
+  return insertJob(db, { source: "pos", pos_order_id: posOrderId, lines, payment, created_by: userId });
+}
+
+/**
+ * Pozycje paragonu do zamówienia ze sklepu: towary (marża / 23% wg sztuki), pozycje spoza magazynu (np. sznurówki rope –
+ * stawka z reguły wykluczenia), wysyłka. Zawsze z bieżących danych i ustawień (także przy „Ponów”).
+ */
+export async function orderReceiptLines(db: SupabaseClient, orderId: string) {
   const d = await draftFromOrder(db, orderId);
   if (!d) throw new Error("Nie ma takiego zamówienia.");
   const s = await getFiscalSettings(db);
   const lines: FiscalLine[] = d.items.map((i) => {
-    const ptu = i.unit === "usł." ? s.ptuService : i.vat === "23" ? s.ptu23 : s.ptuMargin;
+    const ptu = i.unit === "usł." ? s.ptuService : i.excluded ? (i.vat === "23" ? s.ptuService : s.ptuMargin) : i.vat === "23" ? s.ptu23 : s.ptuMargin;
     return { name: fiscalName(i.name), qty: i.quantity, price: round(i.unit_price_gross), ptu, rate: rateOf(s, ptu) };
   });
-  // Pozycje wykluczone z magazynu (np. sznurówki rope) są już w szkicu – ze stawką z reguły wykluczenia.
-  return insertJob(db, { source: "order", order_id: orderId, lines, payment: d.paymentMethod, created_by: userId });
+  return { lines, payment: d.paymentMethod };
+}
+
+/** Paragon do zamówienia ze sklepu – do kolejki drukarki. */
+export async function enqueueOrderReceipt(db: SupabaseClient, orderId: string, userId: string) {
+  const { data: o } = await db.from("orders").select("id, cancelled_at, receipt_id").eq("id", orderId).maybeSingle();
+  if (!o) throw new Error("Nie ma takiego zamówienia.");
+  if (o.cancelled_at) throw new Error("Zamówienie jest anulowane.");
+  if (o.receipt_id) throw new Error(`Paragon do tego zamówienia już jest (nr ${o.receipt_id}).`);
+  const { lines, payment } = await orderReceiptLines(db, orderId);
+  return insertJob(db, { source: "order", order_id: orderId, lines, payment, created_by: userId });
 }
 
 /** Nowy klucz programu drukarki: zwracany raz (do wpisania w programie), w bazie tylko skrót. */
