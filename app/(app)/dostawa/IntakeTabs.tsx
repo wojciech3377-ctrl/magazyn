@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ReceiveChecklist } from "./ReceiveChecklist";
+import { TransitNotes, type TransitNote } from "./TransitNotes";
 import { TransitNoDoc, type TransitUnit } from "./TransitNoDoc";
 import { requireProfile } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -27,14 +28,15 @@ const BACK = "/dostawa?zakladka=akceptacja";
 
 export async function loadIntakeCounts() {
   const db = createAdminClient();
-  const [a, b, c, d, e] = await Promise.all([
+  const [a, b, c, d, e, f] = await Promise.all([
     db.from("consignor_intakes").select("id", { count: "exact", head: true }).eq("status", "review"),
     db.from("contracts").select("id", { count: "exact", head: true }).eq("status", "signed").not("template", "is", null),
     db.from("consignor_intakes").select("id", { count: "exact", head: true }).in("status", ["to_send", "sent"]),
     db.from("units").select("contract_id", { count: "exact", head: true }).eq("status", "in_transit").not("contract_id", "is", null),
     db.from("stock_transfers").select("id", { count: "exact", head: true }).eq("status", "in_transit"),
+    db.from("transit_notes").select("id", { count: "exact", head: true }).is("arrived_at", null),
   ]);
-  return { accept: (a.count ?? 0) + (b.count ?? 0), transit: (c.count ?? 0) + (d.count ?? 0) + (e.error ? 0 : e.count ?? 0) };
+  return { accept: (a.count ?? 0) + (b.count ?? 0), transit: (c.count ?? 0) + (d.count ?? 0) + (e.error ? 0 : e.count ?? 0) + (f.error ? 0 : f.count ?? 0) };
 }
 
 /** Do akceptacji: zgłoszenia komisantów i podpisane umowy – Tak / Nie / Oferta. */
@@ -172,6 +174,13 @@ export async function TransitTab() {
     ? await supabase.from("sales").select("unit_id, order_ref, order_id").in("unit_id", tuIds.slice(0, 500)).neq("status", "cancelled")
     : { data: [] };
   const orderOf = new Map((forOrder ?? []).map((x) => [x.unit_id as string, (x.order_ref as string | null) ?? "zamówienie"]));
+  // Notatki „co ma przyjść” (SQL 75): otwarte + doszłe z ostatnich 7 dni.
+  const notesRes = await supabase.from("transit_notes").select("*").or(`arrived_at.is.null,arrived_at.gt.${new Date(Date.now() - 7 * 86400_000).toISOString()}`).order("created_at", { ascending: false }).limit(200);
+  const noteRows = (notesRes.error ? [] : notesRes.data ?? []) as { id: string; text: string; created_at: string; arrived_at: string | null; created_by: string | null; arrived_by: string | null }[];
+  const people = [...new Set(noteRows.flatMap((n) => [n.created_by, n.arrived_by]).filter(Boolean))] as string[];
+  const { data: who } = people.length ? await supabase.from("profiles").select("id, full_name, email").in("id", people) : { data: [] };
+  const nameOf = (id: string | null) => { const p = (who ?? []).find((x) => x.id === id); return p ? ((p.full_name as string | null) || (p.email as string | null)) : null; };
+  const notes: TransitNote[] = noteRows.map((n) => ({ id: n.id, text: n.text, created_at: n.created_at, arrived_at: n.arrived_at, author: nameOf(n.created_by), arrivedBy: nameOf(n.arrived_by) }));
   const byContract = new Map<string, TU[]>();
   for (const u of (units ?? []) as unknown as TU[]) byContract.set(u.contract_id, [...(byContract.get(u.contract_id) ?? []), u]);
   const list = (intakes ?? []) as unknown as IntakeRow[];
@@ -183,6 +192,7 @@ export async function TransitTab() {
         <Link className="btn" href="/dostawa?w_drodze=1">Dodaj rzeczy w drodze</Link>
         <span className="text-sm text-muted">Przyjęcie dostawy z zaznaczonym „w drodze” – potem tu: umowa albo faktura jednym kliknięciem.</span>
       </div>
+      <TransitNotes notes={notes} />
       {!list.length && !byContract.size && !transfers.length && !noDoc.length && <p className="text-sm text-muted">Nic nie jest w drodze.</p>}
       {noDoc.length > 0 && <TransitNoDoc units={noDoc} prices={profile.can_see_prices} />}
 

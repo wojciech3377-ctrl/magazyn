@@ -143,3 +143,29 @@ export async function dropNoDocUnits(fd: FormData) {
   revalidatePath("/dostawa");
   back("ok", `Usunięto z W drodze ${gone} szt. – bez nowych sztuk w magazynie.`);
 }
+
+/** W drodze → notatka (np. „paczka od Kowalskiego, 2 pary”) z polem „Doszło”. */
+export async function addTransitNote(fd: FormData) {
+  const { supabase } = await requireSection("dostawa");
+  const text = String(fd.get("text") ?? "").trim().slice(0, 500);
+  if (!text) back("blad", "Wpisz treść notatki.");
+  const { error } = await supabase.from("transit_notes").insert({ text });
+  if (error) back("blad", /transit_notes/.test(error.message) ? "Notatki w W drodze wymagają SQL 75 w Supabase (0075_transit_notes.sql)." : error.message);
+  revalidatePath("/dostawa");
+  back("ok", "Notatka dodana.");
+}
+
+/** „Doszło” – zaznaczenie / odznaczenie notatki; „usuń” – usunięcie. */
+export async function toggleTransitNote(fd: FormData) {
+  const { supabase, profile } = await requireSection("dostawa");
+  const id = String(fd.get("id") ?? "");
+  if (!UUID.test(id)) back("blad", "Zła notatka.");
+  if (fd.get("delete")) {
+    await supabase.from("transit_notes").delete().eq("id", id);
+  } else {
+    const arrived = fd.get("arrived") === "1";
+    await supabase.from("transit_notes").update(arrived ? { arrived_at: new Date().toISOString(), arrived_by: profile.id } : { arrived_at: null, arrived_by: null }).eq("id", id);
+  }
+  revalidatePath("/dostawa");
+  redirect("/dostawa?zakladka=w-drodze");
+}
