@@ -5,7 +5,7 @@ import { searchWords, wordsOr } from "@/lib/search";
 import { revalidatePath } from "next/cache";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { redirect } from "next/navigation";
-import { requireAdmin, requireSection } from "@/lib/auth";
+import { requireAdmin, requireProfile, requireSection } from "@/lib/auth";
 import { parseAmount, uploadedFile } from "@/lib/contracts/upload";
 import { fillContractNumber } from "@/lib/contracts/docnumber";
 import { errorMessage } from "@/lib/errors";
@@ -92,9 +92,9 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
     let stockErr = "";
     if (stockLoc && (catalogItems.length || manualItems.length)) {
       const { stockContractItems } = await import("@/lib/contracts/stock-items");
-      const r = await stockContractItems(supabase, id, [...catalogItems, ...manualItems], stockLoc, formData.get("stock_status") === "in_stock" ? "in_stock" : "in_transit").catch((e: unknown) => ({ items: null, created: 0, error: errorMessage(e) }));
+      const r = await stockContractItems(supabase, id, [...catalogItems, ...manualItems], stockLoc, await stockStatusOf(formData)).catch((e: unknown) => ({ items: null, created: 0, error: errorMessage(e) }));
       if (r.items && r.created) await supabase.from("contracts").update({ items: r.items }).eq("id", id);
-      if (r.created) okNote = formData.get("stock_status") === "in_stock"
+      if (r.created) okNote = (await stockStatusOf(formData)) === "in_stock"
         ? `Dodano na stan ${r.created} szt. „nieprzypisane do Shopify” – przypiszesz je, gdy produkt będzie w Shopify.`
         : `${r.created} szt. „nieprzypisane do Shopify” w Przyjęcie dostawy → W drodze – przyjmiesz je, gdy dojdą.`;
       if (r.error) stockErr = `Umowa zapisana, ale ${r.created ? "nie wszystkie rzeczy" : "rzeczy nie"} trafiły do magazynu: ${r.error}`;
@@ -178,9 +178,9 @@ export async function addContractItem(formData: FormData) {
   let msg = "";
   if (stockLoc) {
     const { stockContractItems } = await import("@/lib/contracts/stock-items");
-    const r = await stockContractItems(supabase, id, [item!], stockLoc, formData.get("stock_status") === "in_stock" ? "in_stock" : "in_transit").catch((e: unknown) => ({ items: [item!], created: 0, error: errorMessage(e) }));
+    const r = await stockContractItems(supabase, id, [item!], stockLoc, await stockStatusOf(formData)).catch((e: unknown) => ({ items: [item!], created: 0, error: errorMessage(e) }));
     added = r.items;
-    msg = r.error ? `blad=${encodeURIComponent(`Rzecz nie trafiła do magazynu: ${r.error}`)}` : `ok=${encodeURIComponent(formData.get("stock_status") === "in_stock" ? `Dodano na stan ${r.created} szt. „nieprzypisane do Shopify”.` : `${r.created} szt. „nieprzypisane do Shopify” w W drodze.`)}`;
+    msg = r.error ? `blad=${encodeURIComponent(`Rzecz nie trafiła do magazynu: ${r.error}`)}` : `ok=${encodeURIComponent((await stockStatusOf(formData)) === "in_stock" ? `Dodano na stan ${r.created} szt. „nieprzypisane do Shopify”.` : `${r.created} szt. „nieprzypisane do Shopify” w W drodze.`)}`;
   }
   const { error } = await supabase.from("contracts").update({ items: [...((c.items ?? []) as unknown[]), ...added] }).eq("id", id);
   if (error) redirect(`/umowy/${id}?blad=${encodeURIComponent(error.message)}`);
@@ -628,4 +628,11 @@ export async function setContractPayment(formData: FormData) {
   revalidatePath(`/umowy/${id}`);
   revalidatePath("/umowy");
   redirect(`/umowy/${id}?${msg}`);
+}
+
+/** „Od razu na stan” przy rzeczach z umowy – tylko administrator (pracownik: zawsze w drodze). */
+async function stockStatusOf(fd: FormData): Promise<"in_stock" | "in_transit"> {
+  if (fd.get("stock_status") !== "in_stock") return "in_transit";
+  const { profile } = await requireProfile();
+  return profile.role === "admin" ? "in_stock" : "in_transit";
 }

@@ -169,7 +169,7 @@ export default async function ContractPage({ params, searchParams }: { params: P
                   <input className="input w-20" name="qty" defaultValue="1" inputMode="numeric" aria-label="Ilość" />
                   {profile.can_see_prices && <input className="input w-28" name="price" placeholder="Cena / szt." inputMode="decimal" aria-label="Cena za sztukę" />}
                   <SubmitButton className="btn-secondary" pendingText="…">Dodaj</SubmitButton>
-                  {stockLocations.length > 0 && <div className="w-full"><StockOption compact locations={stockLocations} /></div>}
+                  {stockLocations.length > 0 && <div className="w-full"><StockOption compact locations={stockLocations} canStock={profile.role === "admin"} /></div>}
                 </form>
               </div>
             )}

@@ -8,7 +8,7 @@ import { ContractItemsPicker } from "./ContractItemsPicker";
 import { DateField } from "@/components/DateField";
 import { InvoiceItemsInput } from "./InvoiceItemsInput";
 
-export function ContractForm({ consignors, defaultUnits, canSeePrices, returnTo = "", saleId = null, saleLabel = null, pickVariantStore = null, locations = [] }: { consignors: { id: string; name: string }[]; defaultUnits: string; canSeePrices: boolean; returnTo?: string; saleId?: string | null; saleLabel?: string | null; pickVariantStore?: string | null; locations?: { id: string; label: string }[] }) {
+export function ContractForm({ consignors, defaultUnits, canSeePrices, returnTo = "", saleId = null, saleLabel = null, pickVariantStore = null, locations = [], canStock = false }: { consignors: { id: string; name: string }[]; defaultUnits: string; canSeePrices: boolean; returnTo?: string; saleId?: string | null; saleLabel?: string | null; pickVariantStore?: string | null; locations?: { id: string; label: string }[]; canStock?: boolean }) {
   const [state, action, pending] = useActionState(createContract, null);
   const [type, setType] = useState("purchase");
   return (
@@ -77,7 +77,7 @@ export function ContractForm({ consignors, defaultUnits, canSeePrices, returnTo 
       <ContractFileInput label="Plik (PDF lub zdjęcie)" />
       <ContractItemsPicker defaultCodes={defaultUnits.split(/[\s,]+/).filter(Boolean)} />
       <InvoiceItemsInput canSeePrices={canSeePrices} />
-      {!saleId && locations.length > 0 && <StockOption locations={locations} />}
+      {!saleId && locations.length > 0 && <StockOption locations={locations} canStock={canStock} />}
       <div className="md:col-span-2">
         <label className="label" htmlFor="notes">Notatki</label>
         <input className="input" id="notes" name="notes" />
@@ -106,7 +106,7 @@ function CopiesCounter() {
 }
 
 /** Rzeczy wpisane ręcznie i spoza katalogu → od razu sztuki na stanie, „nieprzypisane do Shopify”. */
-export function StockOption({ locations, compact = false }: { locations: { id: string; label: string }[]; compact?: boolean }) {
+export function StockOption({ locations, compact = false, canStock = false }: { locations: { id: string; label: string }[]; compact?: boolean; canStock?: boolean }) {
   const [on, setOn] = useState(true);
   return (
     <div className={compact ? "flex flex-wrap items-center gap-2 text-sm" : "space-y-2 rounded-xl border border-line p-3 md:col-span-2"}>
@@ -118,10 +118,13 @@ export function StockOption({ locations, compact = false }: { locations: { id: s
       </label>
       {on && (
         <div className="flex flex-wrap items-center gap-2">
-          <select className="input w-auto" name="stock_status" defaultValue="in_transit" aria-label="Status nowych sztuk">
-            <option value="in_transit">w drodze (przyjmiesz w W drodze)</option>
-            <option value="in_stock">od razu na stan – towar już jest</option>
-          </select>
+          {/* „Od razu na stan” – tylko administrator; pracownik zawsze „w drodze”. */}
+          {canStock ? (
+            <select className="input w-auto" name="stock_status" defaultValue="in_transit" aria-label="Status nowych sztuk">
+              <option value="in_transit">w drodze (przyjmiesz w W drodze)</option>
+              <option value="in_stock">od razu na stan – towar już jest</option>
+            </select>
+          ) : <span className="text-xs text-muted">w drodze – przyjmiesz w Przyjęcie dostawy → W drodze</span>}
           <select className={compact ? "input w-64" : "input sm:w-80"} name="stock_location_id" defaultValue={locations[0]?.id} aria-label="Lokalizacja dla nowych sztuk">
             {locations.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
           </select>

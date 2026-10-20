@@ -26,7 +26,8 @@ export default async function NewContractPage({ searchParams }: { searchParams: 
       <PageHeader title="Nowa umowa" sub="Plik trafia do prywatnego magazynu plików; widzą go tylko zalogowani pracownicy." />
       <ContractForm consignors={consignors ?? []} defaultUnits={codes.join(" ")} canSeePrices={profile.can_see_prices} returnTo={back} saleId={saleLabel ? saleId : null} saleLabel={saleLabel}
         pickVariantStore={sale && !sale.unit_id && !sale.variant_id ? (sale.store_id as string | null) ?? "" : null}
-        locations={(locations ?? []).map((l) => ({ id: l.id as string, label: `${(l.store as unknown as { name: string } | null)?.name ?? ""} · ${l.name}` }))} />
+        locations={(locations ?? []).map((l) => ({ id: l.id as string, label: `${(l.store as unknown as { name: string } | null)?.name ?? ""} · ${l.name}` }))}
+        canStock={profile.role === "admin"} />
     </>
   );
 }
