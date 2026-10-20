@@ -116,6 +116,7 @@ export default async function UmowyPage({ searchParams }: { searchParams: Promis
         sub={<Link className="text-accent underline" href="/magazyn?umowa=brak">{noContract} sztuk na stanie bez umowy</Link>}
         actions={
           <>
+            <Link className="btn-secondary" href="/umowy/historia">Historia</Link>
             <Link className="btn-secondary" href="/umowy/nowa">Wgraj skan umowy</Link>
             <Link className="btn" href="/umowy/z-szablonu">Umowa z szablonu (link do podpisu)</Link>
           </>

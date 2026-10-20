@@ -392,3 +392,19 @@ export async function dismissIssue(formData: FormData) {
   revalidatePath("/", "layout");
   redirect(back.startsWith("/ustawienia") ? back : "/ustawienia");
 }
+
+/** Kopia zapasowa danych teraz (poza codzienną automatyczną). */
+export async function makeBackupNow() {
+  await requireAdmin();
+  const { createDbBackup } = await import("@/lib/backup");
+  const { createAdminClient: admin } = await import("@/lib/supabase/admin");
+  let msg: string;
+  try {
+    const r = await createDbBackup(admin());
+    const rows = Object.values(r.counts).reduce((n, x) => n + x, 0);
+    msg = `Kopia gotowa: ${r.path} (${(r.size / 1024 / 1024).toFixed(1)} MB, ${rows} wierszy, ${r.seconds} s).${Object.keys(r.skipped).length ? ` Pominięte tabele: ${Object.keys(r.skipped).join(", ")}.` : ""}`;
+  } catch (e) {
+    return done(errorMessage(e), "blad");
+  }
+  return done(msg);
+}

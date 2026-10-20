@@ -2,7 +2,7 @@ import Link from "next/link";
 import { SearchInput } from "@/components/SearchInput";
 import { notFound } from "next/navigation";
 import { requireProfile } from "@/lib/auth";
-import { CONTRACT_TYPE, dateOnly, money } from "@/lib/labels";
+import { CONTRACT_TYPE, dateOnly, dateTime, money } from "@/lib/labels";
 import { Field, Notice, PageHeader, StatusBadge } from "@/components/ui";
 import { SubmitButton } from "@/components/SubmitButton";
 import { acceptContract, addContractItem, removeContractItem, attachUnits, decideConsignorInvoice, cancelContract, deleteContract, detachUnit, markPaid, rejectContract, replaceFile, retryFinalize, sendSigningEmail, setContractPayment, setTemplateCurrency, updateContractMeta } from "../actions";
@@ -15,6 +15,7 @@ import { CopyLink } from "./CopyLink";
 import { AssignItems } from "./AssignItems";
 import { ContractFileInput } from "@/components/ContractFileInput";
 import { StockOption } from "../ContractForm";
+import { contractHistory } from "@/lib/contracts/history";
 
 export default async function ContractPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<Record<string, string | undefined>> }) {
   const { id } = await params;
@@ -239,6 +240,7 @@ export default async function ContractPage({ params, searchParams }: { params: P
           )}
         </div>
       </div>
+      <ContractHistorySection contractId={c.id} />
     </>
   );
 }
@@ -422,5 +424,26 @@ async function TemplateSection({ c, canSeePrices }: { c: TemplateContract; canSe
         )}
       </section>
     </div>
+  );
+}
+
+/** Historia tej umowy (SQL 73): zmiany, podpis, zatwierdzenie, opłacenie, przypięte / odpięte rzeczy. */
+async function ContractHistorySection({ contractId }: { contractId: string }) {
+  const { supabase } = await requireProfile();
+  const items = await contractHistory(supabase, { contractId, limit: 100 }).catch(() => []);
+  if (!items.length) return null;
+  return (
+    <section className="card mt-5 p-4">
+      <h2 className="h2 mb-2">Historia umowy</h2>
+      <ul className="space-y-1.5 text-sm">
+        {items.map((it, k) => (
+          <li key={k} className="flex flex-wrap gap-x-3">
+            <span className="w-32 shrink-0 text-xs text-muted">{dateTime(it.at)}</span>
+            <span className="min-w-0 flex-1">{it.text}</span>
+            {it.who && <span className="text-xs text-muted">{it.who}</span>}
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

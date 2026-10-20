@@ -263,11 +263,8 @@ export async function deleteContract(formData: FormData) {
   await supabase.from("units").update({ contract_id: null }).eq("contract_id", id);
   const { error } = await supabase.from("contracts").delete().eq("id", id);
   if (error) redirect(`/umowy/${id}?blad=${encodeURIComponent(error.message)}`);
-  // Plik usuwamy tylko, gdy nie używa go żadna inna umowa (kopie z tym samym skanem).
-  if (c?.file_path) {
-    const { count: shared } = await supabase.from("contracts").select("id", { count: "exact", head: true }).eq("file_path", c.file_path);
-    if (!shared) await supabase.storage.from("contracts").remove([c.file_path]);
-  }
+  // Plik zostaje (na wszelki wypadek) – dostępny w Umowy → Historia przy usuniętej umowie.
+  void c;
   revalidatePath("/umowy");
   redirect("/umowy");
 }

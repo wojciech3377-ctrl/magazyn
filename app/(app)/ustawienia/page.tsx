@@ -23,6 +23,10 @@ import { errorMessage } from "@/lib/errors";
 import { defaultOrderStore } from "@/lib/orders/default-store";
 import { getFiscalSettings } from "@/lib/fiscal/jobs";
 import { ExclusionVatSelect } from "./ExclusionVatSelect";
+import { BackupSettings } from "./BackupSettings";
+
+// „Zrób kopię teraz” – do kilku minut.
+export const maxDuration = 300;
 
 async function safe<T>(fn: () => Promise<T>): Promise<{ data: T | null; error: string | null }> {
   try {
@@ -42,6 +46,7 @@ const SETTINGS_TABS = [
   { key: "stany", label: "Stany magazynowe" },
   { key: "wykluczenia", label: "Wykluczenia" },
   { key: "dziennik", label: "Dziennik" },
+  { key: "kopia", label: "Kopia zapasowa" },
 ] as const;
 
 export default async function UstawieniaPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
@@ -574,6 +579,7 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
           </section>
           )}
 
+          {tab === "kopia" && isAdmin && <BackupSettings />}
           {tab === "dziennik" && (
           <section className="card overflow-x-auto p-4">
             <h2 className="h2 mb-3">Dziennik synchronizacji</h2>
