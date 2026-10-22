@@ -2,11 +2,10 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 /**
  * Kwota zakupu sztuki z dołączonej umowy.
- * – Sztuka bez kwoty dostaje kwotę z umowy (pozycja umowy tej sztuki / tego rozmiaru, a przy jednej rzeczy – kwota umowy).
- *   Komis: „kwota komisanta”, własne: „cena zakupu”.
- * – Gdy sztuka ma już inną kwotę niż umowa – w Magazynie zostaje kwota sztuki, a w JPK idzie kwota z umowy (informacja, nie błąd).
- * Umowa na kilka rzeczy bez cen pozycji: suma kwot sztuk musi się zgadzać z kwotą umowy; gdy brakuje kwoty
- * tylko jednej sztuce – dostaje resztę.
+ * – Sztuka bez kwoty (pusta albo 0) dostaje kwotę z umowy według `expectedPrices` (pozycja tej sztuki / rozmiaru,
+ *   „kwota za każdą rzecz”, jedna rzecz na umowie). Komis: „kwota komisanta”, własne: „cena zakupu”.
+ * – Sztuka z własną kwotą ją zachowuje (Magazyn), a JPK bierze kwotę z umowy – tylko informacja.
+ * – Gdy z umowy nie wiadomo, ile kosztowała ta rzecz (kwota łączna za kilka rzeczy) – podpowiedź, co zrobić.
  */
 export type PriceResult = { updated: string[]; problems: string[]; notes: string[] };
 
@@ -32,7 +31,8 @@ export async function inheritContractPrice(db: SupabaseClient, contractId: strin
   const zl = fmtFor(ct.currency);
   const field = (u: U) => (u.owner_type === "consignment" ? "payout_amount" : "purchase_price") as "payout_amount" | "purchase_price";
   const fieldName = (u: U) => (u.owner_type === "consignment" ? "kwota komisanta" : "cena zakupu");
-  const current = (u: U) => num(u[field(u)]);
+  // 0 zł to brak kwoty (np. wpisane przez pomyłkę) – też dostaje kwotę z umowy.
+  const current = (u: U) => { const n = num(u[field(u)]); return n === 0 ? null : n; };
   const check = new Set(unitIds?.length ? unitIds : units.map((u) => u.id));
 
   const { expected, items, amount } = expectedPrices(ct, units);
@@ -61,54 +61,63 @@ export async function inheritContractPrice(db: SupabaseClient, contractId: strin
     }
   }
 
-  // 3. Kilka rzeczy, kwota umowy bez cen pozycji: suma musi się zgadzać.
-  if (!perItem && !items.length && units.length > 1 && amount !== null) {
-    // Ta sama pełna kwota umowy w kilku sztukach – prawie na pewno skopiowana, a nie cena tej rzeczy.
-    const full = units.filter((u) => current(u) !== null && same(current(u)!, amount));
-    const missing = units.filter((u) => current(u) === null);
-    const sum = units.reduce((s, u) => s + (current(u) ?? 0), 0);
-    const whole = label.replace(/^(umowie|fakturze)/, (m) => (m === "umowie" ? "umowy" : "faktury"));
-    if (full.length) {
-      out.problems.push(`${full.map((u) => u.code).join(", ")}: ${full.length > 1 ? "mają" : "ma"} całą kwotę ${whole} (${zl(amount)}), a na ${label} jest ${units.length} rzeczy. Wpisz osobno kwotę każdej rzeczy – razem mają dać ${zl(amount)}.`);
-    } else if (missing.length === 1) {
-      const rest = Math.round((amount - sum) * 100) / 100;
-      const u = missing[0];
-      if (rest > 0) {
-        const { error } = await db.from("units").update({ [field(u)]: rest }).eq("id", u.id);
-        if (!error) out.updated.push(`${u.code} (reszta kwoty: ${zl(rest)})`);
-      } else {
-        out.problems.push(`${u.code}: brak kwoty, a pozostałe rzeczy na tej ${label.startsWith("fakturze") ? "fakturze" : "umowie"} mają już razem ${zl(sum)} przy kwocie ${whole} ${zl(amount)} – nic nie zostaje dla tej sztuki. Sprawdź kwoty.`);
-      }
-    } else if (missing.length > 1) {
-      out.notes.push(`Na ${label} jest ${units.length} rzeczy na łącznie ${zl(amount)} – wpisz kwoty zakupu przy sztukach (${missing.map((u) => u.code).join(", ")}), razem mają dać ${zl(amount)}.`);
-    } else if (!same(sum, amount)) {
-      out.problems.push(`Suma kwot zakupu ${units.length} rzeczy na ${label} to ${zl(sum)}, a kwota ${whole} to ${zl(amount)} (różnica ${zl(Math.abs(sum - amount))}). Popraw kwoty sztuk albo kwotę ${whole}.`);
-    }
+  // Sztuka bez kwoty, a z umowy nie wiadomo, ile kosztowała (np. kwota łączna za kilka rzeczy) – podpowiedź, co zrobić.
+  const unknown = units.filter((u) => check.has(u.id) && current(u) === null && !expected.has(u.id));
+  if (unknown.length && !out.notes.some((n) => n.startsWith("Faktura na"))) {
+    const why = amount === null
+      ? `${label} nie ma kwoty`
+      : `na ${label} ${units.length % 10 >= 2 && units.length % 10 <= 4 && (units.length % 100 < 12 || units.length % 100 > 14) ? "są" : "jest"} ${units.length} rzeczy na łącznie ${zl(amount)} i nie wiadomo, ile kosztowała która`;
+    out.notes.push(`${unknown.map((u) => u.code).join(", ")}: bez kwoty zakupu – ${why}. Zaznacz w umowie „Kwota za każdą rzecz” (jeśli każda rzecz kosztowała tyle samo), wpisz pozycje z cenami albo wpisz kwotę przy sztuce.`);
   }
   return out;
 }
 
-/** Kwota z umowy dla każdej sztuki (bez zapisu): pozycja tej sztuki, pozycja tego rozmiaru, a przy jednej rzeczy – kwota umowy. */
+/**
+ * Kwota z umowy dla każdej sztuki (bez zapisu) – ta sama reguła w Magazynie, w JPK i na karcie sztuki:
+ * 1. pozycja umowy tej sztuki (unit_id),
+ * 2. pozycja tego rozmiaru (variant_id) – także pozycja, której sztuki nie ma już na umowie (np. podmieniona),
+ * 3. „Kwota za każdą rzecz” – każda pozostała sztuka ma kwotę umowy,
+ * 4. pozostałe pozycje z ceną, których sztuk nie ma już na umowie: jedna pozycja na jedną sztukę albo wszystkie w tej samej cenie,
+ * 5. jedna rzecz na umowie (nie faktura) – cała kwota umowy.
+ * Pozycja z ilością > 1 obejmuje tyle sztuk. Ceny wpisane przy sztukach w Magazynie nie mają tu znaczenia.
+ */
 export function expectedPrices(ct: Pick<C, "amount" | "items" | "amount_per_item"> & { type?: string | null }, units: Pick<U, "id" | "variant_id">[]) {
   // Pozycje bez ceny (0 – np. rzeczy z katalogu dodane do skanu umowy) nic nie mówią o kwocie.
   // Przedmioty faktury wpisane ręcznie (bez sztuki i rozmiaru z katalogu) to tylko opis – nie ustalają kwot sztuk.
   const items = (ct.items ?? []).filter((i) => (num(i.price) ?? 0) > 0 && (i.unit_id || i.variant_id));
-  const used = new Set<number>();
+  const left = items.map((i) => Math.max(1, Math.floor(Number(i.qty ?? 1)) || 1));
+  const onContract = new Set(units.map((u) => u.id));
+  const orphan = (it: (typeof items)[number]) => !it.unit_id || !onContract.has(it.unit_id);
   const expected = new Map<string, number>();
+  const take = (u: { id: string }, k: number) => { left[k]--; expected.set(u.id, num(items[k].price)!); };
   for (const u of units) {
-    const i = items.findIndex((it, k) => !used.has(k) && it.unit_id === u.id);
-    if (i >= 0) { used.add(i); expected.set(u.id, num(items[i].price)!); }
+    const k = items.findIndex((it, x) => left[x] > 0 && it.unit_id === u.id);
+    if (k >= 0) take(u, k);
   }
   for (const u of units) {
     if (expected.has(u.id)) continue;
-    const i = items.findIndex((it, k) => !used.has(k) && !it.unit_id && it.variant_id === u.variant_id);
-    if (i >= 0) { used.add(i); expected.set(u.id, num(items[i].price)!); }
+    const k = items.findIndex((it, x) => left[x] > 0 && orphan(it) && it.variant_id === u.variant_id);
+    if (k >= 0) take(u, k);
   }
   const amount = num(ct.amount);
-  // „Kwota za każdą rzecz”: każda sztuka ma tę kwotę.
-  if (!items.length && amount !== null && ct.amount_per_item) for (const u of units) if (!expected.has(u.id)) expected.set(u.id, amount);
+  // „Kwota za każdą rzecz”: każda pozostała sztuka ma tę kwotę.
+  if (amount !== null && ct.amount_per_item) for (const u of units) if (!expected.has(u.id)) expected.set(u.id, amount);
+  // Pozycje bez swojej sztuki → sztuki bez kwoty: gdy jest dokładnie jedna taka para albo wszystkie pozycje mają tę samą cenę.
+  const rest = units.filter((u) => !expected.has(u.id));
+  const spare = items.map((it, x) => ({ it, x })).filter(({ it, x }) => left[x] > 0 && orphan(it));
+  if (rest.length && spare.length) {
+    const prices = new Set(spare.map(({ it }) => num(it.price)));
+    const slots = spare.reduce((n, { x }) => n + left[x], 0);
+    if (prices.size === 1 || (rest.length === 1 && slots === 1)) {
+      for (const u of rest) {
+        const s = spare.find(({ x }) => left[x] > 0);
+        if (!s) break;
+        take(u, s.x);
+      }
+    }
+  }
   // Jedna rzecz na umowie: cała kwota. Faktura – nie (zwykle obejmuje kilka rzeczy, a rzeczy dopina się po kolei).
-  if (!items.length && units.length === 1 && amount !== null && ct.type !== "invoice") expected.set(units[0].id, amount);
+  if (units.length === 1 && !expected.has(units[0].id) && !items.length && amount !== null && ct.type !== "invoice") expected.set(units[0].id, amount);
   return { expected, items, amount };
 }
 
