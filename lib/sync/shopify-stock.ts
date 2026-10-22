@@ -209,14 +209,37 @@ export async function reconcileShopifyLevel(db: SupabaseClient, storeId: string,
 }
 
 type Change = { inventoryItemId: string; locationId: string; quantity: number; changeFromQuantity: number };
+/** Rozmiar bez stanu w danej lokalizacji Shopify (nieaktywny), a aplikacja ma tam sztuki – do aktywacji ze stanem. */
+type Activation = { inventoryItemId: string; locationId: string; quantity: number };
+
+/**
+ * Aktywacja rozmiarów w lokalizacji Shopify (np. nowy sklep) od razu z ilością „dostępne”.
+ * Bez tego Shopify nie przyjmuje stanu, więc sztuki z nowego sklepu nie byłyby widoczne na stronie.
+ */
+export async function activateAtLocation(domain: string, storeCode: string, items: Activation[]) {
+  let done = 0;
+  const errors: string[] = [];
+  for (const a of items) {
+    try {
+      const d = await shopifyGraphql<{ inventoryActivate: { userErrors: { message: string }[] } }>(domain, storeCode,
+        `mutation Act($item: ID!, $loc: ID!, $qty: Int, $key: String!) { inventoryActivate(inventoryItemId: $item, locationId: $loc, available: $qty) @idempotent(key: $key) { inventoryLevel { id } userErrors { field message } } }`,
+        { item: a.inventoryItemId, loc: a.locationId, qty: a.quantity, key: crypto.randomUUID() });
+      const err = d.inventoryActivate.userErrors.map((e) => e.message).join("; ");
+      if (err) errors.push(err); else done++;
+    } catch (e) {
+      errors.push(errorMessage(e));
+    }
+  }
+  return { done, errors };
+}
 
 /** Różnice, gdyby aplikacja była główna: ile pozycji w Shopify trzeba zmienić (bez zapisu). */
 export async function planPushToShopify(db: SupabaseClient, onlyVariants?: Set<string>, opts: { seed?: boolean } = {}) {
   const { stores, locs } = await storesAndLocations(db);
-  const plan: { store: Store; changes: Change[]; note?: string; seeded?: number; waitingMatch?: number; seedError?: string }[] = [];
+  const plan: { store: Store; changes: Change[]; activate: Activation[]; note?: string; seeded?: number; waitingMatch?: number; seedError?: string }[] = [];
   for (const s of stores) {
     const mapped = locs.filter((l) => l.store_id === s.id && l.active && l.shopify_location_id);
-    if (!mapped.length) { plan.push({ store: s, changes: [], note: "brak lokalizacji Shopify przy lokalizacjach aplikacji" }); continue; }
+    if (!mapped.length) { plan.push({ store: s, changes: [], activate: [], note: "brak lokalizacji Shopify przy lokalizacjach aplikacji" }); continue; }
     const links = await trackedLinks(db, s.id);
     const counts = await allStockCounts(db, mapped.map((l) => l.id));
     const shopLocOf = new Map(mapped.map((l) => [l.id, l.shopify_location_id!]));
@@ -233,6 +256,7 @@ export async function planPushToShopify(db: SupabaseClient, onlyVariants?: Set<s
       : { data: [] };
     const hold = new Set((recentLinks ?? []).map((l) => l.variant_id as string));
     const changes: Change[] = [];
+    const activate: Activation[] = [];
     // Nowe rozmiary, którym nie udało się dodać sztuk – nie zerujemy ich w Shopify (lepiej sprzedać niż ukryć).
     const protect = new Set<string>();
     let seeded = 0;
@@ -301,8 +325,14 @@ export async function planPushToShopify(db: SupabaseClient, onlyVariants?: Set<s
       }
       for (const l of links) {
         if (onlyVariants && !onlyVariants.has(l.variant_id)) continue;
-        // Pozycja niepodpięta w tej lokalizacji Shopify – pomijamy (Shopify nie przyjmie stanu bez aktywacji).
-        if (!levels.has(l.shopify_inventory_item_id)) continue;
+        // Pozycja niepodpięta w tej lokalizacji Shopify (np. nowy sklep): gdy aplikacja ma tu sztuki – aktywacja ze stanem
+        // (jedna pozycja na rozmiar, przy duplikatach pierwsza wg ID). Bez sztuk – pomijamy.
+        if (!levels.has(l.shopify_inventory_item_id)) {
+          if (owner.has(l.variant_id) || protect.has(l.variant_id) || hold.has(l.variant_id)) continue;
+          const qty = want.get(`${l.variant_id}|${shopLoc}`) ?? 0;
+          if (qty > 0) { owner.set(l.variant_id, l.shopify_inventory_item_id); activate.push({ inventoryItemId: l.shopify_inventory_item_id, locationId: shopLoc, quantity: qty }); }
+          continue;
+        }
         const current = levels.get(l.shopify_inventory_item_id)!;
         const target = owner.get(l.variant_id) === l.shopify_inventory_item_id ? want.get(`${l.variant_id}|${shopLoc}`) ?? 0 : 0;
         if (target > current && hold.has(l.variant_id)) continue;
@@ -310,7 +340,7 @@ export async function planPushToShopify(db: SupabaseClient, onlyVariants?: Set<s
         if (current !== target) changes.push({ inventoryItemId: l.shopify_inventory_item_id, locationId: shopLoc, quantity: target, changeFromQuantity: current });
       }
     }
-    plan.push({ store: s, changes, ...(seeded ? { seeded } : {}), ...(waitingMatch ? { waitingMatch } : {}), ...(seedError ? { seedError } : {}) });
+    plan.push({ store: s, changes, activate, ...(seeded ? { seeded } : {}), ...(waitingMatch ? { waitingMatch } : {}), ...(seedError ? { seedError } : {}) });
   }
   return plan;
 }
@@ -342,7 +372,11 @@ export async function pushStockToShopify(db: SupabaseClient, maxChanges = 500, o
         else done++;
       }
     }
-    results[p.store.name] = { changed: done, left: p.changes.length - todo.length, ...seededInfo, ...(errors.length ? { failed: errors.length, errors: [...new Set(errors)].slice(0, 3) } : {}) };
+    // Rozmiary nieaktywne w lokalizacji Shopify, a z sztukami w aplikacji (np. nowy sklep) – aktywacja ze stanem, porcjami.
+    const toActivate = p.activate.slice(0, maxChanges);
+    const act = toActivate.length ? await activateAtLocation(p.store.shopify_domain, p.store.code, toActivate) : null;
+    if (act) errors.push(...act.errors);
+    results[p.store.name] = { changed: done, left: p.changes.length - todo.length, ...(act ? { aktywowane: act.done, do_aktywacji: p.activate.length - toActivate.length } : {}), ...seededInfo, ...(errors.length ? { failed: errors.length, errors: [...new Set(errors)].slice(0, 3) } : {}) };
   }
   return results;
 }

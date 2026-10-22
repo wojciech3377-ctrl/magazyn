@@ -85,6 +85,16 @@ export async function adjustStock(db: SupabaseClient, changes: StockChange[]) {
     const live = all.filter((i) => i.delta !== 0);
     if (!live.length) return;
     const done = (i: Item, ok: boolean, message: string) => { for (const c of i.src) results.push({ ...c, ok, message }); };
+    // Odmowa Shopify, bo rozmiar nie jest aktywny w tej lokalizacji (np. pierwszy towar w nowym sklepie) – aktywacja od razu ze stanem.
+    const failOrActivate = async (i: Item, e: unknown) => {
+      const msg = errorMessage(e);
+      if (i.delta > 0 && /^Shopify:/.test(msg) && /not stocked|isn't stocked|not active|inactive/i.test(msg)) {
+        const { activateAtLocation } = await import("@/lib/sync/shopify-stock");
+        const r = await activateAtLocation(store.shopify_domain!, store.code, [{ inventoryItemId: i.item, locationId: i.location, quantity: i.delta }]);
+        if (r.done) return done(i, true, `Shopify: aktywowano w lokalizacji, +${i.delta}`);
+      }
+      done(i, false, msg);
+    };
     for (let n = 0; n < live.length; n += 100) {
       const part = live.slice(n, n + 100);
       try {
@@ -93,13 +103,14 @@ export async function adjustStock(db: SupabaseClient, changes: StockChange[]) {
       } catch (e) {
         // Odmowa Shopify (userErrors) = nic nie zapisane → ponawiamy pozycje osobno. Inny błąd (np. sieć) – nie wiadomo,
         // czy zapisało; bez ponawiania (ryzyko podwójnej zmiany), pozycje zostają do ręcznego „Ponów”.
-        if (part.length === 1 || !/^Shopify:/.test(errorMessage(e))) { for (const i of part) done(i, false, errorMessage(e)); continue; }
+        if (!/^Shopify:/.test(errorMessage(e))) { for (const i of part) done(i, false, errorMessage(e)); continue; }
+        if (part.length === 1) { await failOrActivate(part[0], e); continue; }
         for (const i of part) {
           try {
             await send(store, [i]);
             done(i, true, `Shopify ${i.delta > 0 ? "+" : ""}${i.delta}`);
           } catch (e2) {
-            done(i, false, errorMessage(e2));
+            await failOrActivate(i, e2);
           }
         }
       }
