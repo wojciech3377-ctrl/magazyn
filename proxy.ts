@@ -4,7 +4,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { signUserHeader, USER_HEADER } from "@/lib/auth-header";
 
-const PUBLIC_PATHS = ["/login", "/manifest.webmanifest", "/api/shopify/webhook", "/api/cron", "/api/drukarka/", "/podpis", "/umowa/"];
+const PUBLIC_PATHS = ["/login", "/manifest.webmanifest", "/api/shopify/webhook", "/api/cron", "/api/drukarka/", "/api/dostepnosc", "/podpis", "/umowa/"];
 
 /**
  * Content Security Policy z jednorazowym nonce dla każdej strony: przeglądarka uruchamia tylko skrypty

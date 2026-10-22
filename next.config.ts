@@ -23,7 +23,8 @@ const nextConfig: NextConfig = {
     return [
       { source: "/:path*", headers: securityHeaders },
       // Odpowiedzi API z danymi nie mogą trafić do pamięci podręcznej po drodze.
-      { source: "/api/:path*", headers: [{ key: "Cache-Control", value: "private, no-store" }] },
+      // Wyjątek: /api/dostepnosc (publiczna dostępność rozmiarów dla sklepu internetowego) – sama ustawia krótką pamięć podręczną.
+      { source: "/api/:path((?!dostepnosc).*)", headers: [{ key: "Cache-Control", value: "private, no-store" }] },
     ];
   },
 };
