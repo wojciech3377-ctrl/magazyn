@@ -18,6 +18,7 @@ import { AssignItems } from "./AssignItems";
 import { ContractFileInput } from "@/components/ContractFileInput";
 import { StockOption } from "../ContractForm";
 import { contractHistory } from "@/lib/contracts/history";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 export default async function ContractPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<Record<string, string | undefined>> }) {
   const { id } = await params;
@@ -54,7 +55,7 @@ export default async function ContractPage({ params, searchParams }: { params: P
   const unassignedUnits = new Set((units ?? []).filter((x) => unassignedP.has(prodOf(x))).map((x) => x.id as string));
   let fileUrl: string | null = null;
   if (c.file_path) {
-    const { data } = await supabase.storage.from("contracts").createSignedUrl(c.file_path, 600);
+    const { data } = await createAdminClient().storage.from("contracts").createSignedUrl(c.file_path, 600);
     fileUrl = data?.signedUrl ?? null;
   }
   const isImage = /\.(jpe?g|png|webp|heic|heif)$/i.test(c.file_path ?? "");

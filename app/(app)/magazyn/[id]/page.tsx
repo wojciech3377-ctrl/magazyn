@@ -78,7 +78,7 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
   const siblings = siblingsRes.count ?? 0;
   let fileUrl: string | null = null;
   if (contract?.file_path) {
-    const { data: signed } = await supabase.storage.from("contracts").createSignedUrl(contract.file_path, 600);
+    const { data: signed } = await createAdminClient().storage.from("contracts").createSignedUrl(contract.file_path, 600);
     fileUrl = signed?.signedUrl ?? null;
   }
 

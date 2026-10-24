@@ -1,5 +1,6 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 /** Numer umowy z treści dokumentu, np. „NR00512”, „Umowa nr 190/2026”, „Nr umowy: UK/12/2026”, „No. 15”. */
 export function findContractNumber(text: string): string | null {
@@ -22,7 +23,7 @@ export function findContractNumber(text: string): string | null {
 export async function detectContractNumber(db: SupabaseClient, filePath: string | null) {
   if (!filePath || !/\.pdf$/i.test(filePath)) return null;
   try {
-    const { data } = await db.storage.from("contracts").download(filePath);
+    const { data } = await createAdminClient().storage.from("contracts").download(filePath);
     if (!data) return null;
     const { extractText, getDocumentProxy } = await import("unpdf");
     const pdf = await getDocumentProxy(new Uint8Array(await data.arrayBuffer()));

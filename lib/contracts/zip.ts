@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { zipSync } from "fflate";
 import { contractPdf } from "./sign";
 import { errorMessage } from "@/lib/errors";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 function safeName(s: string) {
   return s.replace(/[\\/:*?"<>|#]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 90);
@@ -32,7 +33,7 @@ export async function contractsZip(db: SupabaseClient, entries: { contractId: st
       let bytes: Uint8Array | null = null;
       let ext = "pdf";
       if (c.file_path) {
-        const { data: blob, error } = await db.storage.from("contracts").download(c.file_path);
+        const { data: blob, error } = await createAdminClient().storage.from("contracts").download(c.file_path);
         if (error || !blob) throw error ?? new Error("brak pliku");
         bytes = new Uint8Array(await blob.arrayBuffer());
         ext = (c.file_path.split(".").pop() ?? "pdf").toLowerCase().slice(0, 5);

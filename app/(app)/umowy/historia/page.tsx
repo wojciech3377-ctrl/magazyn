@@ -4,6 +4,7 @@ import { PageHeader, Notice } from "@/components/ui";
 import { contractHistory } from "@/lib/contracts/history";
 import { dateTime } from "@/lib/labels";
 import { SearchInput } from "@/components/SearchInput";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 export const metadata = { title: "Historia umów" };
 
@@ -17,7 +18,7 @@ export default async function ContractHistoryPage({ searchParams }: { searchPara
   // Pliki usuniętych umów – link ważny 10 minut.
   const files = new Map<string, string>();
   for (const it of items.filter((i) => i.filePath)) {
-    const { data } = await supabase.storage.from("contracts").createSignedUrl(it.filePath!, 600);
+    const { data } = await createAdminClient().storage.from("contracts").createSignedUrl(it.filePath!, 600);
     if (data?.signedUrl) files.set(it.filePath!, data.signedUrl);
   }
   return (

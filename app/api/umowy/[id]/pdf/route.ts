@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { contractPdf } from "@/lib/contracts/sign";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
 
@@ -23,7 +24,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     if (!profile?.can_see_prices) return contractPage;
   }
   if (c.file_path) {
-    const { data } = await db.storage.from("contracts").createSignedUrl(c.file_path, 300);
+    const { data } = await createAdminClient().storage.from("contracts").createSignedUrl(c.file_path, 300);
     if (data?.signedUrl) return NextResponse.redirect(data.signedUrl);
   }
   if (!c.template) return contractPage;
