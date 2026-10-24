@@ -15,7 +15,9 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
-  images: { remotePatterns: [{ protocol: "https", hostname: "cdn.shopify.com" }] },
+  // Aplikacja nie używa next/image – optymalizator obrazów wyłączony (mniej publicznych punktów wejścia;
+  // cdn.shopify.com jest wspólny dla wszystkich sklepów Shopify, więc nie wpuszczamy go do serwera).
+  images: { unoptimized: true },
   experimental: { serverActions: { bodySizeLimit: "2mb" } },
   // Czcionki do PDF umów muszą trafić do funkcji serwerowych.
   outputFileTracingIncludes: { "/**": ["./lib/contracts/fonts/**"], "/api/program-drukarki": ["./agent/drukarka/**"] },
