@@ -77,7 +77,7 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
     : [{ count: 0 }, [] as ShopifyMatch[]];
   const siblings = siblingsRes.count ?? 0;
   let fileUrl: string | null = null;
-  if (contract?.file_path) {
+  if (contract?.file_path && profile.can_see_prices) {
     const { data: signed } = await createAdminClient().storage.from("contracts").createSignedUrl(contract.file_path, 600);
     fileUrl = signed?.signedUrl ?? null;
   }
@@ -290,7 +290,7 @@ export default async function UnitPage({ params, searchParams }: { params: Promi
                     W Magazynie {u.owner_type === "consignment" ? "kwota komisanta" : "cena zakupu"} to <b>{inCur(Number(ownPrice))}</b> – zostaje bez zmian. W JPK jako kwota zakupu idzie kwota z umowy: <b>{inContractCur(fromContract!)}</b>.
                   </p>
                 )}
-                {fileUrl ? <a className="btn-secondary w-full" href={fileUrl} target="_blank" rel="noreferrer">Otwórz plik umowy</a> : <Pill tone="amber">bez pliku</Pill>}
+                {fileUrl ? <a className="btn-secondary w-full" href={fileUrl} target="_blank" rel="noreferrer">Otwórz plik umowy</a> : contract.file_path ? <Pill tone="slate">plik jest (podgląd z dostępem do cen)</Pill> : <Pill tone="amber">bez pliku</Pill>}
               </div>
             ) : (
               <div className="space-y-3 text-sm">

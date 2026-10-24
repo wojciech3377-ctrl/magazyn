@@ -25,8 +25,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   const { data: c } = await db.from("contracts").select("*").eq("id", id).maybeSingle();
   if (!c) return new Response("Nie znaleziono", { status: 404 });
 
-  // Umowa z szablonu zawiera ceny zakupu – tylko dla osób z dostępem do cen.
-  if (c.template && !profile.can_see_prices) return contractPage;
+  // Umowy (szablon i skany) zawierają ceny zakupu – plik tylko dla osób z dostępem do cen.
+  if (!profile.can_see_prices) return contractPage;
   if (c.file_path) {
     const { data } = await createAdminClient().storage.from("contracts").createSignedUrl(c.file_path, 300);
     if (data?.signedUrl) return NextResponse.redirect(data.signedUrl);

@@ -54,7 +54,8 @@ export default async function ContractPage({ params, searchParams }: { params: P
   const unassignedP = new Set(((pflags ?? []) as { id: string; unassigned?: boolean }[]).filter((x) => x.unassigned).map((x) => x.id));
   const unassignedUnits = new Set((units ?? []).filter((x) => unassignedP.has(prodOf(x))).map((x) => x.id as string));
   let fileUrl: string | null = null;
-  if (c.file_path) {
+  // Plik umowy zawiera ceny zakupu – link tylko dla osób z dostępem do cen.
+  if (c.file_path && profile.can_see_prices) {
     const { data } = await createAdminClient().storage.from("contracts").createSignedUrl(c.file_path, 600);
     fileUrl = data?.signedUrl ?? null;
   }
@@ -268,7 +269,7 @@ export default async function ContractPage({ params, searchParams }: { params: P
                   <a className="btn-secondary w-full" href={fileUrl} target="_blank" rel="noreferrer">Otwórz {c.file_name ?? "plik"}</a>
                 )}
               </>
-            ) : <p className="text-sm text-muted">Brak pliku.</p>}
+            ) : <p className="text-sm text-muted">{c.file_path ? `Plik jest (${c.file_name ?? "umowa"}) – podgląd tylko z dostępem do cen.` : "Brak pliku."}</p>}
             <form action={replaceFile} className="space-y-2">
               <input type="hidden" name="id" value={c.id} />
               <ContractFileInput label={c.file_path ? "Zastąp plik – wybierz nowy" : "Dodaj plik umowy"} autoSave />

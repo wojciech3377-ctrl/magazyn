@@ -32,8 +32,8 @@ export async function contractsZip(db: SupabaseClient, entries: { contractId: st
     try {
       let bytes: Uint8Array | null = null;
       let ext = "pdf";
-      // Umowa z szablonu (także zapisany PDF po zatwierdzeniu) zawiera ceny zakupu – tylko z dostępem do cen.
-      if (c.template && !canSeePrices) {
+      // Umowy (szablon, zapisany PDF i skany) zawierają ceny zakupu – tylko z dostępem do cen.
+      if (!canSeePrices) {
         missing.push(`${base}: umowa z cenami zakupu – brak dostępu do cen`);
         continue;
       }

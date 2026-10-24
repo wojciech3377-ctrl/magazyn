@@ -75,10 +75,16 @@ export async function GET(req: NextRequest) {
   // Każda lokalizacja (sklep / magazyn) pojawia się w odpowiedzi, także z zerem.
   for (const id of ids) for (const name of new Set(label.values())) out[id][name] = 0;
 
-  const { data: units, error } = await db.from("units").select("variant_id, location_id")
-    .eq("status", "in_stock").in("variant_id", [...byVariant.keys()]).in("location_id", [...label.keys()]).limit(10000);
-  if (error) return json({ error: "błąd odczytu" }, 500, "no-store");
-  for (const u of units ?? []) {
+  // Stronami po 1000 (Supabase oddaje najwyżej 1000 wierszy na zapytanie).
+  const units: { variant_id: string; location_id: string }[] = [];
+  for (let from = 0; from < 20000; from += 1000) {
+    const { data, error } = await db.from("units").select("variant_id, location_id")
+      .eq("status", "in_stock").in("variant_id", [...byVariant.keys()]).in("location_id", [...label.keys()]).order("id").range(from, from + 999);
+    if (error) return json({ error: "błąd odczytu" }, 500, "no-store");
+    units.push(...((data ?? []) as typeof units));
+    if ((data ?? []).length < 1000) break;
+  }
+  for (const u of units) {
     const name = label.get(u.location_id as string);
     if (!name) continue;
     for (const shopId of byVariant.get(u.variant_id as string) ?? []) out[shopId][name] = (out[shopId][name] ?? 0) + 1;

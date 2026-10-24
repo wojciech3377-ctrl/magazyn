@@ -136,7 +136,7 @@ export function expectedPrices(ct: Pick<C, "amount" | "items" | "amount_per_item
 export function priceMessage(r: PriceResult) {
   if (r.masked) {
     // Bez kwot: tylko które sztuki i co zrobić.
-    const hide = (t: string) => t.replace(/\d[\d\s.]*(,\d{1,2})?\s?(zł|PLN|EUR|€)/g, "•••");
+    const hide = (t: string) => t.replace(/\d[\d\s.]*(,\d{1,2})?\s?(zł|€|[A-Z]{3}\b)/g, "•••");
     return priceMessage({ ...r, masked: false, notes: r.notes.map(hide), problems: r.problems.map(hide) });
   }
   const parts: string[] = [];

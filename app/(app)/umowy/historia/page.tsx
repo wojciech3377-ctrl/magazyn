@@ -17,7 +17,7 @@ export default async function ContractHistoryPage({ searchParams }: { searchPara
   const items = error ? [] : await contractHistory(supabase, { limit: 300, search: q || undefined, canSeePrices: !!profile.can_see_prices });
   // Pliki usuniętych umów – link ważny 10 minut.
   const files = new Map<string, string>();
-  for (const it of items.filter((i) => i.filePath)) {
+  for (const it of items.filter((i) => i.filePath && profile.can_see_prices)) {
     const { data } = await createAdminClient().storage.from("contracts").createSignedUrl(it.filePath!, 600);
     if (data?.signedUrl) files.set(it.filePath!, data.signedUrl);
   }

@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 export async function GET(_: NextRequest, { params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
   if (!/^[a-f0-9]{32,64}$/.test(token)) return new Response("Nie znaleziono", { status: 404 });
-  if (!(await rateLimit(`podpis-pdf:${await clientIp()}`, 30, 600))) return new Response("Za dużo prób – spróbuj za kilka minut.", { status: 429 });
+  if (!(await rateLimit(`podpis-pdf:${await clientIp()}`, 120, 600))) return new Response("Za dużo prób – spróbuj za kilka minut.", { status: 429 });
   const db = createAdminClient();
   const { data: c } = await db.from("contracts").select("id, number, status, accepted_at").eq("sign_token", token).maybeSingle();
   if (!c || c.status !== "accepted") return new Response("Umowa nie jest jeszcze zatwierdzona", { status: 404 });

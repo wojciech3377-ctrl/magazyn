@@ -35,7 +35,7 @@ export async function signIn(_: unknown, formData: FormData) {
     if (error.code === "invalid_credentials" || error.code === "email_not_confirmed" || (!error.code && error.status === 400)) return { error: "Nieprawidłowy e-mail lub hasło." };
     return { error: `Logowanie nie działa (${error.code ?? error.status ?? "błąd"}). Spróbuj ponownie za chwilę.` };
   }
-  await rateLimitReset(emailKey);
+  await Promise.all([rateLimitReset(emailKey), rateLimitReset(`login:konto:${email.toLowerCase()}`)]);
   // Komisant trafia do swojego panelu (pracownik, który jest też komisantem – do aplikacji; panel ma w menu).
   if (signed?.user) {
     const { createAdminClient } = await import("@/lib/supabase/admin");

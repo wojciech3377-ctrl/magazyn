@@ -2,7 +2,8 @@
 -- 1. Baza odpowiada pracownikom tylko przez serwer aplikacji. Wcześniej pracownik mógł wziąć swój token logowania
 --    z przeglądarki i pytać bazę bezpośrednio (z pominięciem aplikacji): ceny zakupu, PESEL, konta, usuwanie umów.
 --    Teraz is_staff() / is_admin() wymagają nagłówka, który zna tylko serwer (wyliczony z klucza serwera).
---    Skrót tego nagłówka serwer sam zapisuje w server_keys przy pierwszym zapytaniu – nic nie trzeba wpisywać.
+--    Skrót tego nagłówka serwer sam zapisuje w server_keys przy pierwszym zapytaniu – nic nie trzeba wpisywać
+--    (kilka kluczy naraz jest w porządku, np. po zmianie klucza w Supabase).
 --    Awaryjnie (gdyby coś przestało działać): delete from public.server_keys;  → baza działa jak przed 0077.
 -- 2. Pliki umów w Storage tylko przez serwer (pracownik nie pobierze listy ani plików bezpośrednio).
 -- 3. Rola anon (bez logowania) bez dostępu do tabel i funkcji; funkcje SECURITY DEFINER – tylko te, które
@@ -13,10 +14,16 @@
 
 -- ───────── 1. Klucz serwera ─────────
 create table if not exists public.server_keys (
-  id int primary key default 1 check (id = 1),
-  key_hash text not null,
-  updated_at timestamptz not null default now()
+  key_hash text primary key,
+  seen_at timestamptz not null default now()
 );
+-- Starsza wersja tej migracji (jeden wiersz id = 1) – przejście na wiele kluczy.
+do $$ begin
+  if exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'server_keys' and column_name = 'id') then
+    drop table public.server_keys;
+    create table public.server_keys (key_hash text primary key, seen_at timestamptz not null default now());
+  end if;
+end $$;
 alter table public.server_keys enable row level security;
 revoke all on public.server_keys from public, anon, authenticated;
 
@@ -24,7 +31,6 @@ create or replace function public.request_from_server() returns boolean
 language plpgsql stable security definer set search_path = public as $$
 declare
   v_cached text;
-  v_hash text;
   v_hdr text;
   v_role text;
   v_ok boolean;
@@ -38,15 +44,15 @@ begin
   -- Wynik zapamiętany na czas jednego zapytania (transakcji).
   v_cached := current_setting('magazyn.server_ok', true);
   if v_cached = '1' then return true; elsif v_cached = '0' then return false; end if;
-  select key_hash into v_hash from public.server_keys where id = 1;
-  if v_hash is null then
+  if not exists (select 1 from public.server_keys) then
     v_ok := true; -- serwer jeszcze nie zapisał klucza – jak przed 0077
   else
     begin
       v_hdr := nullif(current_setting('request.headers', true), '')::json ->> 'x-magazyn-server';
     exception when others then v_hdr := null;
     end;
-    v_ok := v_hdr is not null and encode(sha256(convert_to(v_hdr, 'UTF8')), 'hex') = v_hash;
+    -- Kilka kluczy naraz (np. zmiana klucza serwera, podgląd i produkcja) – każdy zapisany skrót jest ważny.
+    v_ok := v_hdr is not null and exists (select 1 from public.server_keys where key_hash = encode(sha256(convert_to(v_hdr, 'UTF8')), 'hex'));
   end if;
   perform set_config('magazyn.server_ok', case when v_ok then '1' else '0' end, true);
   return v_ok;
@@ -102,9 +108,16 @@ end $$;
 do $$ begin
   alter default privileges in schema public revoke all on tables from anon;
   alter default privileges in schema public revoke all on sequences from anon;
-  alter default privileges in schema public revoke execute on functions from public, anon;
-  alter default privileges in schema public grant execute on functions to authenticated, service_role;
+  -- Nowe funkcje: tylko serwer; pracownikowi każda migracja nadaje dostęp jawnie (grant … to authenticated).
+  alter default privileges in schema public revoke execute on functions from public, anon, authenticated;
+  alter default privileges in schema public grant execute on functions to service_role;
 exception when others then raise notice 'Domyślne uprawnienia: %', sqlerrm;
+end $$;
+
+-- GraphQL (nieużywany przez aplikację) – bez podglądu struktury bazy.
+do $$ begin
+  revoke usage on schema graphql_public from anon, authenticated;
+exception when others then null;
 end $$;
 
 do $$ begin

@@ -23,7 +23,7 @@ export function serverHeaders(): Record<string, string> {
 }
 
 /**
- * Zapisuje w bazie skrót nagłówka (raz na instancję serwera; po zmianie klucza service_role – sam się poprawi).
+ * Zapisuje w bazie skrót nagłówka (raz na instancję serwera; nowy klucz service_role dopisuje się obok starego).
  * Bez SQL 77 (brak tabeli) – próbuje ponownie co 10 minut.
  */
 let syncedAt = 0;
@@ -36,9 +36,11 @@ export function syncServerKey(): Promise<void> {
     const hash = createHash("sha256").update(v).digest("hex");
     try {
       const db = createAdminClient();
-      const { data, error } = await db.from("server_keys").select("key_hash").eq("id", 1).maybeSingle();
+      const { data, error } = await db.from("server_keys").select("key_hash").eq("key_hash", hash).maybeSingle();
       if (error) return; // brak SQL 77 – baza działa jak dotąd
-      if (data?.key_hash !== hash) await db.from("server_keys").upsert({ id: 1, key_hash: hash, updated_at: new Date().toISOString() });
+      await db.from("server_keys").upsert({ key_hash: hash, seen_at: new Date().toISOString() });
+      // Klucze nieużywane od 30 dni (np. po zmianie klucza serwera) – usuwane.
+      if (data) await db.from("server_keys").delete().lt("seen_at", new Date(Date.now() - 30 * 86400_000).toISOString()).neq("key_hash", hash);
     } catch {
       // bez połączenia – spróbujemy przy następnym zapytaniu
     } finally {
