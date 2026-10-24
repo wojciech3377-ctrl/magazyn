@@ -35,7 +35,10 @@ function parseSeller(formData: FormData) {
     phone: clean(formData.get("phone"), 30),
   };
   if (s.name.length < 5 || !s.name.includes(" ")) return { error: "Podaj imię i nazwisko." };
-  if (s.idNumber.replace(/\s/g, "").length < 6) return { error: "Podaj PESEL albo numer dowodu osobistego." };
+  // „Nie chcę podawać” – PESEL / dowód nie jest wymagany, w umowie: „nie podano”.
+  const idRefused = formData.get("idRefused") === "1";
+  if (idRefused) s.idNumber = formData.get("language") === "en" ? "not provided" : "nie podano";
+  else if (s.idNumber.replace(/\s/g, "").length < 6) return { error: "Podaj PESEL albo numer dowodu osobistego (albo zaznacz „Nie chcę podawać”). / Enter your ID number or tick “I prefer not to provide it”." };
   const country = clean(formData.get("country"), 10).toUpperCase();
   if (!COUNTRIES.some((c) => c.code === country)) return { error: "Wybierz kraj. / Choose a country." };
   if (!s.street || !s.city || !s.postcode) return { error: "Podaj pełny adres z kodem pocztowym. / Enter your full address." };

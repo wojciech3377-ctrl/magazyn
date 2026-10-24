@@ -30,6 +30,8 @@ const L = {
     you: "Twoje dane",
     name: "Imię i nazwisko",
     id: "PESEL albo numer dowodu osobistego",
+    idRefuse: "Nie chcę podawać",
+    idRefused: "nie podano",
     street: "Ulica i numer",
     postcode: "Kod pocztowy",
     city: "Miejscowość",
@@ -67,6 +69,8 @@ const L = {
     you: "Your details",
     name: "First and last name",
     id: "PESEL or ID card / passport number",
+    idRefuse: "I prefer not to provide it",
+    idRefused: "not provided",
     street: "Street and number",
     postcode: "Postal code",
     city: "City",
@@ -117,6 +121,7 @@ export function SellerContractForm({
   const [items, setItems] = useState<FreeItem[]>(mode === "free" ? [newItem(!!searchCatalog)] : []);
   const [signature, setSignature] = useState("");
   const [consent, setConsent] = useState(false);
+  const [idRefused, setIdRefused] = useState(false);
 
   const previewItems: ContractItem[] = mode === "fixed"
     ? fixedItems
@@ -128,12 +133,12 @@ export function SellerContractForm({
     currency: currency || null,
     seller: {
       name: f.name || "…………………",
-      idNumber: f.idNumber || "…………………",
+      idNumber: idRefused ? T.idRefused : f.idNumber || "…………………",
       address: [f.street, [f.postcode, f.city].filter(Boolean).join(" ")].filter(Boolean).join(", ") || "…………………",
       bankAccount: f.bank,
       country,
     },
-  }, lang), [f, number, date, contractDate, company, paymentDays, previewItems, payment, currency, country, lang]);
+  }, lang), [f, number, date, contractDate, company, paymentDays, previewItems, payment, currency, country, lang, idRefused, T]);
 
   const input = (key: keyof typeof f, label: string, props: React.InputHTMLAttributes<HTMLInputElement> = {}) => (
     <div>
@@ -215,7 +220,13 @@ export function SellerContractForm({
           <section className="card space-y-3 p-4">
             <h2 className="h2">{T.you}</h2>
             {input("name", T.name, { required: true, autoComplete: "name" })}
-            {input("idNumber", T.id, { required: true })}
+            <div>
+              {idRefused ? <span className="label">{T.id}</span> : input("idNumber", T.id, { required: true })}
+              <label className="mt-1.5 flex items-center gap-2 text-sm text-muted">
+                <input type="checkbox" name="idRefused" value="1" checked={idRefused} onChange={(e) => setIdRefused(e.target.checked)} className="h-4 w-4" />
+                {T.idRefuse}
+              </label>
+            </div>
             {input("street", T.street, { required: true, autoComplete: "street-address" })}
             <div className="grid grid-cols-3 gap-2">
               {/* Polska: szablon 00-000 (myślnik dopisuje się sam); inny kraj – dowolny kod, bez szablonu. */}
