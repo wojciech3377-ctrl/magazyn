@@ -23,7 +23,7 @@ export async function GET(req: NextRequest) {
   const p = Object.fromEntries(req.nextUrl.searchParams);
   const rows = [];
   for (let from = 0; ; from += 1000) {
-    const { rows: batch } = await queryUnits(db, p, [from, from + 999]);
+    const { rows: batch } = await queryUnits(db, p, [from, from + 999], !!profile.can_see_prices);
     rows.push(...batch);
     if (batch.length < 1000) break;
   }

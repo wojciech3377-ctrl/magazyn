@@ -51,7 +51,9 @@ export async function searchVariants(q: string, storeId: string): Promise<Varian
 type Line = { variantId: string; quantity: number; price: string; payout: string; identifiers: string };
 
 export async function createDelivery(_: unknown, formData: FormData): Promise<{ error?: string }> {
-  const { supabase } = await requireSection("dostawa");
+  const { supabase, profile } = await requireSection("dostawa");
+  // Kwoty tylko od osoby z dostępem do cen (pola są wtedy w formularzu).
+  const money = (v: FormDataEntryValue | null) => (profile.can_see_prices ? parseAmount(v) : null);
   let deliveryId: string | null = null;
   try {
     const storeId = String(formData.get("store_id") ?? "");
@@ -89,7 +91,7 @@ export async function createDelivery(_: unknown, formData: FormData): Promise<{ 
         counterparty,
         consignor_id: ownerType === "consignment" ? consignorId : null,
         contract_date: String(formData.get("contract_date") ?? "") || null,
-        amount: parseAmount(formData.get("contract_amount")),
+        amount: money(formData.get("contract_amount")),
         currency,
         file_path: file?.path ?? null,
         file_name: file?.name ?? null,
@@ -111,8 +113,8 @@ export async function createDelivery(_: unknown, formData: FormData): Promise<{ 
         p_owner_type: ownerType,
         p_consignor_id: consignorId,
         p_purchase_form: purchaseForm,
-        p_purchase_price: parseAmount(line.price),
-        p_payout_amount: ownerType === "consignment" ? parseAmount(line.payout) : null,
+        p_purchase_price: money(line.price),
+        p_payout_amount: ownerType === "consignment" ? money(line.payout) : null,
         p_contract_id: contractId,
         p_identifiers: identifiers,
         p_shelf: shelf,

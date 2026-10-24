@@ -7,6 +7,7 @@ import { errorMessage } from "@/lib/errors";
 import type { LineItem } from "@/lib/sync/shop-orders";
 import { parseSizes } from "@/lib/wtb-group";
 import { dropUnusedWtbPhotos, storeWtbPhoto } from "@/lib/wtb-photo";
+import { safePath } from "@/lib/safe-path";
 
 const SQL57 = "Aby zapisać znacznik USED, uruchom w Supabase (SQL Editor) plik 0057_wtb_used.sql.";
 const usedErr = (m: string) => (/\bused\b/.test(m) ? SQL57 : m);
@@ -189,7 +190,7 @@ export async function updateWtb(fd: FormData) {
   const { supabase } = await requireSection("wtb");
   const ids = fd.getAll("ids").map(String).filter(Boolean);
   const to = String(fd.get("to") ?? "");
-  const back = String(fd.get("back") ?? "/wtb");
+  const back = safePath(fd.get("back"), "/wtb");
   if (!ids.length) redirect(`${back}${back.includes("?") ? "&" : "?"}blad=${encodeURIComponent("Zaznacz pozycje.")}`);
   if (!["bought", "cancelled", "active"].includes(to)) redirect(back);
   const { error } = await supabase.from("wtb_items").update({ status: to, closed_at: to === "active" ? null : new Date().toISOString() }).in("id", ids);
@@ -202,7 +203,7 @@ export async function updateWtb(fd: FormData) {
 export async function editWtbItem(fd: FormData) {
   const { supabase } = await requireSection("wtb");
   const id = String(fd.get("id") ?? "");
-  const back = String(fd.get("back") ?? "/wtb");
+  const back = safePath(fd.get("back"), "/wtb");
   const title = String(fd.get("title") ?? "").trim().slice(0, 200);
   if (!title) redirect(`${back}${back.includes("?") ? "&" : "?"}blad=${encodeURIComponent("Nazwa nie może być pusta.")}`);
   const { error } = await supabase.from("wtb_items").update({
@@ -216,7 +217,7 @@ export async function editWtbItem(fd: FormData) {
 export async function editWtbGroup(fd: FormData) {
   const { supabase, profile } = await requireSection("wtb");
   const ids = fd.getAll("ids").map(String).filter((x) => /^[0-9a-f-]{36}$/i.test(x)).slice(0, 100);
-  const back = String(fd.get("back") ?? "/wtb");
+  const back = safePath(fd.get("back"), "/wtb");
   const fail = (m: string) => redirect(`${back}${back.includes("?") ? "&" : "?"}blad=${encodeURIComponent(m)}`);
   const title = String(fd.get("title") ?? "").trim().slice(0, 200);
   if (!title) fail("Nazwa nie może być pusta.");

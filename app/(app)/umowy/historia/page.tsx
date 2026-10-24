@@ -11,10 +11,10 @@ export const metadata = { title: "Historia umów" };
 /** Historia wszystkich umów: utworzenie, zmiany, podpis, zatwierdzenie, opłacenie, usunięcie (z dostępem do pliku). */
 export default async function ContractHistoryPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const sp = await searchParams;
-  const { supabase } = await requireProfile();
+  const { supabase, profile } = await requireProfile();
   const q = (sp.q ?? "").trim().slice(0, 60);
   const { error } = await supabase.from("contract_events").select("id", { head: true, count: "exact" }).limit(1);
-  const items = error ? [] : await contractHistory(supabase, { limit: 300, search: q || undefined });
+  const items = error ? [] : await contractHistory(supabase, { limit: 300, search: q || undefined, canSeePrices: !!profile.can_see_prices });
   // Pliki usuniętych umów – link ważny 10 minut.
   const files = new Map<string, string>();
   for (const it of items.filter((i) => i.filePath)) {

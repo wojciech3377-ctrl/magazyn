@@ -83,7 +83,9 @@ const num = (v: string | undefined) => (v && v.trim() !== "" && Number.isFinite(
 const day = (v: string | undefined) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
 
 /** Lista sztuk z filtrami i sortowaniem (ekran Magazyn i eksport CSV) – z widoku units_list. */
-export async function queryUnits(db: SupabaseClient, f: UnitFilters, range?: [number, number]) {
+export async function queryUnits(db: SupabaseClient, filters: UnitFilters, range?: [number, number], canSeePrices = true) {
+  // Bez dostępu do cen: bez filtrów i sortowania po cenie zakupu (inaczej dałoby się ją odgadnąć zawężaniem).
+  const f: UnitFilters = canSeePrices ? filters : { ...filters, zakup_od: undefined, zakup_do: undefined, sort: filters.sort === "zakup" ? undefined : filters.sort };
   let query = db.from("units_list").select("*", { count: "exact" });
 
   if (f.status === "wszystkie") {

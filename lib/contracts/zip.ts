@@ -32,6 +32,11 @@ export async function contractsZip(db: SupabaseClient, entries: { contractId: st
     try {
       let bytes: Uint8Array | null = null;
       let ext = "pdf";
+      // Umowa z szablonu (także zapisany PDF po zatwierdzeniu) zawiera ceny zakupu – tylko z dostępem do cen.
+      if (c.template && !canSeePrices) {
+        missing.push(`${base}: umowa z cenami zakupu – brak dostępu do cen`);
+        continue;
+      }
       if (c.file_path) {
         const { data: blob, error } = await createAdminClient().storage.from("contracts").download(c.file_path);
         if (error || !blob) throw error ?? new Error("brak pliku");

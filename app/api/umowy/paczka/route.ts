@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { contractsZip, zipResponse } from "@/lib/contracts/zip";
+import { can } from "@/lib/permissions";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -12,8 +13,10 @@ export async function GET(req: NextRequest) {
   const db = await createClient();
   const { data: auth } = await db.auth.getClaims();
   if (!auth?.claims?.sub) return new Response("unauthorized", { status: 401 });
-  const { data: profile } = await db.from("profiles").select("can_see_prices, active").eq("id", auth.claims.sub).single();
+  const { data: profile } = await db.from("profiles").select("can_see_prices, active, role, permissions").eq("id", auth.claims.sub).single();
   if (!profile?.active) return new Response("forbidden", { status: 403 });
+  // Umowy mają dane osobowe sprzedających – tylko działy, które z nimi pracują.
+  if (!(["umowy", "sprzedaz", "faktury"] as const).some((s) => can(profile, s))) return new Response("Brak dostępu do umów.", { status: 403 });
 
   const orderIds = req.nextUrl.searchParams.getAll("zamowienia").flatMap((x) => x.split(",")).filter((x) => UUID.test(x)).slice(0, 200);
   if (!orderIds.length) return new Response("Zaznacz zamówienia.", { status: 400 });

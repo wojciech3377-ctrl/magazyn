@@ -71,7 +71,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
 
   const [unitsRes, { data: stores }, { data: locations }, { data: contracts }, { count: noContract }, { data: consignors }, { count: unusedContracts }, { data: cols }] = await Promise.all([
     // Filtr kategorii bez SQL 58 – komunikat zamiast błędu strony.
-    queryUnits(supabase, filters, [(page - 1) * PER_PAGE, page * PER_PAGE - 1]).catch((e) => {
+    queryUnits(supabase, filters, [(page - 1) * PER_PAGE, page * PER_PAGE - 1], !!profile.can_see_prices).catch((e) => {
       if (pickedCats.length || sp.shopify) return { rows: [] as UnitRow[], count: 0, catError: true };
       throw e;
     }),

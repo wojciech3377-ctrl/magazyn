@@ -11,6 +11,7 @@ import { fillContractNumber } from "@/lib/contracts/docnumber";
 import { errorMessage } from "@/lib/errors";
 import { reusedProducts } from "@/lib/queries/reused";
 import { inheritContractPrice, priceMessage, type PriceResult } from "@/lib/contracts/inherit-price";
+import { safePath } from "@/lib/safe-path";
 
 function codes(text: string) {
   return text.split(/[\s,;]+/).map((s) => s.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "")).filter(Boolean);
@@ -37,7 +38,7 @@ async function attachByCodes(supabase: Awaited<ReturnType<typeof requireSection>
 }
 
 export async function createContract(_: unknown, formData: FormData): Promise<{ error?: string }> {
-  const { supabase } = await requireSection("umowy", "dostawa");
+  const { supabase, profile } = await requireSection("umowy", "dostawa");
   let id: string;
   let note = "";
   let okNote = "";
@@ -73,7 +74,8 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
       doc_number: docNumber,
       consignor_id: type === "consignment" ? String(formData.get("consignor_id") ?? "") || null : null,
       contract_date: String(formData.get("contract_date") ?? "") || null,
-      amount: parseAmount(formData.get("amount")),
+      // Kwota tylko od osoby z dostępem do cen (pole jest wtedy w formularzu).
+      amount: profile.can_see_prices ? parseAmount(formData.get("amount")) : null,
       currency: ["PLN", "EUR"].includes(String(formData.get("currency"))) ? String(formData.get("currency")) : null,
       notes: String(formData.get("notes") ?? "").trim() || null,
       file_path: file?.path ?? null,
@@ -138,8 +140,8 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
   }
   revalidatePath("/umowy");
   revalidatePath("/magazyn");
-  const returnTo = String(formData.get("returnTo") ?? "");
-  if (returnTo.startsWith("/") && !returnTo.startsWith("//") && !note) {
+  const returnTo = safePath(formData.get("returnTo"), "");
+  if (returnTo && !note) {
     redirect(`${returnTo}${returnTo.includes("?") ? "&" : "?"}ok=${encodeURIComponent(["Umowa zapisana i przypięta.", okNote].filter(Boolean).join(" "))}`);
   }
   redirect(`/umowy/${id}${note || (okNote ? `?ok=${encodeURIComponent(okNote)}` : "")}`);
@@ -232,7 +234,7 @@ export async function detachUnit(formData: FormData) {
   const id = String(formData.get("id"));
   const unitId = String(formData.get("unit_id"));
   const b = String(formData.get("back") ?? "");
-  const target = b.startsWith("/") && !b.startsWith("//") ? b : `/umowy/${id}`;
+  const target = safePath(b, `/umowy/${id}`);
   const { data: done } = await supabase.from("units").update({ contract_id: null }).eq("id", unitId).eq("contract_id", id).select("id, code");
   if (done?.length) {
     await supabase.from("unit_events").insert({ unit_id: unitId, type: "contract", data: { contract_id: null, detached_from: id } });
@@ -450,7 +452,7 @@ export async function markPaid(formData: FormData) {
   const { data } = await supabase.from("contracts")
     .update(undo ? { paid_at: null, paid_by: null } : { paid_at: new Date().toISOString(), paid_by: profile.id })
     .eq("id", id).eq("status", "accepted").select("id");
-  const back = String(formData.get("back") ?? "") || `/umowy/${id}`;
+  const back = safePath(formData.get("back"), `/umowy/${id}`);
   revalidatePath("/umowy");
   if (!data?.length) redirect(`${back}${back.includes("?") ? "&" : "?"}blad=${encodeURIComponent("Opłacić można tylko zaakceptowaną umowę.")}`);
   redirect(`${back}${back.includes("?") ? "&" : "?"}ok=${encodeURIComponent(undo ? "Cofnięto oznaczenie zapłaty." : "Umowa opłacona – przeniesiona do Gotowe.")}`);
@@ -458,7 +460,7 @@ export async function markPaid(formData: FormData) {
 
 /** Numer umowy z dokumentu i waluta (do JPK). */
 export async function updateContractMeta(formData: FormData) {
-  const { supabase } = await requireSection("umowy", "dostawa");
+  const { supabase, profile } = await requireSection("umowy", "dostawa");
   const id = String(formData.get("id"));
   const currency = String(formData.get("currency") ?? "");
   const patch: Record<string, unknown> = {
@@ -467,7 +469,7 @@ export async function updateContractMeta(formData: FormData) {
     ...(formData.has("vat_form") ? { vat_form: ["vat_margin", "vat_23"].includes(String(formData.get("vat_form"))) ? String(formData.get("vat_form")) : null } : {}),
   };
   // Kwota i „za każdą rzecz” – tylko gdy pola są w formularzu (osoba widzi ceny).
-  if (formData.has("amount")) {
+  if (formData.has("amount") && profile.can_see_prices) {
     try {
       patch.amount = parseAmount(formData.get("amount"));
     } catch (e) {
@@ -482,7 +484,7 @@ export async function updateContractMeta(formData: FormData) {
     if (!error) error = { message: "Zapisano bez „kwota za każdą rzecz” – uruchom w Supabase SQL 0055_contract_amount_per_item.sql." };
   }
   // Kwoty sztuk na umowie według nowej kwoty (puste uzupełnione, różnice opisane).
-  const price = !error && formData.has("amount") ? await inheritContractPrice(supabase, id) : null;
+  const price = !error && formData.has("amount") && profile.can_see_prices ? await inheritContractPrice(supabase, id) : null;
   revalidatePath(`/umowy/${id}`);
   revalidatePath("/magazyn");
   const text = error ? error.message : ["Zapisano.", price ? priceMessage(price) : ""].filter(Boolean).join(" ");

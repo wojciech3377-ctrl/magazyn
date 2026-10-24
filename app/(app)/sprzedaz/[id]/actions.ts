@@ -1,5 +1,7 @@
 "use server";
 
+import { can } from "@/lib/permissions";
+
 import { manualPayment } from "@/lib/orders/payment";
 
 import { revalidatePath } from "next/cache";
@@ -572,7 +574,9 @@ export async function saveOrderNote(fd: FormData) {
 
 /** Nazwa / stawka VAT pozycji w tym zamówieniu (paragon, paragon PDF, faktura). Pusta nazwa i „automatycznie” = bez zmian. */
 export async function saveLineOverride(fd: FormData) {
-  await requireSection("sprzedaz");
+  const { profile } = await requireSection("sprzedaz");
+  // Stawkę VAT na paragonie / fakturze zmienia tylko administrator albo osoba z działem Faktury i JPK.
+  const canVat = can(profile, "faktury");
   const id = str(fd, "order_id");
   const lineId = str(fd, "line_id");
   const db = createAdminClient();
@@ -581,7 +585,8 @@ export async function saveLineOverride(fd: FormData) {
   const all = { ...((o!.line_overrides ?? {}) as Record<string, { name?: string | null; vat?: string | null }>) };
   const name = fd.get("reset") ? "" : str(fd, "name").slice(0, 120);
   const vatRaw = fd.get("reset") ? "" : str(fd, "vat");
-  const vat = vatRaw === "23" || vatRaw === "margin" ? vatRaw : null;
+  const prevVat = all[lineId]?.vat ?? null;
+  const vat = canVat ? (vatRaw === "23" || vatRaw === "margin" ? vatRaw : null) : prevVat;
   if (!name && !vat) delete all[lineId];
   else all[lineId] = { name: name || null, vat };
   const { error } = await db.from("orders").update({ line_overrides: all }).eq("id", id);

@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { shopifyLocations } from "@/lib/sync/shopify-stock";
+import { ipFrom, rateLimit } from "@/lib/security";
 
 export const dynamic = "force-dynamic";
 
@@ -24,9 +25,16 @@ const namesCache = new Map<string, { at: number; names: Map<string, string> }>()
 async function locationNames(domain: string, code: string) {
   const hit = namesCache.get(domain);
   if (hit && Date.now() - hit.at < 10 * 60_000) return hit.names;
-  const names = new Map((await shopifyLocations(domain, code)).map((l) => [l.id, l.name]));
-  namesCache.set(domain, { at: Date.now(), names });
-  return names;
+  try {
+    const names = new Map((await shopifyLocations(domain, code)).map((l) => [l.id, l.name]));
+    namesCache.set(domain, { at: Date.now(), names });
+    return names;
+  } catch {
+    // Błąd Shopify: pusta lista na 1 minutę (bez pytania Shopify przy każdym wejściu – limit API wspólny z synchronizacją).
+    const names = hit?.names ?? new Map<string, string>();
+    namesCache.set(domain, { at: Date.now() - 9 * 60_000, names });
+    return names;
+  }
 }
 
 const json = (body: unknown, status = 200, cache = "public, max-age=30, s-maxage=30, stale-while-revalidate=60") =>
@@ -37,6 +45,8 @@ export function OPTIONS() {
 }
 
 export async function GET(req: NextRequest) {
+  // Publiczny adres – limit zapytań z jednego IP (zmiana parametrów omija pamięć podręczną CDN).
+  if (!(await rateLimit(`dostepnosc:${ipFrom(req.headers)}`, 300, 300))) return json({ error: "za dużo zapytań" }, 429, "no-store");
   const code = (req.nextUrl.searchParams.get("sklep") ?? "").trim();
   const ids = [...new Set((req.nextUrl.searchParams.get("warianty") ?? "").split(",").map((x) => x.trim()).filter((x) => /^\d{1,20}$/.test(x)))].slice(0, 250);
   if (!/^[a-z0-9_-]{1,40}$/i.test(code) || !ids.length) return json({ error: "podaj sklep i warianty" }, 400, "no-store");
@@ -59,7 +69,7 @@ export async function GET(req: NextRequest) {
   if (!byVariant.size || !locs?.length) return json(out);
 
   let names = new Map<string, string>();
-  if (store.shopify_domain) names = await locationNames(store.shopify_domain as string, store.code as string).catch(() => new Map());
+  if (store.shopify_domain) names = await locationNames(store.shopify_domain as string, store.code as string);
   const label = new Map(locs.map((l) => [l.id as string, (l.shopify_location_id && names.get(l.shopify_location_id as string)) || (l.name as string)]));
 
   // Każda lokalizacja (sklep / magazyn) pojawia się w odpowiedzi, także z zerem.

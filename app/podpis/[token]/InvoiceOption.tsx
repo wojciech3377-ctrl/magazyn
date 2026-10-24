@@ -8,7 +8,7 @@ import { prepareSellerInvoiceUpload, submitSellerInvoice } from "../actions";
 export function InvoiceOption({ token, currency }: { token: string; currency?: string | null }) {
   const [open, setOpen] = useState(false);
   const [state, action, pending] = useActionState(submitSellerInvoice.bind(null, token), null);
-  const [file, setFile] = useState<{ path: string; name: string } | null>(null);
+  const [file, setFile] = useState<{ path: string; name: string; sig: string } | null>(null);
   const [upload, setUpload] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null });
   const [payment, setPayment] = useState<"transfer" | "cash" | "">("");
 
@@ -20,7 +20,7 @@ export function InvoiceOption({ token, currency }: { token: string; currency?: s
     if ("error" in prep) return setUpload({ busy: false, error: prep.error });
     const { error } = await createClient().storage.from("contracts").uploadToSignedUrl(prep.path, prep.token, f, { contentType: f.type });
     if (error) return setUpload({ busy: false, error: `Nie udało się wgrać pliku: ${error.message}` });
-    setFile({ path: prep.path, name: f.name });
+    setFile({ path: prep.path, name: f.name, sig: prep.sig });
     setUpload({ busy: false, error: null });
   }
 
@@ -86,6 +86,7 @@ export function InvoiceOption({ token, currency }: { token: string; currency?: s
         {file && <p className="mt-1 text-xs text-ok">Wgrano: {file.name}</p>}
         {upload.error && <p className="mt-1 text-xs text-bad">{upload.error}</p>}
         <input type="hidden" name="file_path" value={file?.path ?? ""} />
+        <input type="hidden" name="file_sig" value={file?.sig ?? ""} />
         <input type="hidden" name="file_name" value={file?.name ?? ""} />
       </div>
       {state?.error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-bad" role="alert">{state.error}</p>}

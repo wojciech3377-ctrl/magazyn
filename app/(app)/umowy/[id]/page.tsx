@@ -472,8 +472,8 @@ async function TemplateSection({ c, canSeePrices }: { c: TemplateContract; canSe
 
 /** Historia tej umowy (SQL 73): zmiany, podpis, zatwierdzenie, opłacenie, przypięte / odpięte rzeczy. */
 async function ContractHistorySection({ contractId }: { contractId: string }) {
-  const { supabase } = await requireProfile();
-  const items = await contractHistory(supabase, { contractId, limit: 100 }).catch(() => []);
+  const { supabase, profile } = await requireProfile();
+  const items = await contractHistory(supabase, { contractId, limit: 100, canSeePrices: !!profile.can_see_prices }).catch(() => []);
   if (!items.length) return null;
   return (
     <section className="card mt-5 p-4">

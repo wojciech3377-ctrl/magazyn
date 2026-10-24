@@ -6,6 +6,7 @@ import { SellerContractForm } from "@/components/contracts/SellerContractForm";
 import { signLinkedContract } from "../actions";
 import { PublicShell } from "../PublicShell";
 import { InvoiceOption } from "./InvoiceOption";
+import { pdfExpired } from "../pdf-expiry";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Umowa kupna – podpis", robots: { index: false, follow: false } };
@@ -15,7 +16,7 @@ export default async function SignPage({ params }: { params: Promise<{ token: st
   const db = createAdminClient();
   const [company, buyerSignature] = await Promise.all([getCompany(db), getBuyerSignature(db)]);
   const { data: c } = /^[a-f0-9]{32,64}$/.test(token)
-    ? await db.from("contracts").select("id, number, status, sign_expires_at, items, payment_days, seller_name, seller_email, group_id, currency, type, doc_number, source").eq("sign_token", token).maybeSingle()
+    ? await db.from("contracts").select("id, number, status, sign_expires_at, items, payment_days, seller_name, seller_email, group_id, currency, type, doc_number, source, accepted_at").eq("sign_token", token).maybeSingle()
     : { data: null };
 
   if (!c || c.status === "cancelled") {
@@ -42,6 +43,9 @@ export default async function SignPage({ params }: { params: Promise<{ token: st
         </div>
       </PublicShell>
     );
+  }
+  if (c.status === "accepted" && pdfExpired(c.accepted_at as string | null)) {
+    return <PublicShell company={company.name}><div className="card mx-auto max-w-lg p-6">Umowa NR{c.number} jest zawarta. Link do pobrania wygasł (ochrona danych) – po kopię umowy napisz do nas: {company.email}</div></PublicShell>;
   }
   if (c.status === "accepted") {
     // Kilka rzeczy = osobna umowa dla każdej (wspólna grupa) – wszystkie do pobrania z tego linku.

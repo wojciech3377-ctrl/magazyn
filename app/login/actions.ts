@@ -13,10 +13,16 @@ export async function signIn(_: unknown, formData: FormData) {
   if (!email || !password || email.length > 200 || password.length > 200) return { error: "Nieprawidłowy e-mail lub hasło." };
   // Limity prób: z jednego adresu IP i na jedno konto (ochrona przed zgadywaniem haseł).
   const ip = await clientIp();
-  const emailKey = `login:email:${email.toLowerCase()}`;
-  const [ipOk, emailOk] = await Promise.all([rateLimit(`login:ip:${ip}`, 30, 15 * 60), rateLimit(emailKey, 8, 15 * 60)]);
-  if (!ipOk || !emailOk) {
-    await securityEvent("login_blocked", email, { by: !ipOk ? "ip" : "konto" });
+  // Konto + IP: obcy z innego adresu nie zablokuje logowania pracownikowi. Luźniejszy limit na samo konto
+  // zatrzymuje zgadywanie hasła z wielu adresów naraz.
+  const emailKey = `login:email:${email.toLowerCase()}:${ip}`;
+  const [ipOk, emailOk, accountOk] = await Promise.all([
+    rateLimit(`login:ip:${ip}`, 30, 15 * 60),
+    rateLimit(emailKey, 8, 15 * 60),
+    rateLimit(`login:konto:${email.toLowerCase()}`, 40, 15 * 60),
+  ]);
+  if (!ipOk || !emailOk || !accountOk) {
+    await securityEvent("login_blocked", email, { by: !ipOk ? "ip" : !emailOk ? "konto+ip" : "konto" });
     return TOO_MANY;
   }
   const supabase = await createClient();
@@ -25,8 +31,8 @@ export async function signIn(_: unknown, formData: FormData) {
     await securityEvent("login_failed", email, { code: error.code ?? null });
     if (error.status === 429 || error.code === "over_request_rate_limit") return TOO_MANY;
     // Konkretny powód ułatwia ustawienie konta i kluczy (np. błędny klucz Supabase w Vercel).
-    if (error.code === "invalid_credentials") return { error: "Nieprawidłowy e-mail lub hasło." };
-    if (error.code === "email_not_confirmed") return { error: "Konto nie jest potwierdzone. W Supabase → Authentication → Users potwierdź je albo dodaj ponownie z „Auto Confirm User”." };
+    // Ten sam komunikat dla złego hasła i niepotwierdzonego konta – bez zdradzania, czy konto istnieje.
+    if (error.code === "invalid_credentials" || error.code === "email_not_confirmed" || (!error.code && error.status === 400)) return { error: "Nieprawidłowy e-mail lub hasło." };
     return { error: `Logowanie nie działa (${error.code ?? error.status ?? "błąd"}). Spróbuj ponownie za chwilę.` };
   }
   await rateLimitReset(emailKey);

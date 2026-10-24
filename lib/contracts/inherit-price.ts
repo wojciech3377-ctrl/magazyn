@@ -7,7 +7,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  * – Sztuka z własną kwotą ją zachowuje (Magazyn), a JPK bierze kwotę z umowy – tylko informacja.
  * – Gdy z umowy nie wiadomo, ile kosztowała ta rzecz (kwota łączna za kilka rzeczy) – podpowiedź, co zrobić.
  */
-export type PriceResult = { updated: string[]; problems: string[]; notes: string[] };
+export type PriceResult = { updated: string[]; problems: string[]; notes: string[]; masked?: boolean };
 
 type C = { id: string; amount_per_item?: boolean | null; amount: number | string | null; items: { unit_id?: string | null; variant_id?: string | null; price?: number | string; qty?: number }[] | null; currency: string | null; number: number | null; doc_number: string | null; template: string | null; type: string | null };
 type U = { id: string; code: string; variant_id: string; owner_type: string; purchase_price: number | string | null; payout_amount: number | string | null; purchase_currency?: string | null };
@@ -18,6 +18,17 @@ const same = (a: number, b: number) => Math.abs(a - b) < 0.005;
 
 export async function inheritContractPrice(db: SupabaseClient, contractId: string, unitIds?: string[]): Promise<PriceResult> {
   const out: PriceResult = { updated: [], problems: [], notes: [] };
+  // Osoba bez dostępu do cen – komunikaty bez kwot (kwoty zapisują się normalnie).
+  try {
+    const { data: claims } = await db.auth.getClaims();
+    const uid = claims?.claims?.sub;
+    if (uid) {
+      const { data: me } = await db.from("profiles").select("can_see_prices").eq("id", uid).maybeSingle();
+      out.masked = !me?.can_see_prices;
+    }
+  } catch {
+    // klient serwera bez zalogowanej osoby – pełne komunikaty
+  }
   const [{ data: c }, { data: list }] = await Promise.all([
     db.from("contracts").select("*").eq("id", contractId).maybeSingle(),
     db.from("units").select("*").eq("contract_id", contractId),
@@ -123,6 +134,11 @@ export function expectedPrices(ct: Pick<C, "amount" | "items" | "amount_per_item
 
 /** Krótki komunikat do paska na górze strony. */
 export function priceMessage(r: PriceResult) {
+  if (r.masked) {
+    // Bez kwot: tylko które sztuki i co zrobić.
+    const hide = (t: string) => t.replace(/\d[\d\s.]*(,\d{1,2})?\s?(zł|PLN|EUR|€)/g, "•••");
+    return priceMessage({ ...r, masked: false, notes: r.notes.map(hide), problems: r.problems.map(hide) });
+  }
   const parts: string[] = [];
   if (r.updated.length) parts.push(`Kwota zakupu z umowy wpisana: ${r.updated.join(", ")}.`);
   parts.push(...r.notes);

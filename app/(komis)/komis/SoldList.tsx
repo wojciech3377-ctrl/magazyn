@@ -20,7 +20,7 @@ export function SoldList({ rows }: { rows: SoldRow[] }) {
   const [invoiceState, invoiceAction, invoicePending] = useActionState<DocState, FormData>(attachConsignorInvoice, null);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [mode, setMode] = useState<"contract" | "invoice" | null>(null);
-  const [file, setFile] = useState<{ path: string; name: string } | null>(null);
+  const [file, setFile] = useState<{ path: string; name: string; sig: string } | null>(null);
   const [upload, setUpload] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null });
   const pickable = (r: SoldRow) => r.doc.kind === "none" || (r.doc.kind === "sign" && !!r.doc.swappable);
   const open = rows.filter(pickable);
@@ -35,7 +35,7 @@ export function SoldList({ rows }: { rows: SoldRow[] }) {
     if ("error" in prep) return setUpload({ busy: false, error: prep.error });
     const { error } = await createClient().storage.from("contracts").uploadToSignedUrl(prep.path, prep.token, f, { contentType: f.type });
     if (error) return setUpload({ busy: false, error: `Nie udało się wgrać pliku: ${error.message}` });
-    setFile({ path: prep.path, name: f.name });
+    setFile({ path: prep.path, name: f.name, sig: prep.sig });
     setUpload({ busy: false, error: null });
   }
 
@@ -94,6 +94,7 @@ export function SoldList({ rows }: { rows: SoldRow[] }) {
               <div className="sm:col-span-3 space-y-1 text-sm">
                 <FileButton label="Wybierz plik faktury" accept="application/pdf,image/jpeg,image/png" onFile={onFile} />
                 {file && <input type="hidden" name="file_path" value={file.path} />}
+                {file && <input type="hidden" name="file_sig" value={file.sig} />}
                 {file && <input type="hidden" name="file_name" value={file.name} />}
                 {upload.busy && <p className="text-muted">Wgrywam…</p>}
                 {file && <p className="text-ok">Plik wgrany: {file.name}</p>}

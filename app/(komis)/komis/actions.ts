@@ -4,7 +4,8 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { requireConsignor, consignmentFee, defaultAddress, labelFileType, type Consignor, type ShipAddress } from "@/lib/consignment";
-import { uploadedFile } from "@/lib/contracts/upload";
+import { signUploadPath, uploadedFile } from "@/lib/contracts/upload";
+import { escapeHtml } from "@/lib/contracts/png";
 import { contractTotal } from "@/lib/contracts/purchase";
 import { adjustStock } from "@/lib/stock";
 import { getCompany } from "@/lib/contracts/settings";
@@ -86,7 +87,7 @@ export async function requestShipment(_: ShipState, fd: FormData): Promise<ShipS
       const company = await getCompany(db);
       if (company.email) {
         await sendMail(company.email, `Komis: ${consignor.name} zleca wysyłkę ${reserved.length} szt.`,
-          `<p>Komisant <b>${consignor.name.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</b> zlecił wysyłkę: ${reserved.map((u) => u.code).join(", ")}.</p><p>Sposób: ${method === "default" ? "adres z konta" : method === "custom" ? `inny adres (opłata ${fee} zł – wystaw fakturę)` : "własna etykieta (w załączniku zlecenia)"}.</p><p>Obsłuż w aplikacji: Komisanci → ${consignor.name.replace(/</g, "&lt;")}.</p>`);
+          `<p>Komisant <b>${escapeHtml(consignor.name)}</b> zlecił wysyłkę: ${reserved.map((u) => u.code).join(", ")}.</p><p>Sposób: ${method === "default" ? "adres z konta" : method === "custom" ? `inny adres (opłata ${fee} zł – wystaw fakturę)` : "własna etykieta (w załączniku zlecenia)"}.</p><p>Obsłuż w aplikacji: Komisanci → ${escapeHtml(consignor.name)}.</p>`);
       }
     }
   } catch {
@@ -193,6 +194,7 @@ export async function createConsignorContract(_: DocState, fd: FormData): Promis
     template: "purchase_v1",
     source: "consignor",
     status: "sent",
+    currency: "PLN", // kwoty komisu są w złotych – sprzedający nie może zmienić waluty
     counterparty: consignor.name,
     consignor_id: consignor.id,
     amount: contractTotal(items),
@@ -215,8 +217,8 @@ export async function createConsignorContract(_: DocState, fd: FormData): Promis
 }
 
 /** Adres do wgrania faktury komisanta prosto do plików umów (PDF / JPG / PNG, do 10 MB). */
-export async function prepareInvoiceUpload(fileName: string, size: number): Promise<{ path: string; token: string } | { error: string }> {
-  const { db } = await requireConsignor();
+export async function prepareInvoiceUpload(fileName: string, size: number): Promise<{ path: string; token: string; sig: string } | { error: string }> {
+  const { db, consignor } = await requireConsignor();
   const ext = (fileName.split(".").pop() ?? "").toLowerCase().replace("jpeg", "jpg");
   if (!["pdf", "jpg", "png"].includes(ext)) return { error: "Faktura musi być plikiem PDF, JPG albo PNG." };
   if (!(size > 0) || size > 10 * 1024 * 1024) return { error: "Plik może mieć najwyżej 10 MB." };
@@ -224,7 +226,7 @@ export async function prepareInvoiceUpload(fileName: string, size: number): Prom
   const path = `${now.getUTCFullYear()}/${String(now.getUTCMonth() + 1).padStart(2, "0")}/${crypto.randomUUID()}.${ext}`;
   const { data, error } = await db.storage.from("contracts").createSignedUploadUrl(path);
   if (error || !data) return { error: `Nie można przygotować wgrania pliku: ${error?.message ?? "błąd"}` };
-  return { path, token: data.token };
+  return { path, token: data.token, sig: signUploadPath(path, `consignor:${consignor.id}`) };
 }
 
 /** Faktura komisanta do sprzedanych rzeczy (zamiast umowy). */
@@ -232,7 +234,7 @@ export async function attachConsignorInvoice(_: DocState, fd: FormData): Promise
   const { db, consignor } = await requireConsignor();
   let file: { path: string; name: string } | null;
   try {
-    file = uploadedFile(fd);
+    file = uploadedFile(fd, `consignor:${consignor.id}`);
   } catch {
     file = null;
   }
@@ -274,9 +276,9 @@ export async function attachConsignorInvoice(_: DocState, fd: FormData): Promise
     await db.from("contracts").delete().eq("id", c.id);
     return { error: "Zaznaczone rzeczy mają już umowę albo fakturę." };
   }
-  const name = consignor.name.replace(/</g, "&lt;");
+  const name = escapeHtml(consignor.name);
   await tellCompany(db, `Komis: ${consignor.name} dołączył fakturę ${docNumber}`,
-    `<p>Komisant <b>${name}</b> wgrał fakturę <b>${docNumber.replace(/</g, "&lt;")}</b> do sprzedanych rzeczy: ${kept.map((u) => u.code).join(", ")}.</p><p>Sprawdź i zatwierdź ją w aplikacji: Umowy → Do zatwierdzenia.</p>`);
+    `<p>Komisant <b>${name}</b> wgrał fakturę <b>${escapeHtml(docNumber)}</b> do sprzedanych rzeczy: ${kept.map((u) => u.code).join(", ")}.</p><p>Sprawdź i zatwierdź ją w aplikacji: Umowy → Do zatwierdzenia.</p>`);
   revalidatePath("/komis");
   return { ok: `Faktura ${docNumber} wysłana do sprawdzenia (${kept.length} szt.). Damy znać, gdy ją zatwierdzimy.${r.skipped ? ` ${r.skipped} zaznaczonych rzeczy miało już umowę.` : ""}` };
 }

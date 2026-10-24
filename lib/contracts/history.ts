@@ -26,7 +26,9 @@ function val(v: unknown): string {
 }
 
 /** Opis zmiany umowy po polsku. */
-function describe(kind: string, ch: Record<string, unknown>): string {
+const PRICE_KEYS = new Set(["amount", "offer"]);
+
+function describe(kind: string, ch: Record<string, unknown>, canSeePrices = true): string {
   if (kind === "created") return `utworzona${ch.status ? ` (${STATUS[String(ch.status)] ?? ch.status})` : ""}${ch.file_name ? ` · plik ${ch.file_name}` : ""}`;
   if (kind === "deleted") return "usunięta z aplikacji (plik zachowany)";
   const parts: string[] = [];
@@ -36,13 +38,14 @@ function describe(kind: string, ch: Record<string, unknown>): string {
     else if (k === "paid_at") parts.push(b ? "oznaczona jako opłacona" : "cofnięto opłacenie");
     else if (k === "file_path" && !ch.file_name) parts.push(b ? "nowy plik" : "plik usunięty");
     else if (SKIP.has(k)) continue;
+    else if (!canSeePrices && PRICE_KEYS.has(k)) parts.push(`${NAMES[k] ?? k}: zmieniona`);
     else parts.push(`${NAMES[k] ?? k}: ${val(a)} → ${val(b)}`);
   }
   return parts.join(" · ") || "zmiana";
 }
 
 /** Historia umów: zmiany samej umowy (SQL 73) i przypięcia / odpięcia rzeczy (historia sztuk). */
-export async function contractHistory(db: SupabaseClient, opts: { contractId?: string; limit?: number; search?: string } = {}): Promise<HistoryItem[]> {
+export async function contractHistory(db: SupabaseClient, opts: { contractId?: string; limit?: number; search?: string; canSeePrices?: boolean } = {}): Promise<HistoryItem[]> {
   const limit = opts.limit ?? 200;
   let q = db.from("contract_events").select("contract_id, label, kind, changes, actor, created_at").order("created_at", { ascending: false }).limit(limit);
   if (opts.contractId) q = q.eq("contract_id", opts.contractId);
@@ -64,7 +67,7 @@ export async function contractHistory(db: SupabaseClient, opts: { contractId?: s
     const ch = (e.changes ?? {}) as Record<string, unknown>;
     return {
       at: e.created_at as string, who: who(e.actor as string | null) ?? (e.actor ? null : "automat / sprzedający"),
-      text: describe(e.kind as string, ch), contractId: e.contract_id as string, label: e.label as string | null,
+      text: describe(e.kind as string, ch, opts.canSeePrices ?? false), contractId: e.contract_id as string, label: e.label as string | null,
       filePath: e.kind === "deleted" ? (ch.file_path as string | null) ?? null : null, deleted: e.kind === "deleted",
     };
   });

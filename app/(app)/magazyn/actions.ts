@@ -11,6 +11,7 @@ import { parseAmount } from "@/lib/contracts/upload";
 import { errorMessage } from "@/lib/errors";
 import { inheritContractPrice, priceMessage } from "@/lib/contracts/inherit-price";
 import { changesSince } from "@/lib/sync/changes";
+import { safePath } from "@/lib/safe-path";
 
 /**
  * Statusy, które przy ruchu w aplikacji zmieniają stan „dostępne” w Shopify. Zarezerwowana sztuka jest już zdjęta
@@ -34,7 +35,7 @@ export async function bulkAction(formData: FormData) {
   const { supabase, profile } = await requireSection("magazyn");
   const ids = formData.getAll("ids").map(String).filter(Boolean);
   const action = String(formData.get("action") ?? "");
-  const returnTo = String(formData.get("returnTo") ?? "/magazyn");
+  const returnTo = safePath(formData.get("returnTo"), "/magazyn");
   if (!ids.length) back(returnTo, "Zaznacz sztuki na liście.", "error");
 
   const { data: units, error } = await supabase.from("units").select("id, status, variant_id, location_id").in("id", ids);

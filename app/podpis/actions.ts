@@ -9,6 +9,7 @@ import { contractTotal } from "@/lib/contracts/purchase";
 import { escapeHtml, validateSignaturePng } from "@/lib/contracts/png";
 import { COUNTRIES, CURRENCIES } from "@/lib/contracts/options";
 import { clientIp, rateLimit, safeEqual, securityEvent } from "@/lib/security";
+import { signUploadPath, verifyUploadPath } from "@/lib/contracts/upload";
 
 const TOKEN = /^[a-f0-9]{32,64}$/;
 /** Limit prób na publicznych formularzach (z jednego adresu IP). */
@@ -52,8 +53,10 @@ function parseSeller(formData: FormData) {
   if (paymentMethod === "transfer" && !account) return { error: "Wpisz numer konta. / Enter your bank account number." };
   const contractDate = String(formData.get("contract_date") ?? "");
   const d = new Date(`${contractDate}T12:00:00Z`);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(contractDate) || Number.isNaN(d.getTime()) || Math.abs(d.getTime() - Date.now()) > 366 * 86400_000) {
-    return { error: "Podaj poprawną datę zawarcia umowy. / Enter a valid date." };
+  // Data zawarcia: od 60 dni wstecz do jutra (bez dowolnego przesuwania daty umowy).
+  const ageDays = (Date.now() - d.getTime()) / 86400_000;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(contractDate) || Number.isNaN(d.getTime()) || ageDays > 60 || ageDays < -1.5) {
+    return { error: "Data zawarcia umowy może być najwyżej 60 dni wstecz. / The date can be at most 60 days in the past." };
   }
   const language = formData.get("language") === "en" ? "en" : "pl";
   if (s.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s.email)) return { error: "Nieprawidłowy adres e-mail." };
@@ -97,15 +100,17 @@ export async function signLinkedContract(token: string, _: Result | null, formDa
   const parsed = parseSeller(formData);
   if ("error" in parsed) return { error: parsed.error };
   const db = createAdminClient();
-  const { data: c } = await db.from("contracts").select("id, status, sign_expires_at, currency").eq("sign_token", token).maybeSingle();
+  const { data: c } = await db.from("contracts").select("id, status, sign_expires_at, currency, source").eq("sign_token", token).maybeSingle();
   if (!c || c.status === "cancelled") return { error: "Ten link jest nieaktywny." };
   if (c.status === "signed") redirect(`/podpis/${token}`);
+  // Umowa komisanta: kwoty w złotych (także starsze umowy bez zapisanej waluty).
+  if (c.source === "consignor" && !c.currency) c.currency = "PLN";
   if (c.sign_expires_at && new Date(c.sign_expires_at) < new Date()) return { error: "Link wygasł – poproś o nowy." };
   // Kwoty umowy ustalił sklep – sprzedający nie zmienia waluty (inaczej 500 zł stałoby się 500 EUR).
   const { currency, ...seller } = parsed.seller;
 
   const { data: updated, error } = await db.from("contracts")
-    .update({ ...seller, ...(c.currency ? {} : { currency }), ...(await requestMeta()), status: "signed", signed_at: new Date().toISOString() })
+    .update({ ...seller, ...(c.currency ? { currency: c.currency } : { currency }), ...(await requestMeta()), status: "signed", signed_at: new Date().toISOString() })
     .eq("id", c.id).eq("status", "sent").select("id");
   if (error) return { error: "Nie udało się zapisać umowy. Spróbuj ponownie." };
   if (!updated?.length) redirect(`/podpis/${token}`);
@@ -261,12 +266,14 @@ async function notifyOfferAnswer(contractId: string, accepted: boolean) {
 }
 
 /** Sprzedający-firma: adres do wgrania faktury (PDF / JPG / PNG, do 10 MB) zamiast podpisywania umowy. */
-export async function prepareSellerInvoiceUpload(token: string, fileName: string, size: number): Promise<{ path: string; token: string } | { error: string }> {
+export async function prepareSellerInvoiceUpload(token: string, fileName: string, size: number): Promise<{ path: string; token: string; sig: string } | { error: string }> {
   if (!TOKEN.test(token)) return { error: "Ten link jest nieaktywny." };
   if (await limited("invoice-upload", 15)) return TOO_MANY as { error: string };
   const db = createAdminClient();
-  const { data: c } = await db.from("contracts").select("status, sign_expires_at").eq("sign_token", token).maybeSingle();
+  const { data: c } = await db.from("contracts").select("id, status, sign_expires_at, source").eq("sign_token", token).maybeSingle();
   if (!c || c.status !== "sent" || (c.sign_expires_at && new Date(c.sign_expires_at) < new Date())) return { error: "Ten link jest nieaktywny." };
+  // Umowa komisanta – komisant rozlicza się fakturą w swoim panelu, nie przez link.
+  if (c.source === "consignor") return { error: "Ta umowa nie może być zastąpiona fakturą." };
   const ext = (fileName.split(".").pop() ?? "").toLowerCase().replace("jpeg", "jpg");
   if (!["pdf", "jpg", "png"].includes(ext)) return { error: "Faktura musi być plikiem PDF, JPG albo PNG. / PDF, JPG or PNG only." };
   if (!(size > 0) || size > 10 * 1024 * 1024) return { error: "Plik może mieć najwyżej 10 MB. / Max 10 MB." };
@@ -274,7 +281,7 @@ export async function prepareSellerInvoiceUpload(token: string, fileName: string
   const path = `${now.getUTCFullYear()}/${String(now.getUTCMonth() + 1).padStart(2, "0")}/${crypto.randomUUID()}.${ext}`;
   const { data, error } = await db.storage.from("contracts").createSignedUploadUrl(path);
   if (error || !data) return { error: "Nie można przygotować wgrania pliku. Spróbuj ponownie." };
-  return { path, token: data.token };
+  return { path, token: data.token, sig: signUploadPath(path, `contract:${c.id}`) };
 }
 
 /**
@@ -304,9 +311,12 @@ export async function submitSellerInvoice(token: string, _: Result | null, fd: F
   const account = paymentMethod === "transfer" ? clean(fd.get("bank"), 80) : null;
   if (paymentMethod === "transfer" && !account) return { error: "Wpisz numer konta. / Enter your bank account number." };
   const db = createAdminClient();
-  const { data: c } = await db.from("contracts").select("id, status, sign_expires_at, currency").eq("sign_token", token).maybeSingle();
+  const { data: c } = await db.from("contracts").select("id, status, sign_expires_at, currency, source").eq("sign_token", token).maybeSingle();
   if (!c || c.status === "cancelled") return { error: "Ten link jest nieaktywny." };
   if (c.status !== "sent") redirect(`/podpis/${token}`);
+  if (c.source === "consignor") return { error: "Ta umowa nie może być zastąpiona fakturą." };
+  // Tylko plik wgrany przez ten link (podpis serwera wiąże ścieżkę z tą umową).
+  if (!verifyUploadPath(path, fd.get("file_sig"), `contract:${c.id}`)) return { error: "Dołącz fakturę ponownie. / Attach the invoice again." };
   // Waluta ustalona przez nas zostaje; bez niej – wybrana przy fakturze.
   const currency = c.currency ?? (["PLN", "EUR"].includes(String(fd.get("currency"))) ? String(fd.get("currency")) : null);
   if (!currency) return { error: "Wybierz walutę faktury. / Choose the currency." };

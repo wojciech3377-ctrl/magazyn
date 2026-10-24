@@ -72,7 +72,7 @@ export async function notifyConsignorSales(db: SupabaseClient) {
         const token = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
         const items = [{ unit_id: u.id, title: u.variant?.product.title ?? u.code, option: u.variant?.option ?? "–", identifier: u.identifier, qty: 1, price: Math.round(price * 100) / 100 }];
         const { data: ct, error: ce } = await db.from("contracts").insert({
-          type: "purchase", template: "purchase_v1", source: "consignor", status: "sent",
+          type: "purchase", template: "purchase_v1", source: "consignor", status: "sent", currency: "PLN",
           counterparty: c.name, consignor_id: c.id, amount: items[0].price, payment_days: company.payment_days ?? 7, items,
           seller_email: c.email, seller_phone: c.phone, sign_token: token,
           sign_expires_at: new Date(Date.now() + 14 * 86400_000).toISOString(),

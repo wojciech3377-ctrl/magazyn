@@ -1,6 +1,7 @@
 import { requireProfile } from "@/lib/auth";
 import { PageHeader } from "@/components/ui";
 import { ContractForm } from "../ContractForm";
+import { safePath } from "@/lib/safe-path";
 
 export default async function NewContractPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const sp = await searchParams;
@@ -13,7 +14,7 @@ export default async function NewContractPage({ searchParams }: { searchParams: 
   const ids = ([] as string[]).concat(sp.ids ?? []).flatMap((x) => x.split(",")).filter((x) => /^[0-9a-f-]{36}$/.test(x)).slice(0, 300);
   const { data: picked } = ids.length ? await supabase.from("units").select("code").in("id", ids) : { data: [] };
   const codes = [...new Set([...String(sp.sztuki ?? "").split(/[\s,]+/).filter(Boolean), ...(picked ?? []).map((u) => u.code as string)])];
-  const back = typeof sp.wroc === "string" && sp.wroc.startsWith("/") && !sp.wroc.startsWith("//") ? sp.wroc : "";
+  const back = safePath(sp.wroc, "");
   // Umowa do sprzedanego przedmiotu bez sztuki w magazynie (?sprzedaz=).
   const saleId = typeof sp.sprzedaz === "string" && /^[0-9a-f-]{36}$/.test(sp.sprzedaz) ? sp.sprzedaz : null;
   const { data: sale } = saleId
