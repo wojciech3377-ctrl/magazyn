@@ -78,7 +78,7 @@ async function enqueueMissing(db: SupabaseClient, pair: MirrorPair, limit: numbe
 
 type SrcVariant = {
   id: string; title: string; sku: string | null; price: string; compareAtPrice: string | null; taxable: boolean; inventoryPolicy: string; position: number;
-  barcodes: { nodes: { value: string; type: string | null }[] }; selectedOptions: { name: string; value: string }[];
+  barcode: string | null; selectedOptions: { name: string; value: string }[];
   inventoryItem: { id: string; tracked: boolean; requiresShipping: boolean } | null;
 };
 type SrcProduct = {
@@ -93,7 +93,7 @@ const SOURCE_QUERY = `query P($id: ID!) { product(id: $id) {
   id title handle descriptionHtml vendor productType tags status templateSuffix seo { title description }
   options { name position values }
   media(first: 50) { pageInfo { hasNextPage } nodes { ... on MediaImage { image { url altText } } } }
-  variants(first: 250) { pageInfo { hasNextPage } nodes { id title sku price compareAtPrice taxable inventoryPolicy position barcodes(first: 5) { nodes { value type } } selectedOptions { name value } inventoryItem { id tracked requiresShipping } } }
+  variants(first: 250) { pageInfo { hasNextPage } nodes { id title sku price compareAtPrice taxable inventoryPolicy position barcode selectedOptions { name value } inventoryItem { id tracked requiresShipping } } }
 } }`;
 
 const MIRROR_VARIANTS = `query M($id: ID!) { product(id: $id) { id variants(first: 250) { nodes { id selectedOptions { name value } } } } }`;
@@ -241,7 +241,8 @@ export async function mirrorProduct(db: SupabaseClient, pair: MirrorPair, produc
         taxable: v.taxable,
         // Wspólne sztuki – kopia nigdy nie sprzedaje „na minus”.
         inventoryPolicy: "DENY",
-        ...(v.barcodes.nodes.length ? { barcodes: v.barcodes.nodes.map((b) => ({ value: b.value, ...(b.type ? { type: b.type } : {}) })) } : {}),
+        // Kod kreskowy (EAN) – API 2026-07: pole barcode (tekst).
+        ...(v.barcode ? { barcode: v.barcode } : {}),
         inventoryItem: { tracked, requiresShipping: v.inventoryItem?.requiresShipping ?? true },
         // Nowy rozmiar w kopii: stan od razu (sztuki źródła); później stany wysyła zapis „aplikacja → Shopify”.
         ...(!id && tracked ? { inventoryQuantities: [{ locationId: mirror.mirror_location_id, name: "available", quantity: ourVariant ? counts.get(ourVariant) ?? 0 : 0 }] } : {}),
