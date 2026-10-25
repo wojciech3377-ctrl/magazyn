@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Notice, PageHeader } from "@/components/ui";
 import { AcceptTab, loadIntakeCounts, TransitTab } from "./IntakeTabs";
 import { DeliveryForm } from "./DeliveryForm";
+import { withoutMirrors } from "@/lib/stores";
 
 export default async function DostawaPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const sp = await searchParams;
@@ -32,7 +33,7 @@ export default async function DostawaPage({ searchParams }: { searchParams: Prom
     );
   }
   const [{ data: stores }, { data: locations }, { data: consignors }, { data: contracts }] = await Promise.all([
-    supabase.from("stores").select("id, name").order("name"),
+    supabase.from("stores").select("*").order("name").then(withoutMirrors),
     supabase.from("locations").select("id, name, store_id, base_warehouse_id").eq("active", true).order("name"),
     supabase.from("consignors").select("id, name").order("name"),
     freeContracts(supabase).then((data) => ({ data })),

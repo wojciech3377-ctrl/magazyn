@@ -53,13 +53,14 @@ export async function registerWebhooks(formData: FormData) {
   const { supabase } = await requireAdmin();
   const { data: store } = await supabase.from("stores").select("*").eq("id", String(formData.get("id"))).single();
   if (!store?.shopify_domain) return done("Najpierw ustaw domenę Shopify.", "blad");
-  const h = await headers();
-  const host = h.get("x-forwarded-host") ?? h.get("host");
-  if (!host || host.startsWith("localhost")) return done("Webhooki rejestruj z opublikowanej aplikacji (adres https), nie lokalnie.", "blad");
+  // Adres aplikacji z konfiguracji (nie z nagłówka zapytania – webhooki nie mogą trafić pod obcą domenę).
+  const { appUrl } = await import("@/lib/app-url");
+  const base = await appUrl();
+  if (!base.startsWith("https://")) return done("Webhooki rejestruj z opublikowanej aplikacji (adres https), nie lokalnie.", "blad");
   const turnOn = String(formData.get("live") ?? "1") === "1";
   try {
     if (turnOn) {
-      const r = await registerProductWebhooks(store.shopify_domain, store.code, `https://${host}/api/shopify/webhook/${store.code}`);
+      const r = await registerProductWebhooks(store.shopify_domain, store.code, `${base}/api/shopify/webhook/${store.code}`);
       const failed = r.filter((x) => !/: (ok|już włączony)$/.test(x));
       await done(failed.length ? `${store.name}: włączone częściowo – ${failed.join(", ")}` : `${store.name}: na żywo włączone (produkty, zamówienia, zwroty, stany).`, failed.length ? "blad" : "ok");
     } else {
@@ -407,4 +408,39 @@ export async function makeBackupNow() {
     return done(errorMessage(e), "blad");
   }
   return done(msg);
+}
+
+/** Sklep-kopia (SQL 78): sklep źródłowy, lokalizacja Shopify kopii, zamiany tekstów w opisach. */
+export async function saveMirror(formData: FormData) {
+  const { supabase } = await requireAdmin();
+  const id = String(formData.get("id") ?? "");
+  const source = String(formData.get("mirror_of") ?? "");
+  const loc = String(formData.get("mirror_location_id") ?? "");
+  if (source === id) return done("Sklep nie może być kopią samego siebie.", "blad");
+  if (loc && !/^gid:\/\/shopify\/Location\/\d+$/.test(loc)) return done("Wybierz lokalizację Shopify z listy.", "blad");
+  const { error } = await supabase.from("stores").update({ mirror_of: source || null, ...(formData.has("mirror_location_id") ? { mirror_location_id: loc || null } : {}) }).eq("id", id);
+  if (error) return done(/mirror_/.test(error.message) ? "Sklep-kopia wymaga SQL 78 w Supabase (0078_mirror_store.sql)." : error.message, "blad");
+  if (formData.has("replace")) {
+    const replace = String(formData.get("replace") ?? "").split("\n").map((l) => l.split("→").map((x) => x.trim())).filter((p) => p.length === 2 && p[0]).slice(0, 30);
+    const { error: e2 } = await createAdminClient().from("app_settings").upsert({ key: "mirror", value: { replace } });
+    if (e2) return done(e2.message, "blad");
+  }
+  await done("Sklep-kopia zapisany.");
+}
+
+/** Utworzenie / aktualizacja produktów w sklepach-kopiach teraz (do ~3 minut, reszta przy kolejnym przebiegu automatu). */
+export async function runMirrorNow() {
+  await requireAdmin();
+  const { runMirror } = await import("@/lib/sync/mirror");
+  const r = await runMirror(createAdminClient(), { deadline: Date.now() + 180_000, backfill: 2000 }).catch((e) => ({ błąd: errorMessage(e) }));
+  const text = Object.entries(r).map(([k, v]) => `${k}: ${typeof v === "string" ? v : Object.entries(v as Record<string, unknown>).filter(([kk]) => kk !== "errors").map(([kk, vv]) => `${kk.replace(/_/g, " ")} ${vv}`).join(", ")}`).join(" · ");
+  const errs = Object.values(r).flatMap((v) => (v && typeof v === "object" && "errors" in v ? (v as { errors: string[] }).errors : []));
+  await done(`${text || "Brak sklepów-kopii z domeną Shopify."}${errs.length ? ` Błędy: ${errs.join("; ")}` : ""}`, errs.length ? "blad" : "ok");
+}
+
+/** Produkty, które nie przeszły do kopii (8 prób) – jeszcze raz. */
+export async function retryMirror(formData: FormData) {
+  await requireAdmin();
+  const { error } = await createAdminClient().from("mirror_queue").update({ attempts: 0 }).eq("store_id", String(formData.get("id") ?? "")).gte("attempts", 1);
+  await done(error ? error.message : "Produkty z błędem wrócą do kopiowania przy najbliższym przebiegu (albo kliknij „Kopiuj teraz”).", error ? "blad" : "ok");
 }

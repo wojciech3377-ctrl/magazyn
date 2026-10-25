@@ -2,6 +2,7 @@ import Link from "next/link";
 import { requireProfile } from "@/lib/auth";
 import { PageHeader } from "@/components/ui";
 import { TransferForm } from "./TransferForm";
+import { withoutMirrors } from "@/lib/stores";
 
 export const metadata = { title: "Wysyłka na inny magazyn" };
 
@@ -10,7 +11,7 @@ export default async function TransferPage() {
   const { supabase } = await requireProfile();
   const [{ data: locations }, { data: stores }] = await Promise.all([
     supabase.from("locations").select("id, name, store_id").eq("active", true).order("name"),
-    supabase.from("stores").select("id, name"),
+    supabase.from("stores").select("*").then(withoutMirrors),
   ]);
   const storeName = new Map((stores ?? []).map((s) => [s.id, s.name]));
   const locs = (locations ?? []).map((l) => ({ id: l.id as string, label: `${storeName.get(l.store_id) ?? ""} · ${l.name}` }));

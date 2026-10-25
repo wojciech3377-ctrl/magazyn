@@ -49,16 +49,31 @@ export async function readLevels(domain: string, storeCode: string, locationId: 
   return out;
 }
 
-type Store = { id: string; code: string; name: string; shopify_domain: string };
+/** mirror_of – sklep-kopia (SQL 78): stan = sztuki w lokalizacjach sklepu źródłowego, w jednej lokalizacji Shopify kopii. */
+type Store = { id: string; code: string; name: string; shopify_domain: string; mirror_of?: string | null; mirror_location_id?: string | null };
 type Loc = { id: string; store_id: string; shopify_location_id: string | null; active: boolean };
 type Link = { variant_id: string; shopify_inventory_item_id: string };
 
 async function storesAndLocations(db: SupabaseClient) {
   const [{ data: stores }, { data: locs }] = await Promise.all([
-    db.from("stores").select("id, code, name, shopify_domain").not("shopify_domain", "is", null),
+    db.from("stores").select("*").not("shopify_domain", "is", null),
     db.from("locations").select("id, store_id, shopify_location_id, active").order("created_at"),
   ]);
   return { stores: (stores ?? []) as Store[], locs: (locs ?? []) as Loc[] };
+}
+
+/**
+ * Lokalizacje, z których liczy się stan sklepu, i lokalizacja Shopify każdej z nich. Sklep-kopia: lokalizacje
+ * sklepu źródłowego → jedna lokalizacja Shopify kopii (te same sztuki co w źródle).
+ */
+function countingLocations(s: Store, locs: Loc[]) {
+  if (s.mirror_of) {
+    if (!s.mirror_location_id) return { mapped: [] as Loc[], shopLocOf: new Map<string, string>(), note: "sklep-kopia: wybierz lokalizację Shopify (Ustawienia → Sklepy i lokalizacje)" };
+    const mapped = locs.filter((l) => l.store_id === s.mirror_of && l.active && l.shopify_location_id);
+    return { mapped, shopLocOf: new Map(mapped.map((l) => [l.id, s.mirror_location_id!])), note: mapped.length ? null : "sklep źródłowy nie ma lokalizacji Shopify" };
+  }
+  const mapped = locs.filter((l) => l.store_id === s.id && l.active && l.shopify_location_id);
+  return { mapped, shopLocOf: new Map(mapped.map((l) => [l.id, l.shopify_location_id!])), note: mapped.length ? null : "brak lokalizacji Shopify przy lokalizacjach aplikacji" };
 }
 
 /** Sklep z jedną aktywną lokalizacją Shopify i jedną lokalizacją w aplikacji – łączy je sam. */
@@ -66,6 +81,15 @@ export async function autoMapLocations(db: SupabaseClient) {
   const { stores, locs } = await storesAndLocations(db);
   const mapped: string[] = [];
   for (const s of stores) {
+    // Sklep-kopia: jedna aktywna lokalizacja w jego Shopify → tam idzie stan.
+    if (s.mirror_of) {
+      if (s.mirror_location_id) continue;
+      const shop = (await shopifyLocations(s.shopify_domain, s.code)).filter((l) => l.isActive);
+      if (shop.length !== 1) continue;
+      await db.from("stores").update({ mirror_location_id: shop[0].id }).eq("id", s.id);
+      mapped.push(`${s.name}: ${shop[0].name}`);
+      continue;
+    }
     const mine = locs.filter((l) => l.store_id === s.id && l.active);
     if (mine.length !== 1 || mine[0].shopify_location_id) continue;
     const shop = (await shopifyLocations(s.shopify_domain, s.code)).filter((l) => l.isActive);
@@ -132,6 +156,8 @@ export async function reconcileFromShopify(db: SupabaseClient, opts: { force?: b
   const { stores, locs } = await storesAndLocations(db);
   const results: Record<string, unknown> = {};
   for (const s of stores) {
+    // Sklep-kopia: stan zawsze z aplikacji (sztuki źródła) – bez odczytu jego Shopify do Magazynu.
+    if (s.mirror_of) continue;
     const mapped = locs.filter((l) => l.store_id === s.id && l.active && l.shopify_location_id);
     if (!mapped.length) { results[s.name] = "brak lokalizacji Shopify przy lokalizacjach aplikacji"; continue; }
     // Błąd jednego sklepu (np. „za dużo na automat”) nie zatrzymuje drugiego – trafia do wyniku i „Błędów automatu”.
@@ -182,6 +208,8 @@ export async function reconcileFromShopify(db: SupabaseClient, opts: { force?: b
  * sztuki od razu; przy pozostałych nadwyżka czeka na potwierdzenie przy odczycie co 15 min.
  */
 export async function reconcileShopifyLevel(db: SupabaseClient, storeId: string, inventoryItemId: string, locationId: string, available: number) {
+  const { data: self } = await db.from("stores").select("*").eq("id", storeId).maybeSingle();
+  if ((self as Store | null)?.mirror_of) return null; // sklep-kopia – stany tylko z aplikacji
   const master = await getStockMaster(db);
   // Aplikacja główna: tylko zupełnie nowy produkt (rozmiar bez żadnej sztuki w historii) dostaje sztuki od razu.
   if (master === "app" && available > 0) return seedNewVariantLevel(db, storeId, inventoryItemId, locationId, available);
@@ -234,15 +262,15 @@ export async function activateAtLocation(domain: string, storeCode: string, item
 }
 
 /** Różnice, gdyby aplikacja była główna: ile pozycji w Shopify trzeba zmienić (bez zapisu). */
-export async function planPushToShopify(db: SupabaseClient, onlyVariants?: Set<string>, opts: { seed?: boolean } = {}) {
+export async function planPushToShopify(db: SupabaseClient, onlyVariants?: Set<string>, opts: { seed?: boolean; onlyStores?: Set<string> } = {}) {
   const { stores, locs } = await storesAndLocations(db);
   const plan: { store: Store; changes: Change[]; activate: Activation[]; note?: string; seeded?: number; waitingMatch?: number; seedError?: string }[] = [];
   for (const s of stores) {
-    const mapped = locs.filter((l) => l.store_id === s.id && l.active && l.shopify_location_id);
-    if (!mapped.length) { plan.push({ store: s, changes: [], activate: [], note: "brak lokalizacji Shopify przy lokalizacjach aplikacji" }); continue; }
+    if (opts.onlyStores && !opts.onlyStores.has(s.id)) continue;
+    const { mapped, shopLocOf, note } = countingLocations(s, locs);
+    if (note) { plan.push({ store: s, changes: [], activate: [], note }); continue; }
     const links = await trackedLinks(db, s.id);
     const counts = await allStockCounts(db, mapped.map((l) => l.id));
-    const shopLocOf = new Map(mapped.map((l) => [l.id, l.shopify_location_id!]));
     const want = new Map<string, number>(); // `${variant}|${shopLoc}` → sztuk
     for (const c of (counts ?? []) as { variant_id: string; location_id: string; qty: number }[]) {
       const key = `${c.variant_id}|${shopLocOf.get(c.location_id)}`;
@@ -262,7 +290,7 @@ export async function planPushToShopify(db: SupabaseClient, onlyVariants?: Set<s
     let seeded = 0;
     let waitingMatch = 0;
     let seedError: string | undefined;
-    for (const shopLoc of new Set(mapped.map((l) => l.shopify_location_id!))) {
+    for (const shopLoc of new Set(shopLocOf.values())) {
       const levels = await readLevels(s.shopify_domain, s.code, shopLoc);
       // Duplikaty (dwa produkty Shopify na ten sam rozmiar): stan dostaje jeden, pozostałe 0 – bez sprzedaży dwa razy tej samej sztuki.
       const owner = new Map<string, string>();
@@ -271,7 +299,8 @@ export async function planPushToShopify(db: SupabaseClient, onlyVariants?: Set<s
       }
       // Nowy produkt dodany w Shopify (rozmiar, który nigdy nie miał sztuk w aplikacji) ze stanem > 0:
       // zamiast zerować stan w Shopify – sztuki w Magazynie (własne, bez umowy; umowę przypniesz później).
-      if (opts.seed) {
+      // Sklep-kopia nie zasila Magazynu (produkty i stany pochodzą ze źródła).
+      if (opts.seed && !s.mirror_of) {
         const group = mapped.filter((l) => l.shopify_location_id === shopLoc);
         const cand = [...owner.entries()]
           .map(([variant_id, item]) => ({ variant_id, qty: levels.get(item) ?? 0 }))
@@ -346,8 +375,8 @@ export async function planPushToShopify(db: SupabaseClient, onlyVariants?: Set<s
 }
 
 /** Aplikacja jest główna: zapis stanów do Shopify (porcjami, z kontrolą, że stan w Shopify się w międzyczasie nie zmienił). */
-export async function pushStockToShopify(db: SupabaseClient, maxChanges = 500, onlyVariants?: Set<string>) {
-  const plan = await planPushToShopify(db, onlyVariants, { seed: true });
+export async function pushStockToShopify(db: SupabaseClient, maxChanges = 500, onlyVariants?: Set<string>, opts: { onlyStores?: Set<string> } = {}) {
+  const plan = await planPushToShopify(db, onlyVariants, { seed: true, onlyStores: opts.onlyStores });
   const results: Record<string, unknown> = {};
   for (const p of plan) {
     if (p.note) { results[p.store.name] = p.note; continue; }
@@ -386,6 +415,12 @@ export async function syncStock(db: SupabaseClient, opts: { force?: boolean } = 
   const mapped = await autoMapLocations(db).catch(() => []);
   const master = await getStockMaster(db);
   const result = master === "app" ? await pushStockToShopify(db) : await reconcileFromShopify(db, opts);
+  // Główny Shopify: sklepy-kopie i tak dostają stan z aplikacji (sztuki sklepu źródłowego).
+  if (master !== "app") {
+    const { stores } = await storesAndLocations(db);
+    const mirrors = new Set(stores.filter((s) => s.mirror_of).map((s) => s.id));
+    if (mirrors.size) Object.assign(result as object, await pushStockToShopify(db, 500, undefined, { onlyStores: mirrors }).catch((e) => ({ kopie: errorMessage(e) })));
+  }
   return { master, ...(mapped.length ? { mapped } : {}), result };
 }
 
@@ -397,11 +432,13 @@ export async function compareStock(db: SupabaseClient, limit = 300) {
   const diffs: (Omit<StockDiff, "title" | "option"> & { variantId: string; locationId: string })[] = [];
   const notes: string[] = [];
   for (const s of stores) {
-    const mapped = locs.filter((l) => l.store_id === s.id && l.active && l.shopify_location_id);
-    if (!mapped.length) { notes.push(`${s.name}: brak lokalizacji Shopify przy lokalizacjach aplikacji`); continue; }
+    const { mapped, shopLocOf, note } = countingLocations(s, locs);
+    if (note) { notes.push(`${s.name}: ${note}`); continue; }
     const links = await trackedLinks(db, s.id);
     const counts = await allStockCounts(db, mapped.map((l) => l.id));
-    for (const [shopLoc, group] of groupByShopLocation(mapped)) {
+    const byShop = new Map<string, Loc[]>();
+    for (const l of mapped) byShop.set(shopLocOf.get(l.id)!, [...(byShop.get(shopLocOf.get(l.id)!) ?? []), l]);
+    for (const [shopLoc, group] of byShop) {
       const levels = await readLevels(s.shopify_domain, s.code, shopLoc);
       const ids = new Set(group.map((g) => g.id));
       const app = new Map<string, number>();
@@ -444,6 +481,7 @@ export async function reconcileRecentFromShopify(db: SupabaseClient) {
   for (const s of stores) {
     // Błąd jednego sklepu nie zatrzymuje drugiego.
     try {
+    if (s.mirror_of) continue; // sklep-kopia – stany tylko z aplikacji
     const mapped = locs.filter((l) => l.store_id === s.id && l.active && l.shopify_location_id);
     if (!mapped.length) continue;
     const key = `stock_live:${s.id}`;
@@ -536,4 +574,94 @@ async function seedNewVariantLevel(db: SupabaseClient, storeId: string, inventor
   });
   if (error) throw error;
   return data;
+}
+
+/**
+ * Szybki zapis stanu wybranych rozmiarów (bez czytania całej lokalizacji): po zamówieniu, anulowaniu albo ruchu
+ * w aplikacji – żeby drugi sklep (np. kopia Owca Store ↔ Sneakers Depot) od razu pokazał ten sam stan.
+ * Stan = sztuki na stanie w lokalizacjach liczonych dla sklepu. Rozmiary z zamówieniem w tym sklepie w ostatnich
+ * 30 min nie dostają podniesienia stanu (zamówienie mogło jeszcze nie zdjąć sztuki).
+ */
+export async function pushVariantsNow(db: SupabaseClient, variantIds: string[], opts: { mirrorsOnly?: boolean } = {}) {
+  const ids = [...new Set(variantIds)].filter(Boolean);
+  const out: Record<string, unknown> = {};
+  if (!ids.length) return out;
+  const { stores, locs } = await storesAndLocations(db);
+  for (const s of stores) {
+    if (opts.mirrorsOnly && !s.mirror_of) continue;
+    try {
+      const { mapped, shopLocOf, note } = countingLocations(s, locs);
+      if (note) continue;
+      // Powiązania rozmiarów w tym sklepie (pierwsza pozycja wg ID – jak przy pełnym zapisie, duplikaty dostają 0).
+      const links: Link[] = [];
+      for (let i = 0; i < ids.length; i += 150) {
+        const { data } = await db.from("variant_store_links").select("variant_id, shopify_inventory_item_id").eq("store_id", s.id).eq("inventory_tracked", true)
+          .not("shopify_inventory_item_id", "is", null).in("variant_id", ids.slice(i, i + 150));
+        links.push(...((data ?? []) as Link[]));
+      }
+      if (!links.length) continue;
+      const want = new Map<string, number>();
+      for (let i = 0; i < ids.length; i += 150) {
+        const { data } = await db.from("units").select("variant_id, location_id").eq("status", "in_stock").in("variant_id", ids.slice(i, i + 150)).in("location_id", mapped.map((l) => l.id));
+        for (const u of data ?? []) {
+          const key = `${u.variant_id}|${shopLocOf.get(u.location_id as string)}`;
+          want.set(key, (want.get(key) ?? 0) + 1);
+        }
+      }
+      const { data: recent } = await db.from("orders").select("line_items").eq("store_id", s.id).gte("ordered_at", new Date(Date.now() - 30 * 60_000).toISOString());
+      const recentGids = new Set(((recent ?? []) as { line_items: { shopify_variant_id: string | null }[] }[]).flatMap((o) => o.line_items.map((l) => l.shopify_variant_id)).filter(Boolean) as string[]);
+      const { data: held } = recentGids.size ? await db.from("variant_store_links").select("variant_id").eq("store_id", s.id).in("shopify_variant_id", [...recentGids]) : { data: [] };
+      const hold = new Set((held ?? []).map((h) => h.variant_id as string));
+      // Aktualny stan w Shopify tych pozycji.
+      const levels = new Map<string, number>(); // `${item}|${loc}` → ilość
+      const items = [...new Set(links.map((l) => l.shopify_inventory_item_id))];
+      for (let i = 0; i < items.length; i += 100) {
+        const d = await shopifyGraphql<{ nodes: ({ id: string; inventoryLevels: { nodes: { location: { id: string }; quantities: { quantity: number }[] }[] } } | null)[] }>(s.shopify_domain, s.code,
+          `query L($ids: [ID!]!) { nodes(ids: $ids) { ... on InventoryItem { id inventoryLevels(first: 20) { nodes { location { id } quantities(names: ["available"]) { quantity } } } } } }`,
+          { ids: items.slice(i, i + 100) });
+        for (const n of d.nodes) if (n?.inventoryLevels) for (const lv of n.inventoryLevels.nodes) levels.set(`${n.id}|${lv.location.id}`, lv.quantities[0]?.quantity ?? 0);
+      }
+      const changes: Change[] = [];
+      const activate: Activation[] = [];
+      for (const shopLoc of new Set(shopLocOf.values())) {
+        const owner = new Map<string, string>();
+        for (const l of [...links].sort((a, b) => a.shopify_inventory_item_id.localeCompare(b.shopify_inventory_item_id))) {
+          if (levels.has(`${l.shopify_inventory_item_id}|${shopLoc}`) && !owner.has(l.variant_id)) owner.set(l.variant_id, l.shopify_inventory_item_id);
+        }
+        for (const l of links) {
+          const key = `${l.shopify_inventory_item_id}|${shopLoc}`;
+          const target = want.get(`${l.variant_id}|${shopLoc}`) ?? 0;
+          if (!levels.has(key)) {
+            if (!owner.has(l.variant_id) && target > 0 && !hold.has(l.variant_id)) { owner.set(l.variant_id, l.shopify_inventory_item_id); activate.push({ inventoryItemId: l.shopify_inventory_item_id, locationId: shopLoc, quantity: target }); }
+            continue;
+          }
+          const current = levels.get(key)!;
+          const t = owner.get(l.variant_id) === l.shopify_inventory_item_id ? target : 0;
+          if (t > current && hold.has(l.variant_id)) continue;
+          if (t !== current) changes.push({ inventoryItemId: l.shopify_inventory_item_id, locationId: shopLoc, quantity: t, changeFromQuantity: current });
+        }
+      }
+      let done = 0;
+      const errors: string[] = [];
+      for (let i = 0; i < changes.length; i += 100) {
+        const d = await shopifyGraphql<{ inventorySetQuantities: { userErrors: { message: string }[] } }>(s.shopify_domain, s.code,
+          `mutation Set($input: InventorySetQuantitiesInput!, $key: String!) { inventorySetQuantities(input: $input) @idempotent(key: $key) { inventoryAdjustmentGroup { id } userErrors { field message } } }`,
+          { key: crypto.randomUUID(), input: { name: "available", reason: "correction", referenceDocumentUri: "magazyn://stan-z-aplikacji", quantities: changes.slice(i, i + 100) } });
+        if (d.inventorySetQuantities.userErrors.length) errors.push(...d.inventorySetQuantities.userErrors.map((e) => e.message));
+        else done += changes.slice(i, i + 100).length;
+      }
+      const act = activate.length ? await activateAtLocation(s.shopify_domain, s.code, activate) : null;
+      if (act) errors.push(...act.errors);
+      if (done || act?.done || errors.length) out[s.name] = { changed: done, ...(act?.done ? { aktywowane: act.done } : {}), ...(errors.length ? { errors: [...new Set(errors)].slice(0, 3) } : {}) };
+    } catch (e) {
+      out[s.name] = `błąd: ${errorMessage(e)}`;
+    }
+  }
+  return out;
+}
+
+/** Czy są sklepy-kopie (szybkie sprawdzenie przed dodatkowym zapisem stanów). */
+export async function hasMirrorStores(db: SupabaseClient) {
+  const { data } = await db.from("stores").select("*").not("shopify_domain", "is", null);
+  return ((data ?? []) as Store[]).some((s) => s.mirror_of);
 }

@@ -40,6 +40,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ sto
           const order = await getOrder(store.shopify_domain, store.code, orderGid);
           if (order) await saveShopifyOrders(db, store.id, [order]);
         }
+      } else if (store.mirror_of && (topic === "inventory_levels/update" || topic.startsWith("products/"))) {
+        // Sklep-kopia: produkty i stany prowadzi aplikacja (zmiany ze źródła). Usunięty ręcznie produkt odtworzy automat kopii.
+        if (topic === "products/delete") {
+          const gid = body.admin_graphql_api_id ?? (body.id ? `gid://shopify/Product/${body.id}` : null);
+          if (gid) await removeShopifyProduct(db, store as Store, gid);
+        }
       } else if (topic === "inventory_levels/update") {
         if (body.inventory_item_id && body.location_id && typeof body.available === "number") {
           await reconcileShopifyLevel(db, store.id, `gid://shopify/InventoryItem/${body.inventory_item_id}`, `gid://shopify/Location/${body.location_id}`, body.available);
@@ -48,7 +54,20 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ sto
         const gid = body.admin_graphql_api_id ?? (body.id ? `gid://shopify/Product/${body.id}` : null);
         if (!gid) return;
         if (topic === "products/delete") await removeShopifyProduct(db, store as Store, gid);
-        else await syncSingleProduct(db, store as Store, gid);
+        else {
+          await syncSingleProduct(db, store as Store, gid);
+          // Kopie tego sklepu (np. Owca Store): ten produkt od razu (przy błędzie zostaje w kolejce automatu).
+          const { mirrorPairs, mirrorProduct } = await import("@/lib/sync/mirror");
+          const pairs = (await mirrorPairs(db)).filter((p) => p.source.id === store.id);
+          if (pairs.length) {
+            const { data: link } = await db.from("product_store_links").select("product_id").eq("store_id", store.id).eq("shopify_product_id", gid).maybeSingle();
+            for (const pair of link ? pairs : []) {
+              await mirrorProduct(db, pair, link!.product_id as string).then(
+                () => db.from("mirror_queue").delete().eq("store_id", pair.mirror.id).eq("product_id", link!.product_id),
+                () => null);
+            }
+          }
+        }
         // Usunięty produkt / rozmiar → z magazynu od razu (tylko sztuki bez historii).
         await db.rpc("purge_non_shopify", { p_dry_run: false, p_max: 100 });
       }

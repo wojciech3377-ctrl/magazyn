@@ -4,6 +4,7 @@ import { requireProfile } from "@/lib/auth";
 import { money, UNIT_STATUS } from "@/lib/labels";
 import { parseProductTagCode, productTagCode } from "@/lib/price-tag-code";
 import { PageHeader } from "@/components/ui";
+import { withoutMirrors } from "@/lib/stores";
 
 export const metadata = { title: "Stan produktu" };
 
@@ -17,7 +18,7 @@ export default async function ProductStockPage({ params }: { params: Promise<{ c
   if (!p) notFound();
   const [{ data: variants }, { data: stores }] = await Promise.all([
     supabase.from("variants").select("id, option, position, links:variant_store_links(store_id, price)").eq("product_id", p.id),
-    supabase.from("stores").select("id, name").order("name"),
+    supabase.from("stores").select("*").order("name").then(withoutMirrors),
   ]);
   const vids = (variants ?? []).map((v) => v.id as string);
   const { data: units } = vids.length

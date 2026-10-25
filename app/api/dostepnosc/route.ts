@@ -52,13 +52,16 @@ export async function GET(req: NextRequest) {
   if (!/^[a-z0-9_-]{1,40}$/i.test(code) || !ids.length) return json({ error: "podaj sklep i warianty" }, 400, "no-store");
 
   const db = createAdminClient();
-  const { data: store } = await db.from("stores").select("id, code, shopify_domain").eq("code", code).maybeSingle();
+  const { data: store } = await db.from("stores").select("*").eq("code", code).maybeSingle();
   if (!store) return json({ error: "nieznany sklep" }, 404, "no-store");
+  // Sklep-kopia (np. Owca Store): te same sztuki co sklep źródłowy – lokalizacje i ich nazwy ze źródła.
+  const { data: source } = store.mirror_of ? await db.from("stores").select("id, code, shopify_domain").eq("id", store.mirror_of).maybeSingle() : { data: null };
+  const locStore = source ?? store;
 
   const gids = ids.map((id) => `gid://shopify/ProductVariant/${id}`);
   const [{ data: links }, { data: locs }] = await Promise.all([
     db.from("variant_store_links").select("variant_id, shopify_variant_id").eq("store_id", store.id).in("shopify_variant_id", gids),
-    db.from("locations").select("id, name, shopify_location_id").eq("store_id", store.id).eq("active", true),
+    db.from("locations").select("id, name, shopify_location_id").eq("store_id", locStore.id).eq("active", true),
   ]);
   const out: Record<string, Record<string, number>> = Object.fromEntries(ids.map((id) => [id, {}]));
   const byVariant = new Map<string, string[]>();
@@ -69,7 +72,7 @@ export async function GET(req: NextRequest) {
   if (!byVariant.size || !locs?.length) return json(out);
 
   let names = new Map<string, string>();
-  if (store.shopify_domain) names = await locationNames(store.shopify_domain as string, store.code as string);
+  if (locStore.shopify_domain) names = await locationNames(locStore.shopify_domain as string, locStore.code as string);
   const label = new Map(locs.map((l) => [l.id as string, (l.shopify_location_id && names.get(l.shopify_location_id as string)) || (l.name as string)]));
 
   // Każda lokalizacja (sklep / magazyn) pojawia się w odpowiedzi, także z zerem.

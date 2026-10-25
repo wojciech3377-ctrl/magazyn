@@ -142,6 +142,9 @@ async function saveOrderBatch(db: SupabaseClient, storeId: string, orders: Shopi
   if (salesErr) throw salesErr;
   // Para z magazynu zużyta na produkt „z bazowego modelu”: w Shopify stan bazowego modelu nie spadł sam – zdejmujemy.
   if (madeFrom.size) await settleMadeFromStock(db, ids, startedAt).catch(() => null);
+  // Sklep-kopia (np. Owca Store ↔ Sneakers Depot): ta sama sztuka w dwóch sklepach – po zamówieniu / anulowaniu
+  // od razu stan w drugim sklepie (inaczej przez kilka minut mógłby sprzedać ją drugi raz).
+  await syncSharedStock(db, ids).catch(() => null);
   return ids;
 }
 
@@ -201,6 +204,18 @@ async function settleMadeFromStock(db: SupabaseClient, orderIds: string[], since
   const { getStockMaster, pushStockToShopify } = await import("@/lib/sync/shopify-stock");
   if ((await getStockMaster(db)) === "app") await pushStockToShopify(db, 500, new Set(changes.map((c) => c.variantId)));
   else await (await import("@/lib/stock")).adjustStock(db, changes);
+}
+
+async function syncSharedStock(db: SupabaseClient, orderIds: string[]) {
+  const { hasMirrorStores, pushVariantsNow, getStockMaster } = await import("@/lib/sync/shopify-stock");
+  if (!orderIds.length || !(await hasMirrorStores(db))) return;
+  const variants = new Set<string>();
+  for (let i = 0; i < orderIds.length; i += 100) {
+    const { data } = await db.from("sales").select("variant_id").in("order_id", orderIds.slice(i, i + 100)).not("variant_id", "is", null);
+    for (const r of data ?? []) variants.add(r.variant_id as string);
+  }
+  if (!variants.size) return;
+  await pushVariantsNow(db, [...variants], { mirrorsOnly: (await getStockMaster(db)) !== "app" });
 }
 
 /** Odczyt zamówień ze sklepów Shopify zmienionych od ostatniego razu. */

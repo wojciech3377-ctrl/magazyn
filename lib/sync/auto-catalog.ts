@@ -25,6 +25,8 @@ export async function syncShopifyProductsIncremental(db: SupabaseClient, maxPage
   const out: Record<string, number> = {};
   const pending: string[] = [];
   for (const store of (stores ?? []) as Store[]) {
+    // Sklep-kopia nie ma własnego katalogu (produkty tworzy w nim aplikacja).
+    if (store.mirror_of) continue;
     const key = `shopify_products:${store.id}`;
     const { data: st } = await db.from("sync_state").select("value").eq("key", key).maybeSingle();
     const state: ShopState = (st?.value as ShopState) ?? { since: "2000-01-01T00:00:00Z", after: null, high: "2000-01-01T00:00:00Z" };
@@ -81,13 +83,16 @@ export async function runAutoCatalog(db: SupabaseClient, force = false) {
   const { data: purged, error: purgeErr } = await db.rpc("purge_non_shopify", { p_dry_run: false, p_max: 100 });
   // Jednorazowo: starsze zamówienia z parami „z bazowego modelu” (np. AF1 Rope) – „Dołącz umowę” w zamówieniu i JPK.
   const madeFrom = await (await import("@/lib/sync/shop-orders")).remapMadeFromOrders(db).catch((e) => `błąd: ${errorMessage(e)}`);
+  // Sklepy-kopie (np. Owca Store): nowe i zmienione produkty źródła → kopia (do limitu czasu, reszta przy kolejnym przebiegu).
+  const mirror = await (await import("./mirror")).runMirror(db, { deadline: Math.min(Date.now() + (force ? 90_000 : 60_000), started + 200_000) })
+    .catch((e) => `błąd: ${errorMessage(e)}`);
   const stock: Awaited<ReturnType<typeof syncStock>> | { error: string; master?: undefined; result?: undefined } = await syncStock(db).catch((e) => ({ error: errorMessage(e) }));
   // Kolekcje (kategorie do filtra w Magazynie): z automatu co ~3 godziny, z przycisku – gdy starsze niż 30 min.
   const collections = await syncCollections(db, {
     deadline: Math.min(Date.now() + (force ? 45_000 : 60_000), started + 270_000),
     minAgeMs: force ? 30 * 60_000 : 3 * 3600_000,
   }).catch((e) => `błąd: ${errorMessage(e)}`);
-  const result = { shopify, deleted, split, stock, collections, notInShopify: purgeErr ? purgeErr.message : purged, catalogError, ...(madeFrom ? { madeFrom } : {}) };
+  const result = { shopify, deleted, split, ...(typeof mirror === "string" || Object.keys(mirror).length ? { mirror } : {}), stock, collections, notInShopify: purgeErr ? purgeErr.message : purged, catalogError, ...(madeFrom ? { madeFrom } : {}) };
   await syncIssues(db, "auto-catalog", catalogIssues(result));
   return result;
 }

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { requireProfile } from "@/lib/auth";
 import { PageHeader } from "@/components/ui";
 import { InventoryScanner } from "./InventoryScanner";
+import { withoutMirrors } from "@/lib/stores";
 
 export const metadata = { title: "Inwentaryzacja" };
 
@@ -10,7 +11,7 @@ export default async function InventoryPage() {
   const { supabase } = await requireProfile();
   const [{ data: locations }, { data: stores }] = await Promise.all([
     supabase.from("locations").select("id, name, store_id").eq("active", true).order("name"),
-    supabase.from("stores").select("id, name"),
+    supabase.from("stores").select("*").then(withoutMirrors),
   ]);
   const storeName = new Map((stores ?? []).map((s) => [s.id, s.name]));
   return (

@@ -2,6 +2,7 @@ import { requireAdmin } from "@/lib/auth";
 import { SubmitButton } from "@/components/SubmitButton";
 import { ConfirmSubmit } from "@/components/ConfirmSubmit";
 import { cashMovement, undoCashMovement } from "./cash-actions";
+import { withoutMirrors } from "@/lib/stores";
 
 const pln = (n: number) => new Intl.NumberFormat("pl-PL", { style: "currency", currency: "PLN" }).format(n);
 const when = (iso: string) => new Intl.DateTimeFormat("pl-PL", { timeZone: "Europe/Warsaw", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
@@ -15,7 +16,7 @@ export async function CashDrawer() {
   const { supabase } = await requireAdmin();
   const [{ data: rows, error }, { data: stores }, { data: moves }] = await Promise.all([
     supabase.rpc("cash_balances"),
-    supabase.from("stores").select("id, name").order("name"),
+    supabase.from("stores").select("*").order("name").then(withoutMirrors),
     supabase.from("cash_movements").select("id, store_id, kind, amount, balance_before, note, created_at, who:profiles(full_name, email)").order("created_at", { ascending: false }).limit(30),
   ]);
   if (error) {

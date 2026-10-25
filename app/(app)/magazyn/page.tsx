@@ -18,6 +18,7 @@ import { FilterField, ListToolbar } from "@/components/ListToolbar";
 import { BulkBar } from "@/components/BulkBar";
 import { activeFilters, filterChips } from "@/lib/list-params";
 import { ChangesPreview } from "./ChangesPreview";
+import { withoutMirrors } from "@/lib/stores";
 
 // Przycisk „Sprawdź nowe produkty i stany” czyta cały katalog Shopify – potrzebuje dłuższego czasu.
 export const maxDuration = 300;
@@ -75,7 +76,7 @@ export default async function MagazynPage({ searchParams }: { searchParams: Prom
       if (pickedCats.length || sp.shopify) return { rows: [] as UnitRow[], count: 0, catError: true };
       throw e;
     }),
-    supabase.from("stores").select("id, name").order("name"),
+    supabase.from("stores").select("*").order("name").then(withoutMirrors),
     supabase.from("locations").select("id, name, store_id").eq("active", true).order("name"),
     freeContracts(supabase).then((data) => ({ data })),
     supabase.from("units").select("id", { count: "exact", head: true }).is("contract_id", null).in("status", ["in_stock", "in_transit", "reserved"]),

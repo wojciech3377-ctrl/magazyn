@@ -4,6 +4,7 @@ import { getCompany } from "@/lib/contracts/settings";
 import { mailConfigured } from "@/lib/mail";
 import { PageHeader } from "@/components/ui";
 import { TemplateContractForm, type Line } from "./TemplateContractForm";
+import { withoutMirrors } from "@/lib/stores";
 
 export default async function TemplateContractPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const sp = await searchParams;
@@ -14,7 +15,7 @@ export default async function TemplateContractPage({ searchParams }: { searchPar
   const [company, { data: locations }, { data: stores }] = await Promise.all([
     getCompany(supabase),
     supabase.from("locations").select("id, name, store_id").eq("active", true).order("name"),
-    supabase.from("stores").select("id, name"),
+    supabase.from("stores").select("*").then(withoutMirrors),
   ]);
   const storeName = new Map((stores ?? []).map((s) => [s.id, s.name]));
   let lines: Line[] = [];

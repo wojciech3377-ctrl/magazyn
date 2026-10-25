@@ -6,6 +6,7 @@ import { SellerContractForm } from "@/components/contracts/SellerContractForm";
 import { submitGeneralContract } from "@/app/podpis/actions";
 import { searchCatalogPublic } from "../actions";
 import { PublicShell } from "@/app/podpis/PublicShell";
+import { withoutMirrors } from "@/lib/stores";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Umowa kupna", robots: { index: false, follow: false } };
@@ -19,7 +20,7 @@ export default async function GeneralContractPage({ params }: { params: Promise<
   if (!cfg?.enabled || !safeEqual(cfg.key, key)) {
     return <PublicShell company={company.name}><div className="card mx-auto max-w-lg p-6">Ten link jest nieaktywny. Skontaktuj się z nami: {company.email}</div></PublicShell>;
   }
-  const { data: stores } = await db.from("stores").select("id, name").order("name");
+  const { data: stores } = await db.from("stores").select("*").order("name").then(withoutMirrors);
   return (
     <PublicShell company={company.name}>
       <h1 className="h1 mb-3">Umowa kupna</h1>

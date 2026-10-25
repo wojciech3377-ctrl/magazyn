@@ -116,5 +116,8 @@ export async function adjustStock(db: SupabaseClient, changes: StockChange[]) {
       }
     }
   }));
+  // Sklepy-kopie (np. Owca Store) mają te same sztuki – od razu ten sam stan (przy błędzie nadrobi automat).
+  const { hasMirrorStores, pushVariantsNow } = await import("@/lib/sync/shopify-stock");
+  if (await hasMirrorStores(db).catch(() => false)) await pushVariantsNow(db, variantIds, { mirrorsOnly: true }).catch(() => null);
   return results;
 }

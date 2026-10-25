@@ -11,6 +11,8 @@ export type Store = {
   base_inventory_id: number | null;
   base_order_source_id: number | null;
   base_storage_id: string | null;
+  /** Sklep-kopia (SQL 78): produkty tworzy aplikacja z tego sklepu źródłowego – katalog kopii się nie importuje. */
+  mirror_of?: string | null;
 };
 
 /** Zapytanie .in() w paczkach, żeby adres zapytania nie był za długi. */
@@ -57,6 +59,8 @@ function styleSku(p: ShopifyProduct) {
  * w jeden produkt po SKU modelu, a warianty po rozmiarze.
  */
 export async function upsertShopifyProducts(db: SupabaseClient, store: Store, allProducts: ShopifyProduct[]) {
+  // Kopia (np. Owca Store): jej produkty tworzy aplikacja – import z jej Shopify zrobiłby z nich osobne produkty.
+  if (store.mirror_of) return { products: 0, variants: 0, created: 0 };
   const exclusions = await loadExclusions(db);
   // Pomijamy wykluczenia z Ustawień oraz produkty, w których żaden rozmiar nie ma śledzenia stanu (usługi).
   // Działa na pojedyncze rozmiary: np. „Wymiana ekranu” + wariant „iPhone 17 (oryginał)”.
@@ -211,6 +215,10 @@ export async function upsertShopifyProducts(db: SupabaseClient, store: Store, al
     if (error) throw error;
   }
 
+  // Sklepy-kopie tego sklepu: zmienione / nowe produkty do utworzenia albo aktualizacji w kopii.
+  const { enqueueMirror } = await import("./mirror");
+  await enqueueMirror(db, store.id, [...new Set(products.map((p) => productIdByGid.get(p.id)!))]).catch(() => 0);
+
   return { products: products.length, variants: allVariants.length, created };
 }
 
@@ -245,6 +253,13 @@ export async function importCatalogPage(db: SupabaseClient, store: Store, after:
 export async function removeShopifyProduct(db: SupabaseClient, store: Store, productGid: string) {
   const { data: link } = await db.from("product_store_links").select("product_id").eq("store_id", store.id).eq("shopify_product_id", productGid).maybeSingle();
   if (!link) return;
+  // Usunięty w sklepie źródłowym → w kopiach archiwum (przy błędzie – do kolejki, automat ponowi).
+  if (!store.mirror_of) {
+    const { mirrorPairs, archiveInMirror, enqueueMirror } = await import("./mirror");
+    for (const pair of (await mirrorPairs(db)).filter((p) => p.source.id === store.id)) {
+      await archiveInMirror(db, pair.mirror, link.product_id as string).catch(() => enqueueMirror(db, store.id, [link.product_id as string]));
+    }
+  }
   const { data: variants } = await db.from("variants").select("id").eq("product_id", link.product_id);
   const ids = (variants ?? []).map((v) => v.id as string);
   if (ids.length) await db.from("variant_store_links").delete().eq("store_id", store.id).in("variant_id", ids);
@@ -268,6 +283,8 @@ export async function detachDeletedShopifyProducts(db: SupabaseClient) {
   const { data: stores } = await db.from("stores").select("*").not("shopify_domain", "is", null);
   const out: Record<string, number> = {};
   for (const store of (stores ?? []) as Store[]) {
+    // Kopia: brakujące produkty odtwarza automat kopii.
+    if (store.mirror_of) continue;
     const gids: string[] = [];
     for (let from = 0; ; from += 1000) {
       const { data, error } = await db.from("product_store_links").select("shopify_product_id").eq("store_id", store.id).not("shopify_product_id", "is", null).range(from, from + 999);
@@ -285,6 +302,8 @@ export async function detachDeletedShopifyProducts(db: SupabaseClient) {
       const chunk = missing.slice(i, i + 100);
       const { data: links } = await db.from("product_store_links").select("product_id").eq("store_id", store.id).in("shopify_product_id", chunk);
       const productIds = (links ?? []).map((l) => l.product_id as string);
+      // Kopie tego sklepu: produkty usunięte w źródle → do kolejki (automat kopii przeniesie je do archiwum).
+      if (productIds.length) await (await import("./mirror")).enqueueMirror(db, store.id, productIds).catch(() => 0);
       if (productIds.length) {
         const variants = await selectIn<{ id: string }>(productIds, (c) => db.from("variants").select("id").in("product_id", c));
         const ids = variants.map((v) => v.id);

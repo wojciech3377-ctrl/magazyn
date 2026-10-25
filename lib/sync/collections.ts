@@ -15,10 +15,12 @@ type Store = { id: string; name: string; code: string; shopify_domain: string };
 const isMissingTable = (m: string) => /shop_collection|refresh_product_collections|schema cache/i.test(m);
 
 export async function syncCollections(db: SupabaseClient, opts: { deadline: number; minAgeMs: number }) {
-  const { data: stores } = await db.from("stores").select("id, name, code, shopify_domain").not("shopify_domain", "is", null);
+  const { data: stores } = await db.from("stores").select("*").not("shopify_domain", "is", null);
   const out: Record<string, string> = {};
   let touched = false;
   for (const store of (stores ?? []) as Store[]) {
+    // Sklep-kopia: kategorie jak w sklepie źródłowym (te same produkty) – bez osobnych kolekcji.
+    if ((store as { mirror_of?: string | null }).mirror_of) continue;
     const key = `collections:${store.id}`;
     const { data: st } = await db.from("sync_state").select("value").eq("key", key).maybeSingle();
     const state: State = { queue: [], doneAt: null, startedAt: null, ...((st?.value as Partial<State> | null) ?? {}) };

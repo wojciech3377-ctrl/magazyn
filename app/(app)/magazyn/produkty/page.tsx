@@ -9,6 +9,7 @@ import { PageHeader, Thumb } from "@/components/ui";
 import { SearchInput } from "@/components/SearchInput";
 import { UNIT_STATUS } from "@/lib/labels";
 import { ProductTagsForm, type ProductRow } from "./ProductTagsForm";
+import { withoutMirrors } from "@/lib/stores";
 
 export const metadata = { title: "Stan produktu + metka" };
 
@@ -39,7 +40,7 @@ export default async function ProductTagsPage({ searchParams }: { searchParams: 
   const unitNo = /^S0*(\d{1,6})$/i.exec(q)?.[1];
   type ScannedUnit = { code: string; status: string; variant: { option: string; product_id: string } | null; location: { name: string; store_id: string } | null };
   const [{ data: stores }, { data: ordersCfg }, scanned] = await Promise.all([
-    supabase.from("stores").select("id, name").order("name"),
+    supabase.from("stores").select("*").order("name").then(withoutMirrors),
     db.from("app_settings").select("value").eq("key", "orders").maybeSingle(),
     unitNo
       ? supabase.from("units").select("code, status, variant:variants(option, product_id), location:locations(name, store_id)").eq("code", `S${unitNo.padStart(6, "0")}`).maybeSingle().then((r) => r.data as unknown as ScannedUnit | null)

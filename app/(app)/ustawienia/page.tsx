@@ -10,7 +10,7 @@ import { getBuyerSignature, getCompany } from "@/lib/contracts/settings";
 import { getSmtpSettings, mailConfig } from "@/lib/mail";
 import { ContractSettings } from "./ContractSettings";
 import { FiscalSettings } from "./FiscalSettings";
-import { addExclusion, deleteExclusion, setExclusionName, disconnectFurgonetka, purgeExcluded, purgeNonShopify, registerWebhooks, runStockNow, saveSmtp, saveInvoiceSettings, saveLocation, saveSender, saveShopifyLocation, saveStockMaster, saveStore, checkOmnibus, saveOrdersDefaultStore, fixProductStockNow, dismissIssue } from "./actions";
+import { addExclusion, deleteExclusion, setExclusionName, disconnectFurgonetka, purgeExcluded, purgeNonShopify, registerWebhooks, runStockNow, saveSmtp, saveInvoiceSettings, saveLocation, saveSender, saveShopifyLocation, saveStockMaster, saveStore, checkOmnibus, saveOrdersDefaultStore, fixProductStockNow, dismissIssue, saveMirror, runMirrorNow, retryMirror } from "./actions";
 import { compareStock, getStockMaster, planPushToShopify, shopifyLocations, type ShopifyLocation } from "@/lib/sync/shopify-stock";
 import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/furgonetka";
 import { openIssues } from "@/lib/issues";
@@ -95,6 +95,27 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
       live.set(st.id, { topics: [...new Set((r.data ?? []).map((w) => w.topic))], error: r.error });
     }
   }
+  // Sklepy-kopie (SQL 78): lokalizacje Shopify kopii, postęp kopiowania produktów, błędy.
+  const mirrors = isAdmin && tab === "sklepy"
+    ? await (async () => {
+        const db = createAdminClient();
+        const list = ((stores ?? []) as { id: string; name: string; code: string; shopify_domain: string | null; mirror_of?: string | null; mirror_location_id?: string | null }[]).filter((x) => x.mirror_of !== undefined);
+        if (!list.length) return null; // brak SQL 78
+        const { data: ms } = await db.from("app_settings").select("value").eq("key", "mirror").maybeSingle();
+        const replace = ((ms?.value as { replace?: [string, string][] } | null)?.replace ?? []).map(([a, b]) => `${a} → ${b}`).join("\n");
+        const rows = await Promise.all(list.filter((x) => x.mirror_of).map(async (m) => {
+          const [locsR, { count: done }, { count: total }, { count: queued }, { data: failed }] = await Promise.all([
+            m.shopify_domain ? safe(() => shopifyLocations(m.shopify_domain as string, m.code)) : Promise.resolve({ data: null, error: null }),
+            db.from("product_store_links").select("id", { count: "exact", head: true }).eq("store_id", m.id),
+            db.from("product_store_links").select("id", { count: "exact", head: true }).eq("store_id", m.mirror_of!),
+            db.from("mirror_queue").select("product_id", { count: "exact", head: true }).eq("store_id", m.id).lt("attempts", 8),
+            db.from("mirror_queue").select("last_error, attempts, product:products(title)").eq("store_id", m.id).gte("attempts", 1).order("attempts", { ascending: false }).limit(5),
+          ]);
+          return { store: m, shopLocs: locsR, done: done ?? 0, total: total ?? 0, queued: queued ?? 0, failed: (failed ?? []) as unknown as { last_error: string | null; attempts: number; product: { title: string } | null }[] };
+        }));
+        return { rows, replace, candidates: list };
+      })()
+    : null;
   const ordersDefault = isAdmin && tab === "sklepy" ? await defaultOrderStore(supabase, (stores ?? []) as { id: string; name: string }[]) : "";
   const { data: invoiceSettings } = isAdmin && tab === "faktury" ? await supabase.from("app_settings").select("value").eq("key", "invoices").maybeSingle() : { data: null };
 
@@ -210,6 +231,77 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
           </section>
           )}
 
+          {tab === "sklepy" && mirrors && (
+          <section className="card space-y-4 p-4">
+            <div>
+              <h2 className="h2 mb-1">Sklep-kopia</h2>
+              <p className="text-sm text-muted">Te same produkty co w sklepie źródłowym: aplikacja tworzy je i aktualizuje w kopii (tytuł, opis, zdjęcia, rozmiary, ceny, tagi, status), a stany liczy z tych samych sztuk. Zamówienie z kopii zdejmuje sztukę z magazynu i od razu zmniejsza stan w obu sklepach.</p>
+            </div>
+            {mirrors.rows.length === 0 && <p className="text-sm text-muted">Żaden sklep nie jest kopią. Wybierz niżej sklep źródłowy przy sklepie, który ma być kopią.</p>}
+            {mirrors.rows.map(({ store: m, shopLocs, done: linked, total, queued, failed }) => (
+              <div key={m.id} className="space-y-3 rounded-md border border-line p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium">{m.name}</span>
+                  <span className="text-sm text-muted">kopia: {storeName.get(m.mirror_of!) ?? "?"}</span>
+                  {!m.shopify_domain ? <Pill tone="amber">ustaw domenę Shopify wyżej</Pill> : shopLocs.error ? <Pill tone="red">brak połączenia z Shopify</Pill> : !m.mirror_location_id ? <Pill tone="amber">wybierz lokalizację Shopify</Pill> : <Pill tone="green">działa</Pill>}
+                </div>
+                <p className="text-sm">Produkty w kopii: <b className="tabular-nums">{linked}</b> z <b className="tabular-nums">{total}</b>{queued ? <> · w kolejce: <b className="tabular-nums">{queued}</b></> : null}</p>
+                {shopLocs.error && <p className="text-sm text-bad">Shopify {m.name}: {shopLocs.error}</p>}
+                <form action={saveMirror} className="grid items-end gap-2 md:grid-cols-[1fr_1fr_auto]">
+                  <input type="hidden" name="id" value={m.id} />
+                  <div><label className="label" htmlFor={`src-${m.id}`}>Sklep źródłowy</label>
+                    <select className="input" id={`src-${m.id}`} name="mirror_of" defaultValue={m.mirror_of ?? ""}>
+                      <option value="">— nie jest kopią —</option>
+                      {mirrors.candidates.filter((x) => x.id !== m.id && !x.mirror_of).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+                    </select></div>
+                  <div><label className="label" htmlFor={`loc-${m.id}`}>Lokalizacja Shopify kopii (tu trafia stan)</label>
+                    <select className="input" id={`loc-${m.id}`} name="mirror_location_id" defaultValue={m.mirror_location_id ?? ""}>
+                      <option value="">— wybierz —</option>
+                      {(shopLocs.data ?? []).filter((l) => l.isActive).map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+                      {m.mirror_location_id && !(shopLocs.data ?? []).some((l) => l.id === m.mirror_location_id) && <option value={m.mirror_location_id}>zapisana: {m.mirror_location_id.split("/").pop()}</option>}
+                    </select></div>
+                  <SubmitButton className="btn-secondary">Zapisz</SubmitButton>
+                </form>
+                <div className="flex flex-wrap gap-2">
+                  <form action={runMirrorNow}><SubmitButton pendingText="Kopiuję… (do 3 min)" disabled={!m.shopify_domain || !m.mirror_location_id}>Kopiuj produkty teraz</SubmitButton></form>
+                  {failed.length > 0 && <form action={retryMirror}><input type="hidden" name="id" value={m.id} /><SubmitButton className="btn-secondary">Ponów produkty z błędem</SubmitButton></form>}
+                </div>
+                {failed.length > 0 && (
+                  <ul className="space-y-1 text-xs text-bad">
+                    {failed.map((f, i) => <li key={i}><b>{f.product?.title ?? "produkt"}</b> ({f.attempts}×): {f.last_error}</li>)}
+                  </ul>
+                )}
+                <p className="text-xs text-muted">Automat kopiuje nowe i zmienione produkty co ~15 minut (zmiany z webhooków źródła – od razu). Pierwsze uzupełnienie całego katalogu idzie partiami.</p>
+                <p className="text-xs text-muted">Aplikacja w Shopify kopii (Dev Dashboard) potrzebuje uprawnień: <code className="rounded bg-panel px-1">read_products,write_products,read_publications,write_publications,read_inventory,write_inventory,read_locations,read_orders,write_orders,write_merchant_managed_fulfillment_orders</code>. Client ID i Secret wpisz w Vercel jako <code className="rounded bg-panel px-1">SHOPIFY_{m.code.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_CLIENT_ID</code> i <code className="rounded bg-panel px-1">…_CLIENT_SECRET</code>.</p>
+              </div>
+            ))}
+            {mirrors.rows.length === 0 && (
+              <div className="grid gap-2 md:grid-cols-2">
+                {mirrors.candidates.filter((x) => !x.mirror_of).map((m) => (
+                  <form key={m.id} action={saveMirror} className="flex flex-wrap items-end gap-2 rounded-md border border-line p-3">
+                    <input type="hidden" name="id" value={m.id} />
+                    <div className="min-w-48 flex-1"><label className="label">{m.name} – kopia sklepu</label>
+                      <select className="input" name="mirror_of" defaultValue="">
+                        <option value="">— nie jest kopią —</option>
+                        {mirrors.candidates.filter((x) => x.id !== m.id && !x.mirror_of).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+                      </select></div>
+                    <SubmitButton className="btn-secondary">Zapisz</SubmitButton>
+                  </form>
+                ))}
+              </div>
+            )}
+            {mirrors.rows.length > 0 && (
+              <form action={saveMirror} className="space-y-2">
+                <input type="hidden" name="id" value={mirrors.rows[0].store.id} />
+                <input type="hidden" name="mirror_of" value={mirrors.rows[0].store.mirror_of ?? ""} />
+                <label className="label" htmlFor="mirror-replace">Zamiana tekstu w opisach kopii (jedna zasada na linię: „z → na”, np. „Depot Check → Owca Check”)</label>
+                <textarea className="input min-h-20 py-2 font-mono text-sm" id="mirror-replace" name="replace" defaultValue={mirrors.replace} placeholder={"Sneakers Depot → Owca Store"} />
+                <SubmitButton className="btn-secondary">Zapisz zamiany</SubmitButton>
+              </form>
+            )}
+          </section>
+          )}
+
           {tab === "sklepy" && (
           <section className="card flex flex-wrap items-center gap-3 p-4">
             <div className="min-w-64 flex-1">
@@ -259,7 +351,7 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
                 <form key={l.id} action={saveLocation} className="grid items-end gap-2 md:grid-cols-[1fr_1fr_auto_auto]">
                   <input type="hidden" name="id" value={l.id} />
                   <select className="input" name="store_id" defaultValue={l.store_id} aria-label="Sklep">
-                    {stores?.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    {stores?.filter((s) => !s.mirror_of || s.id === l.store_id).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                   </select>
                   <input className="input" name="name" defaultValue={l.name} aria-label="Nazwa" />
                   <label className="flex items-center gap-1.5 text-sm"><input type="checkbox" name="active" defaultChecked={l.active} /> aktywna</label>
@@ -269,7 +361,7 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
               ))}
               <form action={saveLocation} className="grid items-end gap-2 border-t border-line pt-3 md:grid-cols-[1fr_1fr_auto]">
                 <select className="input" name="store_id" aria-label="Sklep">
-                  {stores?.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  {stores?.filter((s) => !s.mirror_of).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                 </select>
                 <input className="input" name="name" placeholder="Nowa lokalizacja, np. Poznań – Długa 13" aria-label="Nazwa" />
                 <SubmitButton>Dodaj</SubmitButton>

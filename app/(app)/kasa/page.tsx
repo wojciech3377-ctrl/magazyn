@@ -4,12 +4,13 @@ import { PageHeader } from "@/components/ui";
 import { PosForm } from "./PosForm";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { fiscalPrinterReady, getFiscalSettings, PTU_LETTERS, ptuLabel } from "@/lib/fiscal/jobs";
+import { withoutMirrors } from "@/lib/stores";
 
 export default async function KasaPage() {
   const { supabase } = await requireProfile();
   const db = createAdminClient();
   const [{ data: stores }, printer, fiscal] = await Promise.all([
-    supabase.from("stores").select("id, name").order("name"),
+    supabase.from("stores").select("*").order("name").then(withoutMirrors),
     fiscalPrinterReady(db),
     getFiscalSettings(db),
   ]);
