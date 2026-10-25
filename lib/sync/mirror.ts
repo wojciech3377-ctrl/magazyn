@@ -223,8 +223,8 @@ export async function mirrorProduct(db: SupabaseClient, pair: MirrorPair, produc
     tags: src.tags,
     status: src.status,
     seo: { title: applyReplace(src.seo.title, rules), description: applyReplace(src.seo.description, rules) },
-    productOptions: [...src.options].sort((a, b) => a.position - b.position).map((o) => ({ name: o.name, position: o.position, values: o.values.map((name) => ({ name })) })),
-    variants: sorted.map((v) => {
+    productOptions: [...src.options].sort((a, b) => a.position - b.position).map((o, i) => ({ name: o.name, position: i + 1, values: o.values.map((name) => ({ name })) })),
+    variants: sorted.map((v, i) => {
       const ourVariant = variantOfSrc.get(v.id);
       let id = ourVariant ? mirrorByOur.get(ourVariant) : undefined;
       if (!id || used.has(id)) id = mirrorByKey.get(optKey(v.selectedOptions));
@@ -234,7 +234,8 @@ export async function mirrorProduct(db: SupabaseClient, pair: MirrorPair, produc
       return {
         ...(id ? { id } : {}),
         optionValues: v.selectedOptions.map((o) => ({ optionName: o.name, name: o.value })),
-        position: v.position,
+        // Kolejność jak w źródle, numerowana od 1 bez dziur (Shopify odrzuca pozycje spoza 1…liczba rozmiarów).
+        position: i + 1,
         sku: v.sku ?? undefined,
         price: v.price,
         compareAtPrice: v.compareAtPrice,
