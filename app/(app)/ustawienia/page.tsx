@@ -125,8 +125,15 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
           ]);
           // Podgląd: produkty w Shopify kopii bez powiązania z magazynem (do usunięcia, gdy usuwanie jest włączone).
           const pair = pairs.find((x) => x.mirror.id === m.id);
+          // Produkty źródła spoza magazynu (np. Rope, SQL 79).
+          const [exAll, exDone, exFailed] = await Promise.all([
+            db.from("mirror_extra").select("source_product_id", { count: "exact", head: true }).eq("store_id", m.id),
+            db.from("mirror_extra").select("source_product_id", { count: "exact", head: true }).eq("store_id", m.id).not("mirror_product_id", "is", null),
+            db.from("mirror_extra").select("title, attempts, last_error").eq("store_id", m.id).gte("attempts", 1).order("attempts", { ascending: false }).limit(5),
+          ]);
+          const extra = exAll.error ? null : { total: exAll.count ?? 0, done: exDone.count ?? 0, failed: (exFailed.data ?? []) as { title: string | null; attempts: number; last_error: string | null }[] };
           const orphans = pair && m.mirror_location_id && !locsR.error ? await safe(() => mirrorLib.mirrorOrphans(db, pair, undefined, Date.now() + 15_000)) : null;
-          return { store: m, shopLocs: locsR, orphans, done: done ?? 0, total: total ?? 0, queued: queued ?? 0, failed: (failed ?? []) as unknown as { last_error: string | null; attempts: number; product: { title: string } | null }[] };
+          return { store: m, shopLocs: locsR, orphans, extra, done: done ?? 0, total: total ?? 0, queued: queued ?? 0, failed: (failed ?? []) as unknown as { last_error: string | null; attempts: number; product: { title: string } | null }[] };
         }));
         return { rows, replace, excluded, deleteOrphans, candidates: list, master: await getStockMaster(db) };
       })()
@@ -254,7 +261,7 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
             </div>
             {mirrors.rows.length > 0 && mirrors.master !== "app" && <Notice tone="error">Główny stan to teraz Shopify. Przy sklepie-kopii ustaw w zakładce Stany magazynowe „Magazyn aplikacji” – inaczej zmiany stanu zrobione ręcznie w Shopify sklepu źródłowego dojdą do kopii z opóźnieniem (ryzyko sprzedaży tej samej sztuki dwa razy).</Notice>}
             {mirrors.rows.length === 0 && <p className="text-sm text-muted">Żaden sklep nie jest kopią. Wybierz niżej sklep źródłowy przy sklepie, który ma być kopią.</p>}
-            {mirrors.rows.map(({ store: m, shopLocs, orphans, done: linked, total, queued, failed }) => (
+            {mirrors.rows.map(({ store: m, shopLocs, orphans, extra, done: linked, total, queued, failed }) => (
               <div key={m.id} className="space-y-3 rounded-md border border-line p-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-medium">{m.name}</span>
@@ -262,6 +269,14 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
                   {!m.shopify_domain ? <Pill tone="amber">ustaw domenę Shopify wyżej</Pill> : shopLocs.error ? <Pill tone="red">brak połączenia z Shopify</Pill> : !m.mirror_location_id ? <Pill tone="amber">wybierz lokalizację Shopify</Pill> : <Pill tone="green">działa</Pill>}
                 </div>
                 <p className="text-sm">Produkty w kopii: <b className="tabular-nums">{linked}</b> z <b className="tabular-nums">{Math.max(0, total - mirrors.excluded.length)}</b>{queued ? <> · w kolejce: <b className="tabular-nums">{queued}</b></> : null}{mirrors.excluded.length ? <> · wykluczone: <b className="tabular-nums">{mirrors.excluded.length}</b></> : null}</p>
+                {extra
+                  ? <p className="text-sm">Produkty spoza magazynu (np. Rope z Wykluczeń, 1:1 jak w {storeName.get(m.mirror_of!) ?? "źródle"}): <b className="tabular-nums">{extra.done}</b> z <b className="tabular-nums">{extra.total}</b>{extra.total === 0 ? <span className="text-muted"> – lista uzupełni się przy najbliższym przebiegu</span> : null}</p>
+                  : <p className="text-sm text-warn">Produkty spoza magazynu (np. Rope) nie są kopiowane – uruchom w Supabase SQL 79 (<code>0079_mirror_extra.sql</code>).</p>}
+                {extra && extra.failed.length > 0 && (
+                  <ul className="space-y-1 text-xs text-bad">
+                    {extra.failed.map((f, i) => <li key={i}><b>{f.title ?? "produkt"}</b> ({f.attempts}×): {f.last_error}</li>)}
+                  </ul>
+                )}
                 {shopLocs.error && <p className="text-sm text-bad">Shopify {m.name}: {shopLocs.error}</p>}
                 <form action={saveMirror} className="grid items-end gap-2 md:grid-cols-[1fr_1fr_auto]">
                   <input type="hidden" name="id" value={m.id} />
@@ -280,7 +295,7 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
                 </form>
                 <div className="flex flex-wrap gap-2">
                   <form action={runMirrorNow}><SubmitButton pendingText="Kopiuję… (do 3 min)" disabled={!m.shopify_domain || !m.mirror_location_id}>Kopiuj produkty teraz</SubmitButton></form>
-                  {failed.length > 0 && <form action={retryMirror}><input type="hidden" name="id" value={m.id} /><SubmitButton className="btn-secondary">Ponów produkty z błędem</SubmitButton></form>}
+                  {(failed.length > 0 || (extra?.failed.length ?? 0) > 0) && <form action={retryMirror}><input type="hidden" name="id" value={m.id} /><SubmitButton className="btn-secondary">Ponów produkty z błędem</SubmitButton></form>}
                 </div>
                 {failed.length > 0 && (
                   <ul className="space-y-1 text-xs text-bad">

@@ -94,8 +94,10 @@ export async function runAutoCatalog(db: SupabaseClient, force = false) {
     if (!force && lastMirror && Date.now() - Date.parse(lastMirror) < 29 * 60_000) return {};
     await db.from("sync_state").upsert({ key: "mirror_run", value: { at: new Date().toISOString() }, updated_at: new Date().toISOString() });
     const r = await m.runMirror(db, { deadline: Math.min(Date.now() + (force ? 90_000 : 150_000), started + 180_000), parallel: 2 });
-    const cleanup = await m.cleanupMirrors(db, { deadline: Math.min(Date.now() + 30_000, started + 210_000) }).catch((e) => `błąd: ${errorMessage(e)}`);
-    return { ...r, ...(typeof cleanup === "string" || Object.keys(cleanup).length ? { usuwanie: cleanup } : {}) };
+    // Produkty źródła spoza magazynu (np. Rope) – 1:1 w kopii.
+    const extras = await m.runMirrorExtras(db, { deadline: Math.min(Date.now() + 45_000, started + 200_000) }).catch((e) => `błąd: ${errorMessage(e)}`);
+    const cleanup = await m.cleanupMirrors(db, { deadline: Math.min(Date.now() + 30_000, started + 230_000) }).catch((e) => `błąd: ${errorMessage(e)}`);
+    return { ...r, ...(typeof extras === "string" || Object.keys(extras).length ? { spoza_magazynu: extras } : {}), ...(typeof cleanup === "string" || Object.keys(cleanup).length ? { usuwanie: cleanup } : {}) };
   })().catch((e) => `błąd: ${errorMessage(e)}`);
   const stock: Awaited<ReturnType<typeof syncStock>> | { error: string; master?: undefined; result?: undefined } = await syncStock(db).catch((e) => ({ error: errorMessage(e) }));
   // Kolekcje (kategorie do filtra w Magazynie): z automatu co ~3 godziny, z przycisku – gdy starsze niż 30 min.

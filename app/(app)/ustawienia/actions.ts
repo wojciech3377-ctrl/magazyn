@@ -510,6 +510,8 @@ async function requeueMirrored(db: ReturnType<typeof createAdminClient>) {
     if (!e) n += rows.length;
     if (data.length < 1000) break;
   }
+  // Produkty spoza magazynu (SQL 79) – też od nowa przy kolejnym przebiegu.
+  await db.from("mirror_extra").update({ source_updated_at: null }).not("store_id", "is", null);
   return n;
 }
 
@@ -517,7 +519,12 @@ async function requeueMirrored(db: ReturnType<typeof createAdminClient>) {
 export async function runMirrorNow() {
   await requireAdmin();
   const { runMirror } = await import("@/lib/sync/mirror");
-  const r = await runMirror(createAdminClient(), { deadline: Date.now() + 180_000, backfill: 2000 }).catch((e) => ({ błąd: errorMessage(e) }));
+  const admin = createAdminClient();
+  const r = await runMirror(admin, { deadline: Date.now() + 150_000, backfill: 2000 }).catch((e) => ({ błąd: errorMessage(e) }));
+  // Produkty spoza magazynu (np. Rope) – w czasie, który został.
+  const { runMirrorExtras } = await import("@/lib/sync/mirror");
+  const ex = await runMirrorExtras(admin, { deadline: Date.now() + 60_000 }).catch((e) => ({ błąd: errorMessage(e) }));
+  for (const [k, v] of Object.entries(ex)) (r as Record<string, unknown>)[`${k} (spoza magazynu, np. Rope)`] = v;
   const text = Object.entries(r).map(([k, v]) => `${k}: ${typeof v === "string" ? v : Object.entries(v as Record<string, unknown>).filter(([kk]) => kk !== "errors").map(([kk, vv]) => `${kk.replace(/_/g, " ")} ${vv}`).join(", ")}`).join(" · ");
   const errs = Object.values(r).flatMap((v) => (v && typeof v === "object" && "errors" in v ? (v as { errors: string[] }).errors : []));
   await done(`${text || "Brak sklepów-kopii z domeną Shopify."}${errs.length ? ` Błędy: ${errs.join("; ")}` : ""}`, errs.length ? "blad" : "ok");
@@ -527,5 +534,7 @@ export async function runMirrorNow() {
 export async function retryMirror(formData: FormData) {
   await requireAdmin();
   const { error } = await createAdminClient().from("mirror_queue").update({ attempts: 0 }).eq("store_id", String(formData.get("id") ?? "")).gte("attempts", 1);
+  // Produkty spoza magazynu (SQL 79) – też od nowa (bez SQL 79 – pomijane).
+  await createAdminClient().from("mirror_extra").update({ attempts: 0, source_updated_at: null }).eq("store_id", String(formData.get("id") ?? "")).gte("attempts", 1);
   await done(error ? error.message : "Produkty z błędem wrócą do kopiowania przy najbliższym przebiegu (albo kliknij „Kopiuj teraz”).", error ? "blad" : "ok");
 }
