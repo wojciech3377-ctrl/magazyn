@@ -8,6 +8,7 @@ import { INTAKE_STATUS, ITEM_STATUS, type Intake, type IntakeItem } from "@/lib/
 import { dateOnly, dateTime, money } from "@/lib/labels";
 import { Notice, Pill } from "@/components/ui";
 import { ShipRequestForm } from "./ShipRequestForm";
+import { InstallGuide } from "./InstallGuide";
 import { cancelShipmentByConsignor } from "./actions";
 import { consignorTimeline, describeEvent } from "@/lib/history";
 
@@ -95,6 +96,8 @@ export default async function KomisPage({ searchParams }: { searchParams: Promis
           </div>
         ))}
       </div>
+
+      <InstallGuide />
 
       <nav className="mb-5 flex gap-1 border-b border-line text-sm" aria-label="Zakładki">
         <Link href="/komis" className={`-mb-px border-b-2 px-3 py-2 ${tab === "aktywne" ? "border-accent font-medium text-ink" : "border-transparent text-muted hover:text-ink"}`}>Aktywne <span className="ml-1 rounded bg-panel px-1.5 py-0.5 text-xs tabular-nums">{onStock.length}</span></Link>

@@ -4,6 +4,13 @@ import { TableLabels } from "@/components/TableLabels";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { Icon } from "@/components/icons";
+import type { Metadata } from "next";
+
+/** Panel dodany do ekranu telefonu otwiera się od razu na panelu komisanta (osobna ikona „Mój komis”). */
+export const metadata: Metadata = {
+  manifest: "/komis.webmanifest",
+  appleWebApp: { capable: true, title: "Mój komis", statusBarStyle: "default" },
+};
 
 /** Panel komisanta – osobny układ (bez menu pracowników). */
 /** Nazwa zalogowanego komisanta do nagłówka („Panel Jan Kowalski”). */

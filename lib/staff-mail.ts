@@ -50,7 +50,7 @@ export async function mailConsignorAccount(db: SupabaseClient, kind: "new" | "re
     const login = `${base}/login`;
     const who = name ? `<p style="margin:0 0 12px">${esc(name)},</p>` : "";
     const creds = `<p style="margin:0 0 12px">Login: <b>${esc(to)}</b>${password ? `<br>Hasło tymczasowe: <b style="font-family:monospace">${esc(password)}</b>` : ""}</p>`;
-    const what = `<p style="margin:0 0 12px">W panelu zobaczysz swoje rzeczy oddane w komis, sprzedaże, umowy do podpisu i rozliczenia.</p>`;
+    const what = `<p style="margin:0 0 12px">W panelu zobaczysz swoje rzeczy oddane w komis, sprzedaże, umowy do podpisu i rozliczenia. Na telefonie możesz dodać panel do ekranu głównego jak aplikację – instrukcja jest w panelu po zalogowaniu.</p>`;
     const body = kind === "new"
       ? `${who}<p style="margin:0 0 12px">założyliśmy Ci konto w panelu komisanta ${esc(company.name)}.</p>${what}${creds}
          <p style="margin:0 0 14px">Przy pierwszym logowaniu panel poprosi o ustawienie własnego hasła – hasło tymczasowe przestanie wtedy działać.</p>`
