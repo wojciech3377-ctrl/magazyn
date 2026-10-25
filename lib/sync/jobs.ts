@@ -29,7 +29,6 @@ async function run(db: SupabaseClient, job: string, fn: () => Promise<unknown>, 
  * przesyłki z Furgonetki, statusy KSeF, e-maile do komisantów.
  */
 export async function runFastJobs(db: SupabaseClient) {
-  const started = Date.now();
   // Nieudane zadania → „Błędy automatu” w Ustawieniach (po 3 nieudanych przebiegach z rzędu).
   const failed: Issue[] = [];
   const shop = await run(db, "shopify-orders", () => syncShopifyOrders(db));
@@ -89,26 +88,8 @@ export async function runFastJobs(db: SupabaseClient) {
       return r;
     })(),
   ]);
-  // Sklep-kopia (np. Owca Store): produkty z kolejki co minutę, w czasie, który został z tego przebiegu
-  // (pierwsze skopiowanie całego katalogu idzie samo, bez klikania; brakujące dopisuje przebieg co 15 min).
-  const mirror = await (async () => {
-    const left = Math.min(started + 48_000, Date.now() + 35_000) - Date.now();
-    if (left < 8_000) return null;
-    try {
-      const { mirrorPairs, runMirror } = await import("@/lib/sync/mirror");
-      if (!(await mirrorPairs(db)).length) return null;
-      const { count } = await db.from("mirror_queue").select("product_id", { count: "exact", head: true }).lt("attempts", 8);
-      if (!count) return null;
-      const r = await runMirror(db, { deadline: Date.now() + left, backfill: 0 });
-      await db.from("sync_log").insert({ job: "mirror", ok: true, message: JSON.stringify(r) });
-      return r;
-    } catch (e) {
-      await db.from("sync_log").insert({ job: "mirror", ok: false, message: errorMessage(e) });
-      return { error: errorMessage(e) };
-    }
-  })();
   await syncIssues(db, "fast", failed);
-  return { shop, live, ship, ...(mirror ? { mirror } : {}), ok: shop.ok && ship.ok };
+  return { shop, live, ship, ok: shop.ok && ship.ok };
 }
 
 /** Wolne zadania (co 10–15 min): nowe / zmienione produkty ze Shopify i pełne porównanie stanów. */

@@ -11,7 +11,7 @@ import { getBuyerSignature, getCompany } from "@/lib/contracts/settings";
 import { getSmtpSettings, mailConfig } from "@/lib/mail";
 import { ContractSettings } from "./ContractSettings";
 import { FiscalSettings } from "./FiscalSettings";
-import { addExclusion, deleteExclusion, setExclusionName, disconnectFurgonetka, purgeExcluded, purgeNonShopify, registerWebhooks, runStockNow, saveSmtp, saveInvoiceSettings, saveLocation, saveSender, saveShopifyLocation, saveStockMaster, saveStore, checkOmnibus, saveOrdersDefaultStore, fixProductStockNow, dismissIssue, saveMirror, runMirrorNow, retryMirror, saveMirrorExclude } from "./actions";
+import { addExclusion, deleteExclusion, setExclusionName, disconnectFurgonetka, purgeExcluded, purgeNonShopify, registerWebhooks, runStockNow, saveSmtp, saveInvoiceSettings, saveLocation, saveSender, saveShopifyLocation, saveStockMaster, saveStore, checkOmnibus, saveOrdersDefaultStore, fixProductStockNow, dismissIssue, saveMirror, runMirrorNow, retryMirror, saveMirrorExclude, saveMirrorDelete } from "./actions";
 import { compareStock, getStockMaster, planPushToShopify, shopifyLocations, type ShopifyLocation } from "@/lib/sync/shopify-stock";
 import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/furgonetka";
 import { openIssues } from "@/lib/issues";
@@ -112,6 +112,9 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
           for (const p of data ?? []) excluded.push({ id: p.id as string, title: p.title as string, code: p.tag_no ? productTagCode(p.tag_no as number) : "" });
         }
         excluded.sort((a, b) => a.code.localeCompare(b.code));
+        const deleteOrphans = (ms?.value as { deleteOrphans?: boolean } | null)?.deleteOrphans === true;
+        const mirrorLib = await import("@/lib/sync/mirror");
+        const pairs = await mirrorLib.mirrorPairs(db, true);
         const rows = await Promise.all(list.filter((x) => x.mirror_of).map(async (m) => {
           const [locsR, { count: done }, { count: total }, { count: queued }, { data: failed }] = await Promise.all([
             m.shopify_domain ? safe(() => shopifyLocations(m.shopify_domain as string, m.code)) : Promise.resolve({ data: null, error: null }),
@@ -120,9 +123,12 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
             db.from("mirror_queue").select("product_id", { count: "exact", head: true }).eq("store_id", m.id).lt("attempts", 8),
             db.from("mirror_queue").select("last_error, attempts, product:products(title)").eq("store_id", m.id).gte("attempts", 1).order("attempts", { ascending: false }).limit(5),
           ]);
-          return { store: m, shopLocs: locsR, done: done ?? 0, total: total ?? 0, queued: queued ?? 0, failed: (failed ?? []) as unknown as { last_error: string | null; attempts: number; product: { title: string } | null }[] };
+          // Podgląd: produkty w Shopify kopii bez powiązania z magazynem (do usunięcia, gdy usuwanie jest włączone).
+          const pair = pairs.find((x) => x.mirror.id === m.id);
+          const orphans = pair && m.mirror_location_id && !locsR.error ? await safe(() => mirrorLib.mirrorOrphans(db, pair, undefined, Date.now() + 15_000)) : null;
+          return { store: m, shopLocs: locsR, orphans, done: done ?? 0, total: total ?? 0, queued: queued ?? 0, failed: (failed ?? []) as unknown as { last_error: string | null; attempts: number; product: { title: string } | null }[] };
         }));
-        return { rows, replace, excluded, candidates: list, master: await getStockMaster(db) };
+        return { rows, replace, excluded, deleteOrphans, candidates: list, master: await getStockMaster(db) };
       })()
     : null;
   const ordersDefault = isAdmin && tab === "sklepy" ? await defaultOrderStore(supabase, (stores ?? []) as { id: string; name: string }[]) : "";
@@ -248,7 +254,7 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
             </div>
             {mirrors.rows.length > 0 && mirrors.master !== "app" && <Notice tone="error">Główny stan to teraz Shopify. Przy sklepie-kopii ustaw w zakładce Stany magazynowe „Magazyn aplikacji” – inaczej zmiany stanu zrobione ręcznie w Shopify sklepu źródłowego dojdą do kopii z opóźnieniem (ryzyko sprzedaży tej samej sztuki dwa razy).</Notice>}
             {mirrors.rows.length === 0 && <p className="text-sm text-muted">Żaden sklep nie jest kopią. Wybierz niżej sklep źródłowy przy sklepie, który ma być kopią.</p>}
-            {mirrors.rows.map(({ store: m, shopLocs, done: linked, total, queued, failed }) => (
+            {mirrors.rows.map(({ store: m, shopLocs, orphans, done: linked, total, queued, failed }) => (
               <div key={m.id} className="space-y-3 rounded-md border border-line p-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-medium">{m.name}</span>
@@ -281,7 +287,19 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
                     {failed.map((f, i) => <li key={i}><b>{f.product?.title ?? "produkt"}</b> ({f.attempts}×): {f.last_error}</li>)}
                   </ul>
                 )}
-                <p className="text-xs text-muted">Kopiowanie idzie samo: automat co minutę przerabia kolejkę, a co ~15 minut dopisuje do niej nowe produkty (zmiany z webhooków źródła – od razu). „Kopiuj produkty teraz” tylko przyspiesza.</p>
+                <p className="text-xs text-muted">Kopiowanie idzie samo co 30 minut (nowe i zmienione produkty partiami; pojedyncze zmiany z webhooków źródła – od razu). „Kopiuj produkty teraz” tylko przyspiesza.</p>
+                <form action={saveMirrorDelete} className="space-y-2 rounded-md border border-line p-3 text-sm">
+                  <label className="flex items-start gap-2">
+                    <input type="checkbox" name="delete_orphans" defaultChecked={mirrors.deleteOrphans} className="mt-1 h-4 w-4" />
+                    <span><b>Usuwaj z {m.name} produkty, których nie ma w magazynie</b> <span className="block text-xs text-muted">Produkty w Shopify {m.name} bez powiązania z magazynem (dodane ręcznie, wykluczone wyżej, usunięte w {storeName.get(m.mirror_of!) ?? "źródle"}) – usuwane co 30 minut, najwyżej 50 naraz. Usunięcia nie da się cofnąć. Pomijane: produkty utworzone w ostatnich 2 godzinach i te, które aplikacja zaraz przejmie (ten sam adres co produkt w {storeName.get(m.mirror_of!) ?? "źródle"}).</span></span>
+                  </label>
+                  {orphans?.error && <p className="text-xs text-bad">Nie udało się sprawdzić produktów kopii: {orphans.error}</p>}
+                  {orphans?.data && (orphans.data.orphans.length
+                    ? <div className="text-xs"><p className="font-medium text-warn">{mirrors.deleteOrphans ? "Do usunięcia" : "Zostałyby usunięte"}: {orphans.data.orphans.length} z {orphans.data.total} produktów w Shopify {m.name}</p>
+                        <ul className="mt-1 max-h-40 space-y-0.5 overflow-y-auto text-muted">{orphans.data.orphans.slice(0, 100).map((o) => <li key={o.id}>{o.title} <span className="font-mono">/{o.handle}</span></li>)}</ul></div>
+                    : <p className="text-xs text-ok">Brak produktów bez powiązania z magazynem ({orphans.data.total} w Shopify {m.name}).</p>)}
+                  <SubmitButton className="btn-secondary">Zapisz</SubmitButton>
+                </form>
                 <p className="text-xs text-muted">Aplikacja w Shopify kopii (Dev Dashboard) potrzebuje uprawnień: <code className="rounded bg-panel px-1">read_products,write_products,read_publications,write_publications,read_inventory,write_inventory,read_locations,read_orders,write_orders,write_merchant_managed_fulfillment_orders</code>. Client ID i Secret wpisz w Vercel jako <code className="rounded bg-panel px-1">SHOPIFY_{m.code.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_CLIENT_ID</code> i <code className="rounded bg-panel px-1">…_CLIENT_SECRET</code>.</p>
               </div>
             ))}
@@ -318,7 +336,7 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
                     {mirrors.excluded.map((e) => <li key={e.id}><span className="font-mono">{e.code}</span> – {e.title}</li>)}
                   </ul>
                 )}
-                <p className="text-xs text-muted">Wykluczony produkt, który jest już w kopii, trafia tam do archiwum (znika ze sklepu). Usunięcie kodu z listy – produkt wraca do kopii w ciągu kilku minut. Pozostałe produkty kopiują się normalnie.</p>
+                <p className="text-xs text-muted">Wykluczony produkt, który jest już w kopii, trafia tam do archiwum (znika ze sklepu), a przy włączonym usuwaniu – jest usuwany. Usunięcie kodu z listy – produkt wraca do kopii przy kolejnym przebiegu. Pozostałe produkty kopiują się normalnie.</p>
                 <SubmitButton className="btn-secondary">Zapisz wykluczenia</SubmitButton>
               </form>
             )}

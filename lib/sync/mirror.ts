@@ -110,13 +110,14 @@ const optKey = (opts: { name: string; value: string }[]) => opts.map((o) => `${o
 const sha = (v: unknown) => createHash("sha256").update(JSON.stringify(v)).digest("hex");
 
 /** Zamiany tekstu w opisach i wykluczone produkty (ID produktów aplikacji – nie trafiają do kopii, istniejące idą do archiwum). */
-export type MirrorSettings = { replace: [string, string][]; exclude: string[] };
+export type MirrorSettings = { replace: [string, string][]; exclude: string[]; deleteOrphans: boolean };
 export async function mirrorSettings(db: SupabaseClient): Promise<MirrorSettings> {
   const { data } = await db.from("app_settings").select("value").eq("key", "mirror").maybeSingle();
   const v = (data?.value ?? {}) as Partial<MirrorSettings>;
   return {
     replace: Array.isArray(v.replace) ? v.replace.filter((r) => Array.isArray(r) && r[0]).slice(0, 30) as [string, string][] : [],
     exclude: Array.isArray(v.exclude) ? v.exclude.filter((x): x is string => typeof x === "string") : [],
+    deleteOrphans: v.deleteOrphans === true,
   };
 }
 const applyReplace = (text: string | null, rules: [string, string][]) => {
@@ -398,6 +399,87 @@ export async function runMirror(db: SupabaseClient, opts: { deadline: number; ba
     } catch (e) {
       out[pair.mirror.name] = `błąd: ${errorMessage(e)}`;
     }
+  }
+  return out;
+}
+
+/** Wszystkie wartości kolumny (stronami po 1000 – PostgREST oddaje najwyżej 1000 wierszy). */
+async function allRows<T>(q: (from: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>) {
+  const out: T[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await q(from);
+    if (error) throw new Error(error.message);
+    out.push(...(data ?? []));
+    if ((data ?? []).length < 1000) break;
+  }
+  return out;
+}
+
+export type Orphan = { id: string; title: string; handle: string; createdAt: string };
+
+/**
+ * Produkty w Shopify kopii bez powiązania z magazynem (dodane ręcznie, wykluczone, usunięte w źródle).
+ * Pomijane: produkty, które aplikacja zaraz przejmie (ten sam adres co produkt źródła w kolejce) i świeże (< 2 h –
+ * mogą być właśnie tworzone).
+ */
+export async function mirrorOrphans(db: SupabaseClient, pair: MirrorPair, settings?: MirrorSettings, deadline = Date.now() + 30_000) {
+  settings ??= await mirrorSettings(db);
+  const exclude = new Set(settings.exclude);
+  const [linked, src] = await Promise.all([
+    allRows<{ shopify_product_id: string }>((f) => db.from("product_store_links").select("shopify_product_id").eq("store_id", pair.mirror.id).order("id").range(f, f + 999)),
+    allRows<{ product_id: string; handle: string | null }>((f) => db.from("product_store_links").select("product_id, handle").eq("store_id", pair.source.id).order("id").range(f, f + 999)),
+  ]);
+  const linkedIds = new Set(linked.map((l) => l.shopify_product_id));
+  const waiting = new Set(src.filter((r) => r.handle && !exclude.has(r.product_id)).map((r) => r.handle as string));
+  const orphans: Orphan[] = [];
+  let total = 0;
+  let after: string | null = null;
+  for (;;) {
+    if (Date.now() > deadline) throw new Error("lista produktów kopii nie zmieściła się w czasie – spróbuję przy kolejnym przebiegu");
+    const d: { products: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: Orphan[] } } = await shopifyGraphql(pair.mirror.shopify_domain, pair.mirror.code,
+      `query All($after: String) { products(first: 250, after: $after) { pageInfo { hasNextPage endCursor } nodes { id title handle createdAt } } }`, { after });
+    total += d.products.nodes.length;
+    for (const n of d.products.nodes) {
+      if (linkedIds.has(n.id) || waiting.has(n.handle)) continue;
+      if (Date.now() - Date.parse(n.createdAt) < 2 * 3600_000) continue;
+      orphans.push(n);
+    }
+    if (!d.products.pageInfo.hasNextPage) break;
+    after = d.products.pageInfo.endCursor;
+  }
+  return { orphans, total };
+}
+
+/**
+ * Usuwanie z kopii produktów bez powiązania z magazynem (gdy włączone w Ustawieniach) – najwyżej `limit` na przebieg,
+ * żeby pomyłka (np. chwilowo pusta lista powiązań) nie wyczyściła sklepu naraz.
+ */
+export async function cleanupMirrors(db: SupabaseClient, opts: { deadline: number; limit?: number }) {
+  const settings = await mirrorSettings(db);
+  const out: Record<string, unknown> = {};
+  if (!settings.deleteOrphans) return out;
+  for (const pair of await mirrorPairs(db, true)) {
+    if (!pair.mirror.mirror_location_id) continue;
+    // Bez żadnego powiązania kopia jest dopiero zakładana – nic nie usuwamy.
+    const { count } = await db.from("product_store_links").select("id", { count: "exact", head: true }).eq("store_id", pair.mirror.id);
+    if (!count) { out[pair.mirror.name] = "pominięte – kopia nie ma jeszcze produktów z magazynu"; continue; }
+    const { orphans } = await mirrorOrphans(db, pair, settings, opts.deadline);
+    let deleted = 0;
+    const errors: string[] = [];
+    for (const o of orphans.slice(0, opts.limit ?? 50)) {
+      if (Date.now() > opts.deadline) break;
+      try {
+        const d = await shopifyGraphql<{ productDelete: { deletedProductId: string | null; userErrors: { message: string }[] } }>(pair.mirror.shopify_domain, pair.mirror.code,
+          `mutation Del($id: ID!) { productDelete(input: { id: $id }) { deletedProductId userErrors { message } } }`, { id: o.id });
+        const err = d.productDelete.userErrors.map((e) => e.message).join("; ");
+        if (err) throw new Error(err);
+        deleted++;
+        await db.from("sync_log").insert({ job: "mirror-delete", ok: true, message: JSON.stringify({ store: pair.mirror.name, id: o.id, title: o.title, handle: o.handle }) });
+      } catch (e) {
+        if (errors.length < 3) errors.push(`${o.title}: ${errorMessage(e)}`);
+      }
+    }
+    if (deleted || errors.length || orphans.length) out[pair.mirror.name] = { usuniete: deleted, zostalo: orphans.length - deleted, ...(errors.length ? { errors } : {}) };
   }
   return out;
 }

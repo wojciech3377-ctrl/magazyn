@@ -83,9 +83,20 @@ export async function runAutoCatalog(db: SupabaseClient, force = false) {
   const { data: purged, error: purgeErr } = await db.rpc("purge_non_shopify", { p_dry_run: false, p_max: 100 });
   // Jednorazowo: starsze zamówienia z parami „z bazowego modelu” (np. AF1 Rope) – „Dołącz umowę” w zamówieniu i JPK.
   const madeFrom = await (await import("@/lib/sync/shop-orders")).remapMadeFromOrders(db).catch((e) => `błąd: ${errorMessage(e)}`);
-  // Sklepy-kopie (np. Owca Store): nowe i zmienione produkty źródła → kopia (do limitu czasu, reszta przy kolejnym przebiegu).
-  const mirror = await (await import("./mirror")).runMirror(db, { deadline: Math.min(Date.now() + (force ? 90_000 : 60_000), started + 200_000) })
-    .catch((e) => `błąd: ${errorMessage(e)}`);
+  // Sklepy-kopie (np. Owca Store): co 30 minut (mniej zapisów w Shopify kopii) – nowe i zmienione produkty źródła
+  // → kopia (do ~2,5 min, reszta przy kolejnym przebiegu), potem usunięcie z kopii produktów bez powiązania z magazynem.
+  // Pojedyncze zmiany z webhooków źródła idą od razu, niezależnie od tego rytmu.
+  const mirror = await (async () => {
+    const m = await import("./mirror");
+    if (!(await m.mirrorPairs(db, true)).length) return {};
+    const { data: ms } = await db.from("sync_state").select("value").eq("key", "mirror_run").maybeSingle();
+    const lastMirror = (ms?.value as { at?: string } | null)?.at;
+    if (!force && lastMirror && Date.now() - Date.parse(lastMirror) < 29 * 60_000) return {};
+    await db.from("sync_state").upsert({ key: "mirror_run", value: { at: new Date().toISOString() }, updated_at: new Date().toISOString() });
+    const r = await m.runMirror(db, { deadline: Math.min(Date.now() + (force ? 90_000 : 150_000), started + 180_000), parallel: 2 });
+    const cleanup = await m.cleanupMirrors(db, { deadline: Math.min(Date.now() + 30_000, started + 210_000) }).catch((e) => `błąd: ${errorMessage(e)}`);
+    return { ...r, ...(typeof cleanup === "string" || Object.keys(cleanup).length ? { usuwanie: cleanup } : {}) };
+  })().catch((e) => `błąd: ${errorMessage(e)}`);
   const stock: Awaited<ReturnType<typeof syncStock>> | { error: string; master?: undefined; result?: undefined } = await syncStock(db).catch((e) => ({ error: errorMessage(e) }));
   // Kolekcje (kategorie do filtra w Magazynie): z automatu co ~3 godziny, z przycisku – gdy starsze niż 30 min.
   const collections = await syncCollections(db, {

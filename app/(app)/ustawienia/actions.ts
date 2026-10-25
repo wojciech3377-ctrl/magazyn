@@ -485,7 +485,17 @@ export async function saveMirrorExclude(formData: FormData) {
     const rows = (mirrors ?? []).flatMap((m) => changed.map((product_id) => ({ store_id: m.id as string, product_id, queued_at: now, attempts: 0, last_error: null })));
     for (let i = 0; i < rows.length; i += 500) await admin.from("mirror_queue").upsert(rows.slice(i, i + 500), { onConflict: "store_id,product_id" });
   }
-  await done(`Wykluczone produkty: ${exclude.length}.${changed.length ? ` Zmiana dotyczy ${changed.length} – kopia zaktualizuje je w ciągu kilku minut.` : ""}`);
+  await done(`Wykluczone produkty: ${exclude.length}.${changed.length ? ` Zmiana dotyczy ${changed.length} – kopia zaktualizuje je przy kolejnym przebiegu (co 30 min albo „Kopiuj produkty teraz”).` : ""}`);
+}
+
+/** Usuwanie z kopii produktów bez powiązania z magazynem (włącz / wyłącz). */
+export async function saveMirrorDelete(formData: FormData) {
+  await requireAdmin();
+  const admin = createAdminClient();
+  const on = formData.get("delete_orphans") !== null;
+  const { data: prev } = await admin.from("app_settings").select("value").eq("key", "mirror").maybeSingle();
+  const { error } = await admin.from("app_settings").upsert({ key: "mirror", value: { ...((prev?.value as object | null) ?? {}), deleteOrphans: on } });
+  await done(error ? error.message : on ? "Usuwanie włączone – produkty bez powiązania znikną z kopii przy najbliższych przebiegach (co 30 min, po 50)." : "Usuwanie wyłączone.", error ? "blad" : "ok");
 }
 
 /** Wszystkie produkty już skopiowane (we wszystkich sklepach-kopiach) – z powrotem do kolejki. */
