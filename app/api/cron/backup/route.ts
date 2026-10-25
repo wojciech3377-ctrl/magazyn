@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { cronAuthorized } from "@/lib/sync/jobs";
-import { createDbBackup, pruneBackups } from "@/lib/backup";
+import { createDbBackup, pruneBackups, pruneSyncLog } from "@/lib/backup";
 import { errorMessage } from "@/lib/errors";
 
 export const dynamic = "force-dynamic";
@@ -14,7 +14,9 @@ export async function GET(req: Request) {
   try {
     const r = await createDbBackup(db);
     const pruned = await pruneBackups(db).catch(() => 0);
-    await db.from("sync_log").insert({ job: "backup", ok: true, message: JSON.stringify({ path: r.path, size: r.size, seconds: r.seconds, pruned, skipped: r.skipped }) });
+    // Stare wpisy dziennika automatu (udane > 30 dni, błędy > 90 dni) – żeby baza nie rosła bez końca.
+    const logRemoved = await pruneSyncLog(db).catch(() => 0);
+    await db.from("sync_log").insert({ job: "backup", ok: true, message: JSON.stringify({ path: r.path, size: r.size, seconds: r.seconds, pruned, logRemoved, skipped: r.skipped }) });
     return NextResponse.json({ ok: true, path: r.path, size: r.size, pruned });
   } catch (e) {
     await db.from("sync_log").insert({ job: "backup", ok: false, message: errorMessage(e) });

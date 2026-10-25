@@ -127,3 +127,31 @@ export async function backupUrl(db: SupabaseClient, path: string) {
   const { data } = await db.storage.from("backups").createSignedUrl(path, 600, { download: true });
   return data?.signedUrl ?? null;
 }
+
+/**
+ * Dziennik automatu (sync_log) rośnie o kilkadziesiąt tysięcy wpisów miesięcznie (zadania co minutę) – bez czyszczenia
+ * zająłby z czasem większość bazy. Usuwane: udane wpisy starsze niż 30 dni, błędy starsze niż 90 dni
+ * (porcjami po numerze wpisu, żeby jedno zapytanie nie trwało za długo).
+ */
+export async function pruneSyncLog(db: SupabaseClient, deadline = Date.now() + 60_000) {
+  let removed = 0;
+  for (const [okOnly, days] of [[true, 30], [false, 90]] as const) {
+    const cutoff = new Date(Date.now() - days * 86400_000).toISOString();
+    while (Date.now() < deadline) {
+      // Porcja najstarszych wpisów do usunięcia: zakres numerów + ten sam warunek daty (kolejność numerów nie musi
+      // zgadzać się z datami).
+      let pick = db.from("sync_log").select("id").lt("created_at", cutoff).order("id").limit(1000); // PostgREST oddaje najwyżej 1000
+      if (okOnly) pick = pick.eq("ok", true);
+      const { data, error: pe } = await pick;
+      if (pe) throw pe;
+      if (!data?.length) break;
+      let q = db.from("sync_log").delete({ count: "exact" }).gte("id", data[0].id).lte("id", data[data.length - 1].id).lt("created_at", cutoff);
+      if (okOnly) q = q.eq("ok", true);
+      const { count, error } = await q;
+      if (error) throw error;
+      removed += count ?? 0;
+      if (data.length < 1000) break;
+    }
+  }
+  return removed;
+}
