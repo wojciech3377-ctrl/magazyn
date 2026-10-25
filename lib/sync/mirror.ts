@@ -56,7 +56,7 @@ export async function enqueueMirror(db: SupabaseClient, sourceStoreId: string, p
 }
 
 /** Produkty źródła, których kopia jeszcze nie ma (ani w kolejce) → do kolejki (pierwsze uzupełnienie katalogu). */
-async function enqueueMissing(db: SupabaseClient, pair: MirrorPair, limit: number) {
+async function enqueueMissing(db: SupabaseClient, pair: MirrorPair, limit: number, exclude: Set<string> = new Set()) {
   const all = async (storeId: string, table: "product_store_links" | "mirror_queue") => {
     const ids = new Set<string>();
     for (let from = 0; ; from += 1000) {
@@ -68,6 +68,7 @@ async function enqueueMissing(db: SupabaseClient, pair: MirrorPair, limit: numbe
     return ids;
   };
   const [src, have, queued] = await Promise.all([all(pair.source.id, "product_store_links"), all(pair.mirror.id, "product_store_links"), all(pair.mirror.id, "mirror_queue")]);
+  for (const id of exclude) src.delete(id);
   const todo = [...src].filter((id) => !have.has(id) && !queued.has(id)).slice(0, limit);
   if (todo.length) {
     const now = new Date().toISOString();
@@ -108,11 +109,15 @@ const SET = `mutation S($identifier: ProductSetIdentifiers, $input: ProductSetIn
 const optKey = (opts: { name: string; value: string }[]) => opts.map((o) => `${o.name.trim().toLowerCase()}=${o.value.trim().toLowerCase()}`).join("|");
 const sha = (v: unknown) => createHash("sha256").update(JSON.stringify(v)).digest("hex");
 
-export type MirrorSettings = { replace: [string, string][] };
+/** Zamiany tekstu w opisach i wykluczone produkty (ID produktów aplikacji – nie trafiają do kopii, istniejące idą do archiwum). */
+export type MirrorSettings = { replace: [string, string][]; exclude: string[] };
 export async function mirrorSettings(db: SupabaseClient): Promise<MirrorSettings> {
   const { data } = await db.from("app_settings").select("value").eq("key", "mirror").maybeSingle();
   const v = (data?.value ?? {}) as Partial<MirrorSettings>;
-  return { replace: Array.isArray(v.replace) ? v.replace.filter((r) => Array.isArray(r) && r[0]).slice(0, 30) as [string, string][] : [] };
+  return {
+    replace: Array.isArray(v.replace) ? v.replace.filter((r) => Array.isArray(r) && r[0]).slice(0, 30) as [string, string][] : [],
+    exclude: Array.isArray(v.exclude) ? v.exclude.filter((x): x is string => typeof x === "string") : [],
+  };
 }
 const applyReplace = (text: string | null, rules: [string, string][]) => {
   if (!text) return text;
@@ -163,6 +168,13 @@ export async function archiveInMirror(db: SupabaseClient, mirror: MirrorStore, p
 
 /** Utworzenie albo aktualizacja jednego produktu w kopii. Zwraca opis wyniku. */
 export async function mirrorProduct(db: SupabaseClient, pair: MirrorPair, productId: string, settings?: MirrorSettings): Promise<string> {
+  // Wykluczony produkt: nie tworzymy go w kopii, a już skopiowany idzie do archiwum (niewidoczny w sklepie).
+  settings ??= await mirrorSettings(db);
+  if (settings.exclude.includes(productId)) {
+    const { data: had } = await db.from("product_store_links").select("id").eq("store_id", pair.mirror.id).eq("product_id", productId).limit(1);
+    if (had?.length) await archiveInMirror(db, pair.mirror, productId);
+    return "wykluczony";
+  }
   const { mirror, source } = pair;
   if (!mirror.mirror_location_id) throw new Error(`${mirror.name}: wybierz lokalizację Shopify kopii (Ustawienia → Sklepy i lokalizacje).`);
   const { data: srcLink } = await db.from("product_store_links").select("shopify_product_id").eq("store_id", source.id).eq("product_id", productId).order("updated_at", { ascending: false }).limit(1).maybeSingle();
@@ -172,7 +184,7 @@ export async function mirrorProduct(db: SupabaseClient, pair: MirrorPair, produc
   // Ponad 250 rozmiarów – zapis listy rozmiarów usunąłby w kopii te nieodczytane; bez zmian, do ręcznej decyzji.
   if (src.variants.pageInfo?.hasNextPage) throw new Error(`${src.title}: ponad 250 rozmiarów – kopia tego produktu nie jest obsługiwana`);
 
-  const rules = (settings ?? (await mirrorSettings(db))).replace;
+  const rules = settings.replace;
   const [{ data: srcVarLinks }, { data: mirLinks, error: mlErr }] = await Promise.all([
     db.from("variant_store_links").select("variant_id, shopify_variant_id").eq("store_id", source.id).in("shopify_variant_id", src.variants.nodes.map((v) => v.id)),
     db.from("product_store_links").select("shopify_product_id, mirror_hash, mirror_media_hash").eq("store_id", mirror.id).eq("product_id", productId).order("mirrored_at", { ascending: false, nullsFirst: false }).limit(1),
@@ -344,34 +356,42 @@ export async function mirrorNow(db: SupabaseClient, pair: MirrorPair, productId:
  * Przebieg kopii: najpierw zmiany z kolejki, potem brakujące produkty (do limitu czasu).
  * Błędy produktu zostają w kolejce (do 8 prób, potem widoczne w Ustawieniach).
  */
-export async function runMirror(db: SupabaseClient, opts: { deadline: number; backfill?: number } = { deadline: Date.now() + 60_000 }) {
+export async function runMirror(db: SupabaseClient, opts: { deadline: number; backfill?: number; parallel?: number } = { deadline: Date.now() + 60_000 }) {
   const pairs = await mirrorPairs(db, true);
   const out: Record<string, unknown> = {};
   const settings = await mirrorSettings(db);
   for (const pair of pairs) {
-    const stats = { utworzone: 0, zaktualizowane: 0, bez_zmian: 0, archiwum: 0, bledy: 0, brakuje: 0 } as Record<string, number>;
+    const stats = { utworzone: 0, zaktualizowane: 0, bez_zmian: 0, archiwum: 0, wykluczone: 0, bledy: 0, brakuje: 0 } as Record<string, number>;
     const errors: string[] = [];
     const skipped = new Set<string>(); // właśnie kopiowane gdzie indziej
     try {
       if (!pair.mirror.mirror_location_id) { out[pair.mirror.name] = "wybierz lokalizację Shopify kopii w Ustawieniach"; continue; }
-      const miss = await enqueueMissing(db, pair, opts.backfill ?? 300);
-      stats.brakuje = miss.missing;
+      // backfill 0 – tylko kolejka (szybki przebieg co minutę); brakujące produkty dopisuje przebieg co 15 min.
+      if (opts.backfill !== 0) {
+        const miss = await enqueueMissing(db, pair, opts.backfill ?? 300, new Set(settings.exclude));
+        stats.brakuje = miss.missing;
+      }
       while (Date.now() < opts.deadline) {
         const { data: rows } = await db.from("mirror_queue").select("product_id, attempts").eq("store_id", pair.mirror.id).lt("attempts", 8)
           .order("attempts").order("queued_at").limit(10 + skipped.size);
         const batch = (rows ?? []).filter((r) => !skipped.has(r.product_id as string)).slice(0, 10);
         if (!batch.length) break;
-        for (const q of batch) {
-          if (Date.now() >= opts.deadline) break;
-          try {
-            const r = await mirrorNow(db, pair, q.product_id as string, settings);
-            if (r === null) { skipped.add(q.product_id as string); continue; }
-            stats[r === "utworzony" ? "utworzone" : r === "zaktualizowany" ? "zaktualizowane" : r === "archiwum" ? "archiwum" : "bez_zmian"]++;
-          } catch (e) {
-            stats.bledy++;
-            if (errors.length < 3) errors.push(errorMessage(e));
+        // Kilka produktów naraz (limit zapytań Shopify pilnuje klient – przy THROTTLED czeka i ponawia).
+        const parallel = Math.max(1, Math.min(opts.parallel ?? 3, 5));
+        let next = 0;
+        await Promise.all(Array.from({ length: parallel }, async () => {
+          while (next < batch.length && Date.now() < opts.deadline) {
+            const q = batch[next++];
+            try {
+              const r = await mirrorNow(db, pair, q.product_id as string, settings);
+              if (r === null) { skipped.add(q.product_id as string); continue; }
+              stats[r === "utworzony" ? "utworzone" : r === "zaktualizowany" ? "zaktualizowane" : r === "archiwum" ? "archiwum" : r === "wykluczony" ? "wykluczone" : "bez_zmian"]++;
+            } catch (e) {
+              stats.bledy++;
+              if (errors.length < 3) errors.push(errorMessage(e));
+            }
           }
-        }
+        }));
       }
       const { count } = await db.from("mirror_queue").select("product_id", { count: "exact", head: true }).eq("store_id", pair.mirror.id).lt("attempts", 8);
       out[pair.mirror.name] = { ...Object.fromEntries(Object.entries(stats).filter(([, v]) => v)), w_kolejce: count ?? 0, ...(errors.length ? { errors } : {}) };

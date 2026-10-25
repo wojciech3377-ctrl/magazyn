@@ -438,7 +438,7 @@ export async function saveMirror(formData: FormData) {
     const replace = String(formData.get("replace") ?? "").split("\n").map((l) => l.split("→").map((x) => x.trim())).filter((p) => p.length === 2 && p[0]).slice(0, 30);
     const admin = createAdminClient();
     const { data: prev } = await admin.from("app_settings").select("value").eq("key", "mirror").maybeSingle();
-    const { error: e2 } = await admin.from("app_settings").upsert({ key: "mirror", value: { replace } });
+    const { error: e2 } = await admin.from("app_settings").upsert({ key: "mirror", value: { ...((prev?.value as object | null) ?? {}), replace } });
     if (e2) return done(e2.message, "blad");
     // Zmienione zasady zamiany – produkty już skopiowane wracają do kolejki (opisy w kopii dostaną nowy tekst).
     const prevRules = JSON.stringify((prev?.value as { replace?: unknown } | null)?.replace ?? []);
@@ -448,6 +448,44 @@ export async function saveMirror(formData: FormData) {
     }
   }
   await done("Sklep-kopia zapisany.");
+}
+
+/**
+ * Wykluczenia sklepu-kopii: kody metek produktów (PR000123) – te produkty nie trafiają do kopii, a już skopiowane
+ * idą tam do archiwum (niewidoczne w sklepie). Usunięcie z listy – produkt wraca do kopii przy kolejnym przebiegu.
+ */
+export async function saveMirrorExclude(formData: FormData) {
+  await requireAdmin();
+  const { parseProductTagCode } = await import("@/lib/price-tag-code");
+  const raw = String(formData.get("exclude") ?? "");
+  const codes = [...new Set(raw.split(/[\s,;]+/).map((c) => c.trim().toUpperCase()).filter(Boolean))];
+  if (codes.length > 2000) return done("Najwyżej 2000 wykluczonych produktów.", "blad");
+  const bad = codes.filter((c) => parseProductTagCode(c) === null);
+  if (bad.length) return done(`To nie są kody produktów (PR000123): ${bad.slice(0, 10).join(", ")}${bad.length > 10 ? "…" : ""}`, "blad");
+  const admin = createAdminClient();
+  const nos = codes.map((c) => parseProductTagCode(c)!);
+  const found = new Map<number, string>();
+  for (let i = 0; i < nos.length; i += 300) {
+    const { data, error } = await admin.from("products").select("id, tag_no").in("tag_no", nos.slice(i, i + 300));
+    if (error) return done(error.message, "blad");
+    for (const p of data ?? []) found.set(Number(p.tag_no), p.id as string);
+  }
+  const missing = codes.filter((c) => !found.has(parseProductTagCode(c)!));
+  if (missing.length) return done(`Nie ma produktów o kodach: ${missing.slice(0, 10).join(", ")}${missing.length > 10 ? "…" : ""} – nic nie zapisano.`, "blad");
+  const { data: prev } = await admin.from("app_settings").select("value").eq("key", "mirror").maybeSingle();
+  const before = new Set(((prev?.value as { exclude?: string[] } | null)?.exclude ?? []));
+  const exclude = [...new Set(found.values())];
+  const { error } = await admin.from("app_settings").upsert({ key: "mirror", value: { ...((prev?.value as object | null) ?? {}), exclude } });
+  if (error) return done(error.message, "blad");
+  // Nowo wykluczone (do archiwum w kopii) i zdjęte z listy (z powrotem do kopii) – do kolejki każdej kopii.
+  const changed = [...exclude.filter((x) => !before.has(x)), ...[...before].filter((x) => !exclude.includes(x))];
+  if (changed.length) {
+    const { data: mirrors } = await admin.from("stores").select("id").not("mirror_of", "is", null);
+    const now = new Date().toISOString();
+    const rows = (mirrors ?? []).flatMap((m) => changed.map((product_id) => ({ store_id: m.id as string, product_id, queued_at: now, attempts: 0, last_error: null })));
+    for (let i = 0; i < rows.length; i += 500) await admin.from("mirror_queue").upsert(rows.slice(i, i + 500), { onConflict: "store_id,product_id" });
+  }
+  await done(`Wykluczone produkty: ${exclude.length}.${changed.length ? ` Zmiana dotyczy ${changed.length} – kopia zaktualizuje je w ciągu kilku minut.` : ""}`);
 }
 
 /** Wszystkie produkty już skopiowane (we wszystkich sklepach-kopiach) – z powrotem do kolejki. */

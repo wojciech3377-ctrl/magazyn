@@ -1,3 +1,4 @@
+import { productTagCode } from "@/lib/price-tag-code";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { diagnoseStock } from "@/lib/stock-diagnose";
@@ -10,7 +11,7 @@ import { getBuyerSignature, getCompany } from "@/lib/contracts/settings";
 import { getSmtpSettings, mailConfig } from "@/lib/mail";
 import { ContractSettings } from "./ContractSettings";
 import { FiscalSettings } from "./FiscalSettings";
-import { addExclusion, deleteExclusion, setExclusionName, disconnectFurgonetka, purgeExcluded, purgeNonShopify, registerWebhooks, runStockNow, saveSmtp, saveInvoiceSettings, saveLocation, saveSender, saveShopifyLocation, saveStockMaster, saveStore, checkOmnibus, saveOrdersDefaultStore, fixProductStockNow, dismissIssue, saveMirror, runMirrorNow, retryMirror } from "./actions";
+import { addExclusion, deleteExclusion, setExclusionName, disconnectFurgonetka, purgeExcluded, purgeNonShopify, registerWebhooks, runStockNow, saveSmtp, saveInvoiceSettings, saveLocation, saveSender, saveShopifyLocation, saveStockMaster, saveStore, checkOmnibus, saveOrdersDefaultStore, fixProductStockNow, dismissIssue, saveMirror, runMirrorNow, retryMirror, saveMirrorExclude } from "./actions";
 import { compareStock, getStockMaster, planPushToShopify, shopifyLocations, type ShopifyLocation } from "@/lib/sync/shopify-stock";
 import { furgonetkaConfigured, furgonetkaConnection } from "@/lib/integrations/furgonetka";
 import { openIssues } from "@/lib/issues";
@@ -103,6 +104,14 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
         if (!list.length) return null; // brak SQL 78
         const { data: ms } = await db.from("app_settings").select("value").eq("key", "mirror").maybeSingle();
         const replace = ((ms?.value as { replace?: [string, string][] } | null)?.replace ?? []).map(([a, b]) => `${a} → ${b}`).join("\n");
+        // Wykluczone produkty – kody metek (PR000123) i nazwy.
+        const excludeIds = ((ms?.value as { exclude?: string[] } | null)?.exclude ?? []);
+        const excluded: { id: string; title: string; code: string }[] = [];
+        for (let i = 0; i < excludeIds.length; i += 300) {
+          const { data } = await db.from("products").select("id, title, tag_no").in("id", excludeIds.slice(i, i + 300));
+          for (const p of data ?? []) excluded.push({ id: p.id as string, title: p.title as string, code: p.tag_no ? productTagCode(p.tag_no as number) : "" });
+        }
+        excluded.sort((a, b) => a.code.localeCompare(b.code));
         const rows = await Promise.all(list.filter((x) => x.mirror_of).map(async (m) => {
           const [locsR, { count: done }, { count: total }, { count: queued }, { data: failed }] = await Promise.all([
             m.shopify_domain ? safe(() => shopifyLocations(m.shopify_domain as string, m.code)) : Promise.resolve({ data: null, error: null }),
@@ -113,7 +122,7 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
           ]);
           return { store: m, shopLocs: locsR, done: done ?? 0, total: total ?? 0, queued: queued ?? 0, failed: (failed ?? []) as unknown as { last_error: string | null; attempts: number; product: { title: string } | null }[] };
         }));
-        return { rows, replace, candidates: list, master: await getStockMaster(db) };
+        return { rows, replace, excluded, candidates: list, master: await getStockMaster(db) };
       })()
     : null;
   const ordersDefault = isAdmin && tab === "sklepy" ? await defaultOrderStore(supabase, (stores ?? []) as { id: string; name: string }[]) : "";
@@ -246,7 +255,7 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
                   <span className="text-sm text-muted">kopia: {storeName.get(m.mirror_of!) ?? "?"}</span>
                   {!m.shopify_domain ? <Pill tone="amber">ustaw domenę Shopify wyżej</Pill> : shopLocs.error ? <Pill tone="red">brak połączenia z Shopify</Pill> : !m.mirror_location_id ? <Pill tone="amber">wybierz lokalizację Shopify</Pill> : <Pill tone="green">działa</Pill>}
                 </div>
-                <p className="text-sm">Produkty w kopii: <b className="tabular-nums">{linked}</b> z <b className="tabular-nums">{total}</b>{queued ? <> · w kolejce: <b className="tabular-nums">{queued}</b></> : null}</p>
+                <p className="text-sm">Produkty w kopii: <b className="tabular-nums">{linked}</b> z <b className="tabular-nums">{Math.max(0, total - mirrors.excluded.length)}</b>{queued ? <> · w kolejce: <b className="tabular-nums">{queued}</b></> : null}{mirrors.excluded.length ? <> · wykluczone: <b className="tabular-nums">{mirrors.excluded.length}</b></> : null}</p>
                 {shopLocs.error && <p className="text-sm text-bad">Shopify {m.name}: {shopLocs.error}</p>}
                 <form action={saveMirror} className="grid items-end gap-2 md:grid-cols-[1fr_1fr_auto]">
                   <input type="hidden" name="id" value={m.id} />
@@ -272,7 +281,7 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
                     {failed.map((f, i) => <li key={i}><b>{f.product?.title ?? "produkt"}</b> ({f.attempts}×): {f.last_error}</li>)}
                   </ul>
                 )}
-                <p className="text-xs text-muted">Automat kopiuje nowe i zmienione produkty co ~15 minut (zmiany z webhooków źródła – od razu). Pierwsze uzupełnienie całego katalogu idzie partiami.</p>
+                <p className="text-xs text-muted">Kopiowanie idzie samo: automat co minutę przerabia kolejkę, a co ~15 minut dopisuje do niej nowe produkty (zmiany z webhooków źródła – od razu). „Kopiuj produkty teraz” tylko przyspiesza.</p>
                 <p className="text-xs text-muted">Aplikacja w Shopify kopii (Dev Dashboard) potrzebuje uprawnień: <code className="rounded bg-panel px-1">read_products,write_products,read_publications,write_publications,read_inventory,write_inventory,read_locations,read_orders,write_orders,write_merchant_managed_fulfillment_orders</code>. Client ID i Secret wpisz w Vercel jako <code className="rounded bg-panel px-1">SHOPIFY_{m.code.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_CLIENT_ID</code> i <code className="rounded bg-panel px-1">…_CLIENT_SECRET</code>.</p>
               </div>
             ))}
@@ -298,6 +307,19 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
                 <label className="label" htmlFor="mirror-replace">Zamiana tekstu w opisach kopii (jedna zasada na linię: „z → na”, np. „Depot Check → Owca Check”)</label>
                 <textarea className="input min-h-20 py-2 font-mono text-sm" id="mirror-replace" name="replace" defaultValue={mirrors.replace} placeholder={"Sneakers Depot → Owca Store"} />
                 <SubmitButton className="btn-secondary">Zapisz zamiany</SubmitButton>
+              </form>
+            )}
+            {mirrors.rows.length > 0 && (
+              <form action={saveMirrorExclude} className="space-y-2">
+                <label className="label" htmlFor="mirror-exclude">Wykluczone produkty – nie pokazują się w kopii (kody z metki produktu, np. PR000123; jeden na linię albo po przecinku)</label>
+                <textarea className="input min-h-20 py-2 font-mono text-sm" id="mirror-exclude" name="exclude" defaultValue={mirrors.excluded.map((e) => e.code).filter(Boolean).join("\n")} placeholder={"PR000123\nPR000456"} />
+                {mirrors.excluded.length > 0 && (
+                  <ul className="max-h-48 space-y-0.5 overflow-y-auto text-xs text-muted">
+                    {mirrors.excluded.map((e) => <li key={e.id}><span className="font-mono">{e.code}</span> – {e.title}</li>)}
+                  </ul>
+                )}
+                <p className="text-xs text-muted">Wykluczony produkt, który jest już w kopii, trafia tam do archiwum (znika ze sklepu). Usunięcie kodu z listy – produkt wraca do kopii w ciągu kilku minut. Pozostałe produkty kopiują się normalnie.</p>
+                <SubmitButton className="btn-secondary">Zapisz wykluczenia</SubmitButton>
               </form>
             )}
           </section>
