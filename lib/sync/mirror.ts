@@ -325,6 +325,8 @@ export async function mirrorProduct(db: SupabaseClient, pair: MirrorPair, produc
     const gone = (stale ?? []).map((s) => s.shopify_variant_id as string).filter((g) => g && !live.has(g));
     if (gone.length) await db.from("variant_store_links").delete().eq("store_id", mirror.id).in("shopify_variant_id", gone);
   }
+  // Najniższa cena z 30 dni (Omnibus) pod ceną w kopii – od razu (np. po zmianie ceny w źródle); błąd nie zatrzymuje kopii.
+  await (await import("./mirror-omnibus")).mirrorOmnibusProduct(db, pair, productId).catch(() => 0);
   return existingId ? "zaktualizowany" : "utworzony";
 }
 

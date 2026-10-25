@@ -1,0 +1,46 @@
+{%- comment -%}
+  Najniższa cena z 30 dni (Omnibus) pod ceną – sklep-kopia (Owca Store).
+  Wartość zapisuje aplikacja magazynu w metapolu rozmiaru magazyn.lowest_price_30d (z historii cen aplikacji).
+  Wklej jako blok „Własny kod Liquid” (Custom Liquid) w sekcji produktu, tuż pod blokiem „Cena”.
+{%- endcomment -%}
+{%- assign om_v = product.selected_or_first_available_variant -%}
+{%- assign om_val = om_v.metafields.magazyn.lowest_price_30d.value -%}
+<p id="omnibus-{{ section.id }}" class="omnibus-lowest" style="margin:.25rem 0 0;font-size:.85em;opacity:.75"{% if om_val == blank %} hidden{% endif %}>
+  {%- if om_val != blank -%}
+    {%- if om_v.compare_at_price > om_v.price -%}Najniższa cena z 30 dni przed obniżką: {% else %}Najniższa cena z 30 dni: {% endif -%}
+    {{- om_val | times: 100 | round | money -}}
+  {%- endif -%}
+</p>
+<script type="application/json" id="omnibus-data-{{ section.id }}">
+{ {%- for v in product.variants -%}
+  {%- assign l = v.metafields.magazyn.lowest_price_30d.value -%}
+  "{{ v.id }}": { "l": {% if l != blank %}{{ l | times: 100 | round | money | json }}{% else %}null{% endif %}, "s": {% if v.compare_at_price > v.price %}true{% else %}false{% endif %} }{% unless forloop.last %},{% endunless %}
+{%- endfor -%} }
+</script>
+<script>
+  (function () {
+    var box = document.getElementById('omnibus-{{ section.id }}');
+    var raw = document.getElementById('omnibus-data-{{ section.id }}');
+    if (!box || !raw) return;
+    var data = {};
+    try { data = JSON.parse(raw.textContent); } catch (e) { return; }
+    var scope = box.closest('.shopify-section') || document;
+    var last = null;
+    function current() {
+      var input = scope.querySelector('form[action*="/cart/add"] [name="id"]') || document.querySelector('form[action*="/cart/add"] [name="id"]');
+      return (input && input.value) || new URLSearchParams(location.search).get('variant');
+    }
+    function update() {
+      var id = current();
+      if (!id || id === last) return;
+      last = id;
+      var d = data[id];
+      if (!d || !d.l) { box.hidden = true; return; }
+      box.hidden = false;
+      box.textContent = (d.s ? 'Najniższa cena z 30 dni przed obniżką: ' : 'Najniższa cena z 30 dni: ') + d.l;
+    }
+    update();
+    document.addEventListener('change', function () { setTimeout(update, 50); });
+    setInterval(update, 700);
+  })();
+</script>

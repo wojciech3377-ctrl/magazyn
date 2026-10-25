@@ -96,8 +96,10 @@ export async function runAutoCatalog(db: SupabaseClient, force = false) {
     const r = await m.runMirror(db, { deadline: Math.min(Date.now() + (force ? 90_000 : 150_000), started + 180_000), parallel: 2 });
     // Produkty źródła spoza magazynu (np. Rope) – 1:1 w kopii.
     const extras = await m.runMirrorExtras(db, { deadline: Math.min(Date.now() + 45_000, started + 200_000) }).catch((e) => `błąd: ${errorMessage(e)}`);
+    // Najniższa cena z 30 dni w kopii – raz na dobę wszystkie produkty (okno 30 dni się przesuwa), porcjami.
+    const omnibus = await (await import("./mirror-omnibus")).refreshMirrorOmnibus(db, { deadline: Math.min(Date.now() + 40_000, started + 215_000) }).catch((e) => `błąd: ${errorMessage(e)}`);
     const cleanup = await m.cleanupMirrors(db, { deadline: Math.min(Date.now() + 30_000, started + 230_000) }).catch((e) => `błąd: ${errorMessage(e)}`);
-    return { ...r, ...(typeof extras === "string" || Object.keys(extras).length ? { spoza_magazynu: extras } : {}), ...(typeof cleanup === "string" || Object.keys(cleanup).length ? { usuwanie: cleanup } : {}) };
+    return { ...r, ...(typeof omnibus === "string" || Object.keys(omnibus).length ? { omnibus } : {}), ...(typeof extras === "string" || Object.keys(extras).length ? { spoza_magazynu: extras } : {}), ...(typeof cleanup === "string" || Object.keys(cleanup).length ? { usuwanie: cleanup } : {}) };
   })().catch((e) => `błąd: ${errorMessage(e)}`);
   // Pełne wyrównanie stanów (wszystkie rozmiary wszystkich sklepów – sporo odczytu z bazy). Przy głównym magazynie
   // aplikacji każdy ruch (sprzedaż, przyjęcie, przesunięcie, zamówienie ze sklepu) zmienia stan w obu sklepach od razu,

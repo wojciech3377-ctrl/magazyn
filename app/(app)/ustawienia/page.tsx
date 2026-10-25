@@ -1,4 +1,5 @@
 import { productTagCode } from "@/lib/price-tag-code";
+import { OMNIBUS_LIQUID } from "@/lib/omnibus-snippet";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { diagnoseStock } from "@/lib/stock-diagnose";
@@ -303,6 +304,18 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
                   </ul>
                 )}
                 <p className="text-xs text-muted">Kopiowanie idzie samo co 30 minut (nowe i zmienione produkty partiami; pojedyncze zmiany z webhooków źródła – od razu). „Kopiuj produkty teraz” tylko przyspiesza.</p>
+                <details className="rounded-md border border-line p-3 text-sm">
+                  <summary className="cursor-pointer font-medium">Najniższa cena z 30 dni pod ceną w {m.name} – kod do motywu</summary>
+                  <div className="mt-2 space-y-2 text-xs text-muted">
+                    <p>Aplikacja zapisuje przy każdym rozmiarze w {m.name} najniższą cenę z 30 dni (z historii cen aplikacji; przy obniżce – z 30 dni przed obniżką): po skopiowaniu produktu od razu, a wszystkie produkty raz na dobę. Żeby była widoczna pod ceną:</p>
+                    <ol className="list-decimal space-y-1 pl-5">
+                      <li>Shopify {m.name} → Sklep internetowy → Motywy → <b>Dostosuj</b> → szablon <b>Produkty</b>.</li>
+                      <li>W sekcji produktu: <b>Dodaj blok</b> → <b>Własny kod Liquid</b> (Custom Liquid) i przeciągnij go tuż pod blok <b>Cena</b>.</li>
+                      <li>Wklej poniższy kod i kliknij <b>Zapisz</b>.</li>
+                    </ol>
+                    <pre className="max-h-64 overflow-auto rounded bg-panel p-2 font-mono text-[11px] text-ink">{OMNIBUS_LIQUID}</pre>
+                  </div>
+                </details>
                 <form action={saveMirrorDelete} className="space-y-2 rounded-md border border-line p-3 text-sm">
                   <label className="flex items-start gap-2">
                     <input type="checkbox" name="delete_orphans" defaultChecked={mirrors.deleteOrphans} className="mt-1 h-4 w-4" />

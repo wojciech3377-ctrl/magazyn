@@ -91,7 +91,7 @@ export const fmtRange = (r: Range) => {
 type Hist = { variant_id: string; price: number; valid_from: string };
 
 /** Najniższa cena z 30 dni przed obecną obniżką (albo z ostatnich 30 dni, gdy obniżki nie ma) – z historii aplikacji. */
-function lowestFromHistory(rows: Hist[], current: number, now = Date.now()) {
+export function lowestFromHistory(rows: Hist[], current: number, now = Date.now()) {
   const asc = [...rows].sort((a, b) => a.valid_from.localeCompare(b.valid_from));
   if (!asc.length) return { value: null as number | null, complete: false };
   // Początek obecnej ceny: najwcześniejszy wpis z ostatniego ciągu tej samej ceny.
