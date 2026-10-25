@@ -436,10 +436,33 @@ export async function saveMirror(formData: FormData) {
   if (error) return done(/mirror_/.test(error.message) ? "Sklep-kopia wymaga SQL 78 w Supabase (0078_mirror_store.sql)." : error.message, "blad");
   if (formData.has("replace")) {
     const replace = String(formData.get("replace") ?? "").split("\n").map((l) => l.split("→").map((x) => x.trim())).filter((p) => p.length === 2 && p[0]).slice(0, 30);
-    const { error: e2 } = await createAdminClient().from("app_settings").upsert({ key: "mirror", value: { replace } });
+    const admin = createAdminClient();
+    const { data: prev } = await admin.from("app_settings").select("value").eq("key", "mirror").maybeSingle();
+    const { error: e2 } = await admin.from("app_settings").upsert({ key: "mirror", value: { replace } });
     if (e2) return done(e2.message, "blad");
+    // Zmienione zasady zamiany – produkty już skopiowane wracają do kolejki (opisy w kopii dostaną nowy tekst).
+    const prevRules = JSON.stringify((prev?.value as { replace?: unknown } | null)?.replace ?? []);
+    if (prevRules !== JSON.stringify(replace)) {
+      const requeued = await requeueMirrored(admin);
+      if (requeued) return done(`Sklep-kopia zapisany. Nowe zasady zamiany – ${requeued} skopiowanych produktów zaktualizuje się w kolejnych przebiegach automatu.`);
+    }
   }
   await done("Sklep-kopia zapisany.");
+}
+
+/** Wszystkie produkty już skopiowane (we wszystkich sklepach-kopiach) – z powrotem do kolejki. */
+async function requeueMirrored(db: ReturnType<typeof createAdminClient>) {
+  const now = new Date().toISOString();
+  let n = 0;
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await db.from("product_store_links").select("store_id, product_id").not("mirror_hash", "is", null).order("id").range(from, from + 999);
+    if (error || !data?.length) break;
+    const rows = data.map((r) => ({ store_id: r.store_id as string, product_id: r.product_id as string, queued_at: now, attempts: 0, last_error: null }));
+    const { error: e } = await db.from("mirror_queue").upsert(rows, { onConflict: "store_id,product_id" });
+    if (!e) n += rows.length;
+    if (data.length < 1000) break;
+  }
+  return n;
 }
 
 /** Utworzenie / aktualizacja produktów w sklepach-kopiach teraz (do ~3 minut, reszta przy kolejnym przebiegu automatu). */
