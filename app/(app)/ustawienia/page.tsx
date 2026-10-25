@@ -526,7 +526,7 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
           <section className="card space-y-5 p-4">
             <div>
               <h2 className="h2 mb-1">Główny magazyn</h2>
-              <p className="mb-3 text-sm text-muted">Skąd brać stan magazynowy. Teraz: Shopify – nowe stany w sklepie tworzą sztuki w Magazynie (na żywo przez webhooki, co 15 min dla pewności). Docelowo: aplikacja – liczba sztuk na stanie w lokalizacji trafia do Shopify.</p>
+              <p className="mb-3 text-sm text-muted">Skąd brać stan magazynowy. Shopify – nowe stany w sklepie tworzą sztuki w Magazynie (na żywo przez webhooki, co 15 min dla pewności). Magazyn aplikacji – każdy ruch (sprzedaż, przyjęcie, przesunięcie, zamówienie ze sklepu) zmienia stan w Shopify od razu; pełne wyrównanie wszystkich stanów raz na dobę w nocy (ręczna zmiana stanu w panelu Shopify zostanie wtedy nadpisana).</p>
               <form action={saveStockMaster} className="space-y-3">
                 <div className="inline-flex rounded-full border border-line bg-panel p-1" role="radiogroup" aria-label="Główny magazyn">
                   {(["shopify", "app"] as const).map((m) => (

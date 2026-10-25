@@ -8,7 +8,7 @@ const EVENT = "magazyn:live";
 let current: LiveState = { at: null, ok: true };
 
 /**
- * Odczyt na żywo, gdy aplikacja jest otwarta i widoczna (komputer i telefon): co 20 s prosi serwer o nowe zamówienia
+ * Odczyt na żywo, gdy aplikacja jest otwarta i widoczna (komputer i telefon): co 60 s prosi serwer o nowe zamówienia
  * i stany ze Shopify (serwer robi to najwyżej raz na 15 s dla wszystkich). Gdy przyszło coś nowego – odświeża widok.
  * Bez widoku – stan pokazuje <LiveSyncStatus /> w menu.
  */
@@ -37,7 +37,7 @@ export function LivePoller() {
       }
     }
     poll();
-    const t = setInterval(poll, 20_000);
+    const t = setInterval(poll, 60_000);
     const onVis = () => { if (document.visibilityState === "visible") poll(); };
     document.addEventListener("visibilitychange", onVis);
     window.addEventListener("focus", onVis);

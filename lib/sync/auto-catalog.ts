@@ -99,7 +99,26 @@ export async function runAutoCatalog(db: SupabaseClient, force = false) {
     const cleanup = await m.cleanupMirrors(db, { deadline: Math.min(Date.now() + 30_000, started + 230_000) }).catch((e) => `błąd: ${errorMessage(e)}`);
     return { ...r, ...(typeof extras === "string" || Object.keys(extras).length ? { spoza_magazynu: extras } : {}), ...(typeof cleanup === "string" || Object.keys(cleanup).length ? { usuwanie: cleanup } : {}) };
   })().catch((e) => `błąd: ${errorMessage(e)}`);
-  const stock: Awaited<ReturnType<typeof syncStock>> | { error: string; master?: undefined; result?: undefined } = await syncStock(db).catch((e) => ({ error: errorMessage(e) }));
+  // Pełne wyrównanie stanów (wszystkie rozmiary wszystkich sklepów – sporo odczytu z bazy). Przy głównym magazynie
+  // aplikacji każdy ruch (sprzedaż, przyjęcie, przesunięcie, zamówienie ze sklepu) zmienia stan w obu sklepach od razu,
+  // więc pełne wyrównanie to tylko siatka bezpieczeństwa – raz na dobę, w nocy (przycisk w Ustawieniach – zawsze).
+  // Przy głównym Shopify – jak dotąd przy każdym przebiegu (to jego podstawowy odczyt).
+  const stock: Awaited<ReturnType<typeof syncStock>> | { error: string; master?: undefined; result?: undefined } = await (async () => {
+    const { getStockMaster } = await import("./shopify-stock");
+    if (!force && (await getStockMaster(db)) === "app") {
+      const { data: sf } = await db.from("sync_state").select("value").eq("key", "stock_full").maybeSingle();
+      const prev = sf?.value as { at?: string; result?: unknown } | null;
+      const age = prev?.at ? Date.now() - Date.parse(prev.at) : Infinity;
+      const hour = Number(new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Warsaw", hour: "2-digit", hourCycle: "h23" }).format(new Date()));
+      const due = age > 26 * 3600_000 || (age > 20 * 3600_000 && hour >= 3 && hour < 6);
+      // Bez pełnego wyrównania – ostatni wynik (żeby „Błędy automatu” nie znikały między przebiegami).
+      if (!due && prev?.result) return prev.result as Awaited<ReturnType<typeof syncStock>>;
+      if (!due) return { master: "app" as const, result: {} } as unknown as Awaited<ReturnType<typeof syncStock>>;
+    }
+    const r = await syncStock(db).catch((e) => ({ error: errorMessage(e) }));
+    if (!("error" in r)) await db.from("sync_state").upsert({ key: "stock_full", value: { at: new Date().toISOString(), result: r }, updated_at: new Date().toISOString() });
+    return r;
+  })();
   // Kolekcje (kategorie do filtra w Magazynie): z automatu co ~3 godziny, z przycisku – gdy starsze niż 30 min.
   const collections = await syncCollections(db, {
     deadline: Math.min(Date.now() + (force ? 45_000 : 60_000), started + 270_000),

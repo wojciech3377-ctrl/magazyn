@@ -26,7 +26,7 @@ export async function BackupSettings() {
         <h2 className="h2 mb-1">Kopia danych aplikacji</h2>
         <p className="mb-3 text-sm text-muted">
           Wszystkie dane (magazyn, umowy i ich historia, zamówienia, sprzedaż, faktury, paragony, komis, kasa) w jednym pliku <code>.json.gz</code>.
-          Automatycznie codziennie w nocy (po SQL 73); kopie starsze niż 30 dni są usuwane (zostaje co najmniej 7). Bez haseł i kluczy.
+          Automatycznie co 2 dni w nocy (po SQL 73); kopie starsze niż 30 dni są usuwane (zostaje co najmniej 7). Bez haseł i kluczy.
           Pobierz kopię od czasu do czasu i trzymaj ją także poza Supabase (dysk, Google Drive).
         </p>
         <div className="mb-3 flex flex-wrap items-center gap-3">
@@ -49,7 +49,7 @@ export async function BackupSettings() {
       <section className="card p-4">
         <h2 className="h2 mb-1">Pliki umów</h2>
         <p className="mb-3 text-sm text-muted">
-          Pliki umów (wgrane skany, faktury, podpisane PDF) trafiają do kopii co noc razem z danymi – tylko nowe, raz skopiowane zostają
+          Pliki umów (wgrane skany, faktury, podpisane PDF) trafiają do kopii co noc – tylko nowe, raz skopiowane zostają
           na stałe (także po usunięciu umowy). Do zapisania poza Supabase: „Pobierz nowe pliki umów” – ZIP tylko z plikami, których
           jeszcze nie pobierałeś (najwyżej 300 umów naraz; gdy jest więcej, kliknij ponownie).
         </p>

@@ -12,6 +12,15 @@ export async function GET(req: Request) {
   if (!cronAuthorized(req)) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const db = createAdminClient();
   try {
+    // Kopia bazy co 2 dni (odczyt całej bazy to sporo transferu); pliki umów i porządki – codziennie.
+    const { data: lastOk } = await db.from("sync_log").select("created_at, message").eq("job", "backup").eq("ok", true).like("message", "%json.gz%").order("created_at", { ascending: false }).limit(1).maybeSingle();
+    if (lastOk && Date.now() - Date.parse(lastOk.created_at as string) < 44 * 3600_000) {
+      const files = await backupContractFiles(db).catch((e) => ({ error: errorMessage(e) }));
+      const logRemoved = await pruneSyncLog(db).catch(() => 0);
+      await pruneNewContractZips(db).catch(() => 0);
+      await db.from("sync_log").insert({ job: "backup", ok: true, message: JSON.stringify({ skippedDb: "kopia bazy co 2 dni", logRemoved, files }) });
+      return NextResponse.json({ ok: true, skippedDb: true });
+    }
     const r = await createDbBackup(db);
     const pruned = await pruneBackups(db).catch(() => 0);
     // Stare wpisy dziennika automatu (udane > 30 dni, błędy > 90 dni) – żeby baza nie rosła bez końca.

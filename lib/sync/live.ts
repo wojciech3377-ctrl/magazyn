@@ -6,11 +6,11 @@ import { reconcileRecentFromShopify } from "@/lib/sync/shopify-stock";
 import { errorMessage } from "@/lib/errors";
 
 /**
- * Odczyt „na żywo” (gdy ktoś ma otwartą aplikację – co ~20 s, i z zadania cyklicznego co minutę):
+ * Odczyt „na żywo” (gdy ktoś ma otwartą aplikację – co ~60 s, i z zadania cyklicznego co minutę):
  * ostatnie 5 zmienionych zamówień z każdego sklepu i stany zmienione w Shopify od ostatniego sprawdzenia.
  * Blokada: najwyżej raz na `minGapMs` dla wszystkich użytkowników razem.
  */
-export async function runLiveSync(db: SupabaseClient, minGapMs = 15_000) {
+export async function runLiveSync(db: SupabaseClient, minGapMs = 45_000) {
   const now = Date.now();
   const { data: st } = await db.from("sync_state").select("value").eq("key", "live_sync").maybeSingle();
   const last = (st?.value as { at?: string } | null)?.at;
