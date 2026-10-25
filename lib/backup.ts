@@ -155,3 +155,95 @@ export async function pruneSyncLog(db: SupabaseClient, deadline = Date.now() + 6
   }
   return removed;
 }
+
+const FILES_DIR = "umowy-pliki";
+const dirOf = (p: string) => p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
+
+/** Pliki umów (ścieżki z contracts.file_path). */
+async function contractFilePaths(db: SupabaseClient) {
+  const rows: { id: string; file_path: string }[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await db.from("contracts").select("id, file_path").not("file_path", "is", null).order("id").range(from, from + 999);
+    if (error) throw error;
+    rows.push(...((data ?? []) as { id: string; file_path: string }[]));
+    if ((data ?? []).length < 1000) break;
+  }
+  return rows.filter((r) => /^[A-Za-z0-9_\-/]+\.[A-Za-z0-9]{1,5}$/.test(r.file_path) && !r.file_path.includes(".."));
+}
+
+/** Pliki w kopii (backups/umowy-pliki/<folder>) z datą skopiowania. */
+async function backedUpFiles(db: SupabaseClient, dir: string) {
+  const out = new Map<string, string | null>();
+  for (let offset = 0; ; offset += 1000) {
+    const { data, error } = await db.storage.from("backups").list(`${FILES_DIR}/${dir}`.replace(/\/$/, ""), { limit: 1000, offset });
+    if (error) throw new Error(/bucket|not found/i.test(error.message) ? "Brak miejsca na kopie – uruchom SQL 73 w Supabase." : error.message);
+    for (const f of data ?? []) if (f.id) out.set(dir ? `${dir}/${f.name}` : f.name, f.created_at ?? null);
+    if ((data ?? []).length < 1000) break;
+  }
+  return out;
+}
+
+/**
+ * Pliki umów do kopii: tylko te, których jeszcze w niej nie ma (backups/umowy-pliki/<ta sama ścieżka>).
+ * Kopiowanie po stronie Supabase – pliki nie są pobierane (bez transferu), kopia zostaje na stałe
+ * (także po usunięciu umowy albo pliku w aplikacji).
+ */
+export async function backupContractFiles(db: SupabaseClient, deadline = Date.now() + 90_000) {
+  const files = await contractFilePaths(db);
+  const byDir = new Map<string, string[]>();
+  for (const f of files) byDir.set(dirOf(f.file_path), [...(byDir.get(dirOf(f.file_path)) ?? []), f.file_path]);
+  let copied = 0, already = 0, missing = 0;
+  const errors: string[] = [];
+  for (const [dir, paths] of byDir) {
+    if (Date.now() > deadline) break;
+    const have = await backedUpFiles(db, dir);
+    for (const p of [...new Set(paths)]) {
+      if (have.has(p)) { already++; continue; }
+      if (Date.now() > deadline) break;
+      const { error } = await db.storage.from("contracts").copy(p, `${FILES_DIR}/${p}`, { destinationBucket: "backups" });
+      if (!error) copied++;
+      else if (/not.?found|does not exist/i.test(error.message)) missing++; // plik usunięty ręcznie w Supabase
+      else if (errors.length < 3) errors.push(`${p}: ${error.message}`);
+    }
+  }
+  return { copied, already, missing, total: files.length, ...(errors.length ? { errors } : {}) };
+}
+
+/**
+ * ZIP z plikami umów, które trafiły do kopii od ostatniego takiego pobrania (do zapisania poza Supabase).
+ * Najwyżej 300 umów naraz – reszta przy kolejnym kliknięciu. ZIP leży w backups/umowy (30 dni).
+ */
+export async function createNewContractsArchive(db: SupabaseClient) {
+  await backupContractFiles(db, Date.now() + 60_000);
+  const { data: st } = await db.from("sync_state").select("value").eq("key", "contracts_new_download").maybeSingle();
+  const since = (st?.value as { at?: string } | null)?.at ?? "1970-01-01T00:00:00Z";
+  const files = await contractFilePaths(db);
+  const dirs = [...new Set(files.map((f) => dirOf(f.file_path)))];
+  const copiedAt = new Map<string, string | null>();
+  for (const d of dirs) for (const [p, at] of await backedUpFiles(db, d)) copiedAt.set(p, at);
+  const fresh = files
+    .map((f) => ({ ...f, at: copiedAt.get(f.file_path) ?? null }))
+    .filter((f) => f.at && Date.parse(f.at) > Date.parse(since))
+    .sort((a, b) => Date.parse(a.at!) - Date.parse(b.at!));
+  if (!fresh.length) throw new Error("Nie ma nowych plików umów od ostatniego pobrania.");
+  const batch = fresh.slice(0, 300);
+  const { contractsZip } = await import("@/lib/contracts/zip");
+  const zip = await contractsZip(db, [...new Set(batch.map((f) => f.id))].map((id) => ({ contractId: id, prefix: "" })), true);
+  if (!zip) throw new Error("Nie udało się przygotować plików umów.");
+  const stamp = new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Warsaw", dateStyle: "short", timeStyle: "medium" }).format(new Date()).replace(" ", "_").replace(/:/g, "-");
+  const path = `umowy/nowe-${stamp}.zip`;
+  const { error } = await db.storage.from("backups").upload(path, zip, { contentType: "application/zip", upsert: true });
+  if (error) throw new Error(error.message);
+  // Znacznik dopiero po zapisaniu ZIP-a (gdyby się nie udało – te same pliki pójdą następnym razem).
+  await db.from("sync_state").upsert({ key: "contracts_new_download", value: { at: batch[batch.length - 1].at }, updated_at: new Date().toISOString() });
+  return { path, contracts: batch.length, left: fresh.length - batch.length };
+}
+
+/** ZIP-y „nowe umowy” starsze niż 30 dni – usuwane (pliki i tak są w kopii umowy-pliki). */
+export async function pruneNewContractZips(db: SupabaseClient, days = 30) {
+  const files = await listBackups(db, "umowy");
+  const cutoff = Date.now() - days * 86400_000;
+  const old = files.filter((f) => f.name.startsWith("nowe-") && f.created_at && Date.parse(f.created_at) < cutoff).map((f) => f.path);
+  if (old.length) await db.storage.from("backups").remove(old);
+  return old.length;
+}

@@ -402,8 +402,10 @@ export async function makeBackupNow() {
   let msg: string;
   try {
     const r = await createDbBackup(admin());
+    const { backupContractFiles } = await import("@/lib/backup");
+    const f = await backupContractFiles(admin(), Date.now() + 60_000).catch(() => null);
     const rows = Object.values(r.counts).reduce((n, x) => n + x, 0);
-    msg = `Kopia gotowa: ${r.path} (${(r.size / 1024 / 1024).toFixed(1)} MB, ${rows} wierszy, ${r.seconds} s).${Object.keys(r.skipped).length ? ` Pominięte tabele: ${Object.keys(r.skipped).join(", ")}.` : ""}`;
+    msg = `Kopia gotowa: ${r.path} (${(r.size / 1024 / 1024).toFixed(1)} MB, ${rows} wierszy, ${r.seconds} s).${Object.keys(r.skipped).length ? ` Pominięte tabele: ${Object.keys(r.skipped).join(", ")}.` : ""}${f ? ` Pliki umów: ${f.copied} nowych skopiowanych, w kopii razem ${f.copied + f.already} z ${f.total}.` : ""}`;
   } catch (e) {
     return done(errorMessage(e), "blad");
   }

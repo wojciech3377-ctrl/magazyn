@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { cronAuthorized } from "@/lib/sync/jobs";
-import { createDbBackup, pruneBackups, pruneSyncLog } from "@/lib/backup";
+import { backupContractFiles, createDbBackup, pruneBackups, pruneNewContractZips, pruneSyncLog } from "@/lib/backup";
 import { errorMessage } from "@/lib/errors";
 
 export const dynamic = "force-dynamic";
@@ -16,7 +16,10 @@ export async function GET(req: Request) {
     const pruned = await pruneBackups(db).catch(() => 0);
     // Stare wpisy dziennika automatu (udane > 30 dni, błędy > 90 dni) – żeby baza nie rosła bez końca.
     const logRemoved = await pruneSyncLog(db).catch(() => 0);
-    await db.from("sync_log").insert({ job: "backup", ok: true, message: JSON.stringify({ path: r.path, size: r.size, seconds: r.seconds, pruned, logRemoved, skipped: r.skipped }) });
+    // Pliki umów – tylko nowe (kopiowane po stronie Supabase, bez pobierania).
+    const files = await backupContractFiles(db).catch((e) => ({ error: errorMessage(e) }));
+    await pruneNewContractZips(db).catch(() => 0);
+    await db.from("sync_log").insert({ job: "backup", ok: true, message: JSON.stringify({ path: r.path, size: r.size, seconds: r.seconds, pruned, logRemoved, files, skipped: r.skipped }) });
     return NextResponse.json({ ok: true, path: r.path, size: r.size, pruned });
   } catch (e) {
     await db.from("sync_log").insert({ job: "backup", ok: false, message: errorMessage(e) });

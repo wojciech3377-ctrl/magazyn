@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { requireAdmin } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { backupUrl, createContractsArchive } from "@/lib/backup";
+import { backupUrl, createContractsArchive, createNewContractsArchive } from "@/lib/backup";
 import { errorMessage } from "@/lib/errors";
 
 export const dynamic = "force-dynamic";
@@ -18,7 +18,8 @@ export async function GET(req: NextRequest) {
   const back = (msg: string) => NextResponse.redirect(new URL(`/ustawienia?zakladka=kopia&blad=${encodeURIComponent(msg)}`, req.url));
   try {
     let path = sp.get("plik") ?? "";
-    if (sp.get("umowy")) path = (await createContractsArchive(db, sp.get("umowy")!)).path;
+    if (sp.get("umowy") === "nowe") path = (await createNewContractsArchive(db)).path;
+    else if (sp.get("umowy")) path = (await createContractsArchive(db, sp.get("umowy")!)).path;
     const url = await backupUrl(db, path);
     if (!url) return back("Nie ma takiej kopii.");
     return NextResponse.redirect(url);
