@@ -38,3 +38,29 @@ export async function mailStaffAccount(db: SupabaseClient, kind: "new" | "reset"
     return `E-mail nie wysłany (${e instanceof Error ? e.message : String(e)}) – przekaż dane osobiście.`;
   }
 }
+
+/**
+ * E-mail do komisanta: konto w panelu komisanta (nowe, nowe hasło tymczasowe albo dostęp na koncie pracownika).
+ * Logowanie tym samym adresem /login – aplikacja sama przenosi komisanta do jego panelu.
+ */
+export async function mailConsignorAccount(db: SupabaseClient, kind: "new" | "reset" | "linked", to: string, password: string | null, name?: string | null) {
+  try {
+    if (!(await mailConfigured())) return "E-mail nie wysłany – poczta nie jest ustawiona (Ustawienia → Faktury i KSeF → SMTP). Przekaż dane osobiście.";
+    const [company, base] = await Promise.all([getCompany(db), appUrl()]);
+    const login = `${base}/login`;
+    const who = name ? `<p style="margin:0 0 12px">${esc(name)},</p>` : "";
+    const creds = `<p style="margin:0 0 12px">Login: <b>${esc(to)}</b>${password ? `<br>Hasło tymczasowe: <b style="font-family:monospace">${esc(password)}</b>` : ""}</p>`;
+    const what = `<p style="margin:0 0 12px">W panelu zobaczysz swoje rzeczy oddane w komis, sprzedaże, umowy do podpisu i rozliczenia.</p>`;
+    const body = kind === "new"
+      ? `${who}<p style="margin:0 0 12px">założyliśmy Ci konto w panelu komisanta ${esc(company.name)}.</p>${what}${creds}
+         <p style="margin:0 0 14px">Przy pierwszym logowaniu panel poprosi o ustawienie własnego hasła – hasło tymczasowe przestanie wtedy działać.</p>`
+      : kind === "reset"
+      ? `${who}<p style="margin:0 0 12px">ustawiliśmy Ci nowe hasło tymczasowe do panelu komisanta ${esc(company.name)}.</p>${creds}
+         <p style="margin:0 0 14px">Po zalogowaniu panel poprosi o ustawienie własnego hasła.</p>`
+      : `${who}<p style="margin:0 0 12px">Twoje konto (${esc(to)}) dostało dostęp do panelu komisanta ${esc(company.name)} – w menu „Mój komis”. Logujesz się dotychczasowym hasłem.</p>${what}`;
+    await sendMail(to, kind === "reset" ? `Nowe hasło tymczasowe – panel komisanta ${company.name}` : `Konto w panelu komisanta – ${company.name}`, layout(body, login));
+    return `E-mail z danymi logowania wysłany na ${to}.`;
+  } catch (e) {
+    return `E-mail nie wysłany (${e instanceof Error ? e.message : String(e)}) – przekaż dane osobiście.`;
+  }
+}

@@ -220,7 +220,7 @@ export default async function ConsignorPage({ params, searchParams }: { params: 
                   <input type="hidden" name="id" value={id} />
                   <input className="input" type="email" name="email" defaultValue={consignor.email ?? ""} placeholder="e-mail do logowania" aria-label="E-mail do logowania" required />
                   <input className="input" type="text" name="password" placeholder="hasło startowe (min. 10 znaków)" autoComplete="off" aria-label="Hasło startowe" />
-                  <p className="text-xs text-muted">Pracownik jako komisant: wpisz e-mail jego konta pracownika – konto zostanie połączone (hasło startowe niepotrzebne).</p>
+                  <p className="text-xs text-muted">Pracownik jako komisant: wpisz e-mail jego konta pracownika – konto zostanie połączone (hasło startowe niepotrzebne). Komisant dostaje e-mail z loginem i hasłem startowym.</p>
                   <SubmitButton>Utwórz konto komisanta</SubmitButton>
                 </form>
               )}

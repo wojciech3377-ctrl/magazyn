@@ -7,6 +7,7 @@ import { requireAdmin, requireSection } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { adjustStock } from "@/lib/stock";
 import { errorMessage } from "@/lib/errors";
+import { mailConsignorAccount } from "@/lib/staff-mail";
 
 const s = (fd: FormData, k: string) => String(fd.get(k) ?? "").trim();
 const back = (id: string, msg: string, ok = true): never => redirect(`/komisanci/${id}?${ok ? "ok" : "blad"}=${encodeURIComponent(msg)}`);
@@ -50,7 +51,7 @@ export async function createConsignorAccount(formData: FormData) {
   const password = String(formData.get("password") ?? "");
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) back(id, "Podaj e-mail komisanta.", false);
   const db = createAdminClient();
-  const { data: c } = await db.from("consignors").select("id, user_id").eq("id", id).maybeSingle();
+  const { data: c } = await db.from("consignors").select("id, user_id, name").eq("id", id).maybeSingle();
   if (!c) back(id, "Nie ma takiego komisanta.", false);
   if (c!.user_id) back(id, "Ten komisant ma już konto.", false);
   // Pracownik może być też komisantem: to samo konto (ten sam e-mail i hasło) dostaje dostęp do panelu komisanta.
@@ -61,17 +62,19 @@ export async function createConsignorAccount(formData: FormData) {
     await db.from("consignors").update({ user_id: staff.id, email }).eq("id", id);
     await db.from("consignors").update({ must_change_password: false }).eq("id", id);
     forgetConsignorLink(staff.id);
+    const mail = await mailConsignorAccount(db, "linked", email, null, c!.name as string);
     revalidatePath(`/komisanci/${id}`);
-    back(id, `Połączono z kontem pracownika ${email}. Po zalogowaniu swoim hasłem ma w menu „Mój komis” – panel komisanta (hasło startowe nie jest potrzebne).`);
+    back(id, `Połączono z kontem pracownika ${email}. Po zalogowaniu swoim hasłem ma w menu „Mój komis” – panel komisanta (hasło startowe nie jest potrzebne). ${mail}`);
   }
   if (password.length < 10) back(id, "Podaj hasło startowe (min. 10 znaków).", false);
   const { data, error } = await db.auth.admin.createUser({ email, password, email_confirm: true, user_metadata: { kind: "consignor", consignor_id: id } });
-  if (error || !data.user) back(id, `Nie udało się utworzyć konta: ${error?.message ?? "błąd"}`, false);
+  if (error || !data.user) back(id, /already|registered|exists/i.test(error?.message ?? "") ? "Konto z tym e-mailem już istnieje (np. komisant u innego wpisu) – użyj innego adresu albo odepnij stare konto." : `Nie udało się utworzyć konta: ${error?.message ?? "błąd"}`, false);
   await db.from("consignors").update({ user_id: data.user!.id, email: email }).eq("id", id);
   // Przy pierwszym logowaniu komisant ustawia własne hasło (bez migracji 0039 – pomijamy).
   await db.from("consignors").update({ must_change_password: true }).eq("id", id);
+  const mail = await mailConsignorAccount(db, "new", email, password, c!.name as string);
   revalidatePath(`/komisanci/${id}`);
-  back(id, `Konto ${email} utworzone. Przekaż komisantowi adres aplikacji i hasło startowe – przy pierwszym logowaniu ustawi własne hasło.`);
+  back(id, `Konto ${email} utworzone. ${mail} Przy pierwszym logowaniu komisant ustawi własne hasło.`, !/nie wysłany/.test(mail));
 }
 
 /** Zablokowanie dostępu: konto komisanta jest usuwane (dane i historia komisu zostają). */
@@ -96,13 +99,17 @@ export async function resetConsignorPassword(formData: FormData) {
   const password = String(formData.get("password") ?? "");
   if (password.length < 10) back(id, "Hasło musi mieć min. 10 znaków.", false);
   const db = createAdminClient();
-  const { data: c } = await db.from("consignors").select("user_id").eq("id", id).maybeSingle();
+  const { data: c } = await db.from("consignors").select("user_id, email, name").eq("id", id).maybeSingle();
   if (!c?.user_id) back(id, "Komisant nie ma konta.", false);
   if (await isStaffAccount(db, c!.user_id as string)) back(id, "To konto pracownika – hasło zmienia się w Pracownicy (albo pracownik sam, w swoim profilu).", false);
   const { error } = await db.auth.admin.updateUserById(c!.user_id as string, { password });
   if (error) back(id, error.message, false);
   await db.from("consignors").update({ must_change_password: true }).eq("id", id);
-  back(id, "Hasło tymczasowe ustawione – komisant po zalogowaniu ustawi własne hasło.");
+  // Adres logowania – z konta (e-mail w danych komisanta mógł się zmienić).
+  const { data: u } = await db.auth.admin.getUserById(c!.user_id as string);
+  const to = u?.user?.email ?? (c!.email as string | null);
+  const mail = to ? await mailConsignorAccount(db, "reset", to, password, c!.name as string) : "E-mail nie wysłany – brak adresu e-mail.";
+  back(id, `Hasło tymczasowe ustawione – komisant po zalogowaniu ustawi własne hasło. ${mail}`, !/nie wysłany/.test(mail));
 }
 
 /** Wypłata dla komisanta (przelew) – zmniejsza kwotę do wypłaty. Kwota ujemna = korekta. */
