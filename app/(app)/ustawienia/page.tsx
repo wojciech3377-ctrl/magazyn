@@ -113,7 +113,7 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
           ]);
           return { store: m, shopLocs: locsR, done: done ?? 0, total: total ?? 0, queued: queued ?? 0, failed: (failed ?? []) as unknown as { last_error: string | null; attempts: number; product: { title: string } | null }[] };
         }));
-        return { rows, replace, candidates: list };
+        return { rows, replace, candidates: list, master: await getStockMaster(db) };
       })()
     : null;
   const ordersDefault = isAdmin && tab === "sklepy" ? await defaultOrderStore(supabase, (stores ?? []) as { id: string; name: string }[]) : "";
@@ -237,6 +237,7 @@ export default async function UstawieniaPage({ searchParams }: { searchParams: P
               <h2 className="h2 mb-1">Sklep-kopia</h2>
               <p className="text-sm text-muted">Te same produkty co w sklepie źródłowym: aplikacja tworzy je i aktualizuje w kopii (tytuł, opis, zdjęcia, rozmiary, ceny, tagi, status), a stany liczy z tych samych sztuk. Zamówienie z kopii zdejmuje sztukę z magazynu i od razu zmniejsza stan w obu sklepach.</p>
             </div>
+            {mirrors.rows.length > 0 && mirrors.master !== "app" && <Notice tone="error">Główny stan to teraz Shopify. Przy sklepie-kopii ustaw w zakładce Stany magazynowe „Magazyn aplikacji” – inaczej zmiany stanu zrobione ręcznie w Shopify sklepu źródłowego dojdą do kopii z opóźnieniem (ryzyko sprzedaży tej samej sztuki dwa razy).</Notice>}
             {mirrors.rows.length === 0 && <p className="text-sm text-muted">Żaden sklep nie jest kopią. Wybierz niżej sklep źródłowy przy sklepie, który ma być kopią.</p>}
             {mirrors.rows.map(({ store: m, shopLocs, done: linked, total, queued, failed }) => (
               <div key={m.id} className="space-y-3 rounded-md border border-line p-3">

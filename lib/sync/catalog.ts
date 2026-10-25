@@ -337,7 +337,7 @@ export async function splitSameStoreDuplicates(db: SupabaseClient, limit = 20) {
   let split = 0;
   for (const g of groups) {
     const store = (stores ?? []).find((s) => s.id === g.store_id) as Store | undefined;
-    if (!store?.shopify_domain) continue;
+    if (!store?.shopify_domain || store.mirror_of) continue;
     split += await splitProductGids(db, store, g.shopify_product_ids);
   }
   return { split };
@@ -345,6 +345,8 @@ export async function splitSameStoreDuplicates(db: SupabaseClient, limit = 20) {
 
 /** Pierwszy produkt Shopify zostaje przy produkcie aplikacji, pozostałe (ten sam SKU, ten sam sklep) dostają własne. */
 export async function splitProductGids(db: SupabaseClient, store: Store, gids: string[]) {
+  // Sklep-kopia: jego produkty wskazują produkty źródła – bez rozdzielania (zrobiłoby osierocone produkty w kopii).
+  if (store.mirror_of) return 0;
   let split = 0;
   for (const gid of gids.slice(1)) {
     const product = await getProduct(store.shopify_domain!, store.code, gid).catch(() => null);

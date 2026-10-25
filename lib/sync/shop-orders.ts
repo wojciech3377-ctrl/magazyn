@@ -129,8 +129,12 @@ async function saveOrderBatch(db: SupabaseClient, storeId: string, orders: Shopi
   const { data, error } = await db.from("orders").upsert(rows, { onConflict: "shopify_order_id" }).select("id, shopify_order_id, cancelled_at");
   if (error) throw error;
   const ids = (data ?? []).map((r) => r.id as string);
+  // Sztuki wracające na stan przy anulowaniu (do wyrównania stanu w drugim sklepie przy sklepie-kopii).
+  const released: { variantId: string; locationId: string }[] = [];
   for (const o of data ?? []) {
     if (o.cancelled_at && wasOpen.has(o.shopify_order_id as string)) {
+      const { data: back } = await db.from("sales").select("variant_id, unit:units(location_id)").eq("order_id", o.id).not("unit_id", "is", null);
+      for (const b of (back ?? []) as unknown as { variant_id: string; unit: { location_id: string } | null }[]) if (b.unit) released.push({ variantId: b.variant_id, locationId: b.unit.location_id });
       const { error: relErr } = await db.rpc("release_order_sales", { p_order_id: o.id });
       if (relErr) throw relErr;
     }
@@ -138,13 +142,16 @@ async function saveOrderBatch(db: SupabaseClient, storeId: string, orders: Shopi
   await refreshOrderStatus(db, ids);
   // Nowe zamówienia: linie sprzedaży i sztuki z magazynu od razu ze Shopify.
   const startedAt = new Date(Date.now() - 2000).toISOString();
-  const { error: salesErr } = await db.rpc("register_shopify_sales", { p_order_ids: ids });
+  const { data: newSales, error: salesErr } = await db.rpc("register_shopify_sales", { p_order_ids: ids });
   if (salesErr) throw salesErr;
   // Para z magazynu zużyta na produkt „z bazowego modelu”: w Shopify stan bazowego modelu nie spadł sam – zdejmujemy.
   if (madeFrom.size) await settleMadeFromStock(db, ids, startedAt).catch(() => null);
   // Sklep-kopia (np. Owca Store ↔ Sneakers Depot): ta sama sztuka w dwóch sklepach – po zamówieniu / anulowaniu
   // od razu stan w drugim sklepie (inaczej przez kilka minut mógłby sprzedać ją drugi raz).
-  await syncSharedStock(db, ids).catch(() => null);
+  if (Number(newSales ?? 0) > 0 || released.length) {
+    await syncSharedStock(db, storeId, ids, startedAt, released)
+      .catch((e) => db.from("sync_log").insert({ job: "shared-stock", ok: false, message: errorMessage(e) }).then(() => null, () => null));
+  }
   return ids;
 }
 
@@ -206,16 +213,25 @@ async function settleMadeFromStock(db: SupabaseClient, orderIds: string[], since
   else await (await import("@/lib/stock")).adjustStock(db, changes);
 }
 
-async function syncSharedStock(db: SupabaseClient, orderIds: string[]) {
+async function syncSharedStock(db: SupabaseClient, storeId: string, orderIds: string[], since: string, released: { variantId: string; locationId: string }[]) {
   const { hasMirrorStores, pushVariantsNow, getStockMaster } = await import("@/lib/sync/shopify-stock");
   if (!orderIds.length || !(await hasMirrorStores(db))) return;
-  const variants = new Set<string>();
-  for (let i = 0; i < orderIds.length; i += 100) {
-    const { data } = await db.from("sales").select("variant_id").in("order_id", orderIds.slice(i, i + 100)).not("variant_id", "is", null);
-    for (const r of data ?? []) variants.add(r.variant_id as string);
+  const { data: fresh } = await db.from("sales").select("variant_id, unit:units(location_id)").in("order_id", orderIds.slice(0, 200)).gte("created_at", since).not("unit_id", "is", null);
+  const reserved = ((fresh ?? []) as unknown as { variant_id: string; unit: { location_id: string } | null }[]).filter((r) => r.unit).map((r) => ({ variantId: r.variant_id, locationId: r.unit!.location_id }));
+  const variants = [...new Set([...reserved, ...released].map((r) => r.variantId))];
+  if (!variants.length) return;
+  if ((await getStockMaster(db)) === "app") {
+    await pushVariantsNow(db, variants);
+    return;
   }
-  if (!variants.size) return;
-  await pushVariantsNow(db, [...variants], { mirrorsOnly: (await getStockMaster(db)) !== "app" });
+  // Główny Shopify: zamówienie ze sklepu-kopii – w Shopify sklepu źródłowego stan sam nie spadł (ani nie wrócił przy anulowaniu).
+  const { data: st } = await db.from("stores").select("*").eq("id", storeId).maybeSingle();
+  if ((st as { mirror_of?: string | null } | null)?.mirror_of) {
+    const { adjustStock } = await import("@/lib/stock");
+    await adjustStock(db, [...reserved.map((r) => ({ ...r, delta: -1 })), ...released.map((r) => ({ ...r, delta: 1 }))]); // wyrównuje też kopie
+  } else {
+    await pushVariantsNow(db, variants, { mirrorsOnly: true });
+  }
 }
 
 /** Odczyt zamówień ze sklepów Shopify zmienionych od ostatniego razu. */

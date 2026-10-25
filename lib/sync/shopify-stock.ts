@@ -613,13 +613,15 @@ export async function pushVariantsNow(db: SupabaseClient, variantIds: string[], 
       const { data: held } = recentGids.size ? await db.from("variant_store_links").select("variant_id").eq("store_id", s.id).in("shopify_variant_id", [...recentGids]) : { data: [] };
       const hold = new Set((held ?? []).map((h) => h.variant_id as string));
       // Aktualny stan w Shopify tych pozycji.
-      const levels = new Map<string, number>(); // `${item}|${loc}` → ilość
+      const levels = new Map<string, number>(); // `${item}|${loc}` → ilość (brak klucza = rozmiar nieaktywny w lokalizacji)
       const items = [...new Set(links.map((l) => l.shopify_inventory_item_id))];
-      for (let i = 0; i < items.length; i += 100) {
-        const d = await shopifyGraphql<{ nodes: ({ id: string; inventoryLevels: { nodes: { location: { id: string }; quantities: { quantity: number }[] }[] } } | null)[] }>(s.shopify_domain, s.code,
-          `query L($ids: [ID!]!) { nodes(ids: $ids) { ... on InventoryItem { id inventoryLevels(first: 20) { nodes { location { id } quantities(names: ["available"]) { quantity } } } } } }`,
-          { ids: items.slice(i, i + 100) });
-        for (const n of d.nodes) if (n?.inventoryLevels) for (const lv of n.inventoryLevels.nodes) levels.set(`${n.id}|${lv.location.id}`, lv.quantities[0]?.quantity ?? 0);
+      for (const loc of new Set(shopLocOf.values())) {
+        for (let i = 0; i < items.length; i += 50) {
+          const d = await shopifyGraphql<{ nodes: ({ id: string; inventoryLevel: { quantities: { quantity: number }[] } | null } | null)[] }>(s.shopify_domain, s.code,
+            `query L($ids: [ID!]!, $loc: ID!) { nodes(ids: $ids) { ... on InventoryItem { id inventoryLevel(locationId: $loc) { quantities(names: ["available"]) { quantity } } } } }`,
+            { ids: items.slice(i, i + 50), loc });
+          for (const n of d.nodes) if (n?.inventoryLevel) levels.set(`${n.id}|${loc}`, n.inventoryLevel.quantities[0]?.quantity ?? 0);
+        }
       }
       const changes: Change[] = [];
       const activate: Activation[] = [];

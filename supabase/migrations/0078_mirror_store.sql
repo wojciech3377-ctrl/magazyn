@@ -32,6 +32,50 @@ revoke all on public.mirror_queue from public, anon;
 grant select on public.mirror_queue to authenticated;
 grant all on public.mirror_queue to service_role;
 
+-- Jeden produkt kopii na produkt aplikacji (wiersze kopii mają mirror_hash) – bez duplikatów przy równoczesnych przebiegach.
+do $$ begin
+  create unique index if not exists product_store_links_mirror_one on public.product_store_links (store_id, product_id) where mirror_hash is not null;
+exception when unique_violation then raise notice 'Duplikaty produktów kopii – usuń je przed ponownym uruchomieniem: %', sqlerrm;
+end $$;
+-- Zajęcie produktu przez jeden przebieg kopii naraz (webhook, automat, przycisk) – na 5 minut.
+alter table public.mirror_queue add column if not exists claimed_at timestamptz;
+create or replace function public.mirror_claim(p_store uuid, p_product uuid) returns boolean
+language plpgsql security definer set search_path = public as $$
+begin
+  insert into public.mirror_queue (store_id, product_id) values (p_store, p_product) on conflict do nothing;
+  update public.mirror_queue set claimed_at = now()
+   where store_id = p_store and product_id = p_product and (claimed_at is null or claimed_at < now() - interval '5 minutes');
+  return found;
+end $$;
+revoke all on function public.mirror_claim(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.mirror_claim(uuid, uuid) to service_role;
+
+-- Sztuka do zamówienia: ze sklepu zamówienia; zamówienie ze sklepu-kopii – tylko ze sztuk sklepu źródłowego
+-- (lokalizacje z przypisaną lokalizacją Shopify), nie z innego sklepu.
+create or replace function public.pick_unit_for_sale(p_variant_id uuid, p_store_id uuid default null)
+returns uuid
+language sql
+as $$
+  with s as (
+    select coalesce((select st.mirror_of from public.stores st where st.id = p_store_id), p_store_id) as sid,
+           exists (select 1 from public.stores st where st.id = p_store_id and st.mirror_of is not null) as mirror
+  )
+  select u.id
+  from public.units u
+  join public.locations l on l.id = u.location_id
+  cross join s
+  where u.variant_id = p_variant_id
+    and u.status = 'in_stock'
+    and (not s.mirror or (l.store_id = s.sid and l.active and l.shopify_location_id is not null))
+  order by
+    (s.sid is not null and l.store_id = s.sid) desc,
+    (u.owner_type = 'consignment') asc,
+    u.received_at asc,
+    u.number asc
+  limit 1
+  for update of u skip locked;
+$$;
+
 -- Sklep Owca Store jako kopia Sneakers Depot (domenę Shopify ustawiasz w Ustawieniach → Sklepy i lokalizacje).
 insert into public.stores (code, name, mirror_of)
 select 'owca-store', 'Owca Store', s.id from public.stores s

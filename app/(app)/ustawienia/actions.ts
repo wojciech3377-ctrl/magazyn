@@ -417,6 +417,20 @@ export async function saveMirror(formData: FormData) {
   const source = String(formData.get("mirror_of") ?? "");
   const loc = String(formData.get("mirror_location_id") ?? "");
   if (source === id) return done("Sklep nie może być kopią samego siebie.", "blad");
+  if (source) {
+    // Kopią może zostać tylko sklep bez własnego towaru (bez lokalizacji i własnych produktów) – inaczej aplikacja
+    // nadpisałaby jego produkty produktami źródła. Źródło nie może być samo kopią.
+    const db = createAdminClient();
+    const [{ data: src }, { count: locCount }, { count: ownLinks }] = await Promise.all([
+      db.from("stores").select("*").eq("id", source).maybeSingle(),
+      db.from("locations").select("id", { count: "exact", head: true }).eq("store_id", id),
+      db.from("product_store_links").select("id", { count: "exact", head: true }).eq("store_id", id).is("mirror_hash", null),
+    ]);
+    if (!src) return done("Nie ma takiego sklepu źródłowego.", "blad");
+    if ((src as { mirror_of?: string | null }).mirror_of) return done("Sklep źródłowy sam jest kopią – wybierz sklep z własnym towarem.", "blad");
+    if (locCount) return done("Ten sklep ma lokalizacje w aplikacji – kopią może być tylko sklep bez własnego towaru.", "blad");
+    if (ownLinks) return done("Ten sklep ma już własne produkty w aplikacji – kopią może być tylko nowy sklep.", "blad");
+  }
   if (loc && !/^gid:\/\/shopify\/Location\/\d+$/.test(loc)) return done("Wybierz lokalizację Shopify z listy.", "blad");
   const { error } = await supabase.from("stores").update({ mirror_of: source || null, ...(formData.has("mirror_location_id") ? { mirror_location_id: loc || null } : {}) }).eq("id", id);
   if (error) return done(/mirror_/.test(error.message) ? "Sklep-kopia wymaga SQL 78 w Supabase (0078_mirror_store.sql)." : error.message, "blad");
