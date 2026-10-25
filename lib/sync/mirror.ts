@@ -253,8 +253,8 @@ export async function mirrorProduct(db: SupabaseClient, pair: MirrorPair, produc
         price: v.price,
         compareAtPrice: v.compareAtPrice,
         taxable: v.taxable,
-        // Wspólne sztuki – kopia nigdy nie sprzedaje „na minus”.
-        inventoryPolicy: "DENY",
+        // „Sprzedawaj po wyczerpaniu zapasów” – tak samo jak w sklepie źródłowym.
+        inventoryPolicy: v.inventoryPolicy === "CONTINUE" ? "CONTINUE" : "DENY",
         // Kod kreskowy (EAN) – API 2026-07: pole barcode (tekst).
         ...(v.barcode ? { barcode: v.barcode } : {}),
         inventoryItem: { tracked, requiresShipping: v.inventoryItem?.requiresShipping ?? true },
@@ -361,6 +361,18 @@ export async function runMirror(db: SupabaseClient, opts: { deadline: number; ba
   const pairs = await mirrorPairs(db, true);
   const out: Record<string, unknown> = {};
   const settings = await mirrorSettings(db);
+  // Jednorazowo po zmianie (sprzedaż po wyczerpaniu jak w źródle): skopiowane produkty od nowa do kolejki –
+  // zmienią się tylko te, które w źródle mają „sprzedawaj po wyczerpaniu”, reszta przejdzie jako „bez zmian”.
+  const { data: once } = await db.from("sync_state").select("key").eq("key", "mirror_policy_v1").maybeSingle();
+  if (!once && pairs.length) {
+    const now = new Date().toISOString();
+    for (const pair of pairs) {
+      const ids = await allRows<{ product_id: string }>((f) => db.from("product_store_links").select("product_id").eq("store_id", pair.mirror.id).not("mirror_hash", "is", null).order("id").range(f, f + 999));
+      const rows = [...new Set(ids.map((r) => r.product_id))].map((product_id) => ({ store_id: pair.mirror.id, product_id, queued_at: now, attempts: 0, last_error: null }));
+      for (let i = 0; i < rows.length; i += 500) await db.from("mirror_queue").upsert(rows.slice(i, i + 500), { onConflict: "store_id,product_id" });
+    }
+    await db.from("sync_state").upsert({ key: "mirror_policy_v1", value: { at: now }, updated_at: now });
+  }
   for (const pair of pairs) {
     const stats = { utworzone: 0, zaktualizowane: 0, bez_zmian: 0, archiwum: 0, wykluczone: 0, bledy: 0, brakuje: 0 } as Record<string, number>;
     const errors: string[] = [];
