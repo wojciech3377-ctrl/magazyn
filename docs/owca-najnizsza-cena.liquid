@@ -14,7 +14,7 @@
 { {%- for v in product.variants -%}
   {%- assign l = v.metafields.magazyn.lowest_price_30d.value -%}
   {%- if l != blank -%}{%- assign lc = l | times: 100 | round -%}{%- else -%}{%- assign lc = v.price -%}{%- endif -%}
-  "{{ v.id }}": { "l": {{ lc | money | json }}, "s": {% if v.compare_at_price > v.price %}true{% else %}false{% endif %} }{% unless forloop.last %},{% endunless %}
+  "{{ v.id }}": { "l": {{ lc | money | strip_html | json }}, "s": {% if v.compare_at_price > v.price %}true{% else %}false{% endif %} }{% unless forloop.last %},{% endunless %}
 {%- endfor -%} }
 </script>
 <script>
