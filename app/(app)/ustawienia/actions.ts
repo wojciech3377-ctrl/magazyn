@@ -522,11 +522,15 @@ export async function runMirrorNow() {
   await requireAdmin();
   const { runMirror } = await import("@/lib/sync/mirror");
   const admin = createAdminClient();
-  const r = await runMirror(admin, { deadline: Date.now() + 150_000, backfill: 2000 }).catch((e) => ({ błąd: errorMessage(e) }));
+  const r = await runMirror(admin, { deadline: Date.now() + 110_000, backfill: 2000 }).catch((e) => ({ błąd: errorMessage(e) }));
   // Produkty spoza magazynu (np. Rope) – w czasie, który został.
   const { runMirrorExtras } = await import("@/lib/sync/mirror");
   const ex = await runMirrorExtras(admin, { deadline: Date.now() + 60_000 }).catch((e) => ({ błąd: errorMessage(e) }));
   for (const [k, v] of Object.entries(ex)) (r as Record<string, unknown>)[`${k} (spoza magazynu, np. Rope)`] = v;
+  // Najniższa cena z 30 dni pod ceną w kopii – dzisiejsza porcja (reszta w kolejnych przebiegach automatu).
+  const { refreshMirrorOmnibus } = await import("@/lib/sync/mirror-omnibus");
+  const om = await refreshMirrorOmnibus(admin, { deadline: Date.now() + 60_000 }).catch((e) => ({ błąd: errorMessage(e) }));
+  for (const [k, v] of Object.entries(om)) (r as Record<string, unknown>)[`${k} (najniższa cena 30 dni)`] = v;
   const text = Object.entries(r).map(([k, v]) => `${k}: ${typeof v === "string" ? v : Object.entries(v as Record<string, unknown>).filter(([kk]) => kk !== "errors").map(([kk, vv]) => `${kk.replace(/_/g, " ")} ${vv}`).join(", ")}`).join(" · ");
   const errs = Object.values(r).flatMap((v) => (v && typeof v === "object" && "errors" in v ? (v as { errors: string[] }).errors : []));
   await done(`${text || "Brak sklepów-kopii z domeną Shopify."}${errs.length ? ` Błędy: ${errs.join("; ")}` : ""}`, errs.length ? "blad" : "ok");
