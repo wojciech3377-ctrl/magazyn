@@ -63,11 +63,13 @@ export function fiscalName(s: string) {
 const round = (n: number) => Math.round(n * 100) / 100;
 const PAYMENT: Record<string, PaymentMethod> = { cash: "cash", card: "card", blik: "mobile", transfer: "transfer", other: "cash", mobile: "mobile" };
 
-async function insertJob(db: SupabaseClient, row: { source: "pos" | "order"; pos_order_id?: string; order_id?: string; lines: FiscalLine[]; payment: string; created_by: string }) {
+async function insertJob(db: SupabaseClient, row: { source: "pos" | "order"; pos_order_id?: string; order_id?: string; lines: FiscalLine[]; payment: string; created_by: string; order_lines?: string[] }) {
   const total = round(row.lines.reduce((s, l) => s + l.qty * l.price, 0));
   if (!row.lines.length || total <= 0) throw new Error("Paragon nie ma pozycji do wydruku.");
   const { data, error } = await db.from("receipt_jobs").insert({ ...row, total }).select("id, number, status").single();
   if (error) {
+    if (/mają już paragon/.test(error.message)) throw new Error(error.message);
+    if (/order_lines/.test(error.message)) throw new Error("Paragon częściowy wymaga SQL 81 w Supabase (0081_partial_fulfillment.sql).");
     if (error.code === "23505") throw new Error("Do tej sprzedaży paragon jest już w kolejce albo wydrukowany.");
     throw error;
   }
@@ -103,11 +105,20 @@ export async function enqueuePosReceipt(db: SupabaseClient, posOrderId: string, 
  * Pozycje paragonu do zamówienia ze sklepu: towary (marża / 23% wg sztuki), pozycje spoza magazynu (np. sznurówki rope –
  * stawka z reguły wykluczenia), wysyłka. Zawsze z bieżących danych i ustawień (także przy „Ponów”).
  */
-export async function orderReceiptLines(db: SupabaseClient, orderId: string) {
+/** ID „pozycji” kosztu wysyłki na paragonie częściowym. */
+export const SHIPPING_LINE = "shipping";
+
+/**
+ * Pozycje paragonu do zamówienia. only – paragon częściowy: ID pozycji zamówienia (Shopify) i ewentualnie
+ * SHIPPING_LINE (koszt wysyłki); bez only – całe zamówienie.
+ */
+export async function orderReceiptLines(db: SupabaseClient, orderId: string, only?: string[] | null) {
   const d = await draftFromOrder(db, orderId);
   if (!d) throw new Error("Nie ma takiego zamówienia.");
   const s = await getFiscalSettings(db);
-  const lines: FiscalLine[] = d.items.map((i) => {
+  const pick = only ? new Set(only) : null;
+  const items = pick ? d.items.filter((i) => (i.line_id ? pick.has(i.line_id) : pick.has(SHIPPING_LINE))) : d.items;
+  const lines: FiscalLine[] = items.map((i) => {
     const ptu = i.unit === "usł." ? s.ptuService : i.excluded ? (i.vat === "23" ? s.ptuService : s.ptuMargin) : i.vat === "23" ? s.ptu23 : s.ptuMargin;
     return { name: fiscalName(i.name), qty: i.quantity, price: round(i.unit_price_gross), ptu, rate: rateOf(s, ptu) };
   });
@@ -115,13 +126,19 @@ export async function orderReceiptLines(db: SupabaseClient, orderId: string) {
 }
 
 /** Paragon do zamówienia ze sklepu – do kolejki drukarki. */
-export async function enqueueOrderReceipt(db: SupabaseClient, orderId: string, userId: string) {
+export async function enqueueOrderReceipt(db: SupabaseClient, orderId: string, userId: string, only?: string[] | null) {
   const { data: o } = await db.from("orders").select("id, cancelled_at, receipt_id").eq("id", orderId).maybeSingle();
   if (!o) throw new Error("Nie ma takiego zamówienia.");
   if (o.cancelled_at) throw new Error("Zamówienie jest anulowane.");
   if (o.receipt_id) throw new Error(`Paragon do tego zamówienia już jest (nr ${o.receipt_id}).`);
-  const { lines, payment } = await orderReceiptLines(db, orderId);
-  return insertJob(db, { source: "order", order_id: orderId, lines, payment, created_by: userId });
+  if (only && !only.length) throw new Error("Zaznacz pozycje na paragon.");
+  if (!only) {
+    // Paragon do całego zamówienia, gdy są już paragony częściowe – nie (pozycje poszłyby drugi raz).
+    const { data: partial, error: pe } = await db.from("receipt_jobs").select("id").eq("order_id", orderId).not("order_lines", "is", null).in("status", ["queued", "printing", "printed"]).limit(1);
+    if (!pe && partial?.length) throw new Error("To zamówienie ma już paragon częściowy – resztę pozycji wydrukuj w zamówieniu („Paragon do zaznaczonych”).");
+  }
+  const { lines, payment } = await orderReceiptLines(db, orderId, only);
+  return insertJob(db, { source: "order", order_id: orderId, lines, payment, created_by: userId, ...(only ? { order_lines: [...new Set(only)] } : {}) });
 }
 
 /** Nowy klucz programu drukarki: zwracany raz (do wpisania w programie), w bazie tylko skrót. */

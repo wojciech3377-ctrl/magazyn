@@ -23,7 +23,10 @@ export type LabelDefaults = {
   description: string;
 };
 
-export function LabelForm({ d }: { d: LabelDefaults }) {
+/** Pozycja zamówienia do wyboru zawartości paczki (sent – sztuk już w innych paczkach z aplikacji). */
+export type PackLine = { id: string; title: string; variant: string | null; quantity: number; sent: number };
+
+export function LabelForm({ d, lines = [] }: { d: LabelDefaults; lines?: PackLine[] }) {
   const [state, action, pending] = useActionState<LabelState, FormData>(createLabel, null);
   const [service, setService] = useState<ServiceKey>(d.service);
   const locker = toPoint(service);
@@ -65,6 +68,7 @@ export function LabelForm({ d }: { d: LabelDefaults }) {
   return (
     <form ref={formRef} action={action} className="space-y-4" onChange={(e) => { const n = (e.target as HTMLInputElement).name; if (n && !["service", "size", "fulfill", "notify", "description"].includes(n)) requote(); }}>
       <input type="hidden" name="order_id" value={d.orderId} />
+      {lines.reduce((n, l) => n + l.quantity, 0) > 1 && <PackContents lines={lines} />}
       <fieldset className="flex flex-wrap gap-2">
         <legend className="label mb-1">Przewoźnik</legend>
         {(Object.keys(SERVICE_LABEL) as ServiceKey[]).map((k) => {
@@ -152,5 +156,41 @@ export function LabelForm({ d }: { d: LabelDefaults }) {
       <button className="btn" disabled={pending || !size || (lockerOnly(service) && size === "custom")}>{pending ? "Tworzę etykietę…" : `Utwórz etykietę ${SERVICE_LABEL[service]}${priceOf(service)?.price != null ? ` · ${pln(priceOf(service)!.price!)}` : ""}`}</button>
       <p className="text-xs text-muted">Przesyłka zostaje zamówiona w Furgonetce i obciąża konto. {service.startsWith("dpd") ? "Nadanie zawsze w punkcie DPD Pickup (zmienisz w Ustawieniach → Wysyłka)." : "Nadanie zawsze w paczkomacie InPost (zmienisz w Ustawieniach → Wysyłka)."} Ceny brutto z wyceny Furgonetki.</p>
     </form>
+  );
+}
+
+/**
+ * Co jest w tej paczce (częściowa wysyłka): domyślnie wszystko, czego nie ma jeszcze w innych paczkach.
+ * W Shopify jako wysłane zostaną oznaczone tylko zaznaczone pozycje.
+ */
+function PackContents({ lines }: { lines: PackLine[] }) {
+  const [qty, setQty] = useState<Record<string, number>>(() => Object.fromEntries(lines.map((l) => [l.id, Math.max(0, l.quantity - l.sent)])));
+  const all = lines.every((l) => (qty[l.id] ?? 0) >= l.quantity);
+  return (
+    <fieldset className="rounded-md border border-line p-3">
+      <legend className="label px-1">Co jest w tej paczce</legend>
+      <input type="hidden" name="pack" value="1" />
+      <ul className="space-y-1.5 text-sm">
+        {lines.map((l) => {
+          const on = (qty[l.id] ?? 0) > 0;
+          return (
+            <li key={l.id} className="flex flex-wrap items-center gap-2">
+              <label className="flex min-w-0 flex-1 items-center gap-2">
+                <input type="checkbox" className="h-4 w-4" checked={on} onChange={(e) => setQty({ ...qty, [l.id]: e.target.checked ? Math.max(1, l.quantity - l.sent) || 1 : 0 })} />
+                <span>{l.title} {l.variant && <b>· {l.variant}</b>}</span>
+              </label>
+              {on && l.quantity > 1 && (
+                <span className="flex items-center gap-1 text-xs text-muted">
+                  <input className="input h-8 w-16" type="number" min={1} max={l.quantity} value={qty[l.id]} onChange={(e) => setQty({ ...qty, [l.id]: Math.min(l.quantity, Math.max(1, Number(e.target.value) || 1)) })} aria-label="Sztuk w paczce" /> z {l.quantity}
+                </span>
+              )}
+              {l.sent > 0 && <span className="text-xs text-muted">w innej paczce: {l.sent}</span>}
+              {on && <input type="hidden" name={`line:${l.id}`} value={qty[l.id]} />}
+            </li>
+          );
+        })}
+      </ul>
+      <p className="mt-2 text-xs text-muted">{all ? "Całe zamówienie w jednej paczce." : "Część zamówienia – w Shopify jako wysłane zostaną oznaczone tylko zaznaczone pozycje; resztę wyślesz kolejną etykietą."}</p>
+    </fieldset>
   );
 }

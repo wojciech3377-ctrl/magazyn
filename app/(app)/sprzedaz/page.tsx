@@ -116,7 +116,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
   const none = Promise.resolve({ data: [] as never[] });
   // Wszystko, co zależy tylko od listy zamówień – jednym rzutem, równolegle.
   const [{ data: receiptJobs }, printer, { data: wtbRows }, { data: sales }, { data: shipments }, { data: vLinks }, fresh, { data: noteRows }] = await Promise.all([
-    ids.length ? supabase.from("receipt_jobs").select("id, order_id, status, receipt_number, error, claimed_at, number").in("order_id", ids).neq("status", "cancelled") : none,
+    ids.length ? supabase.from("receipt_jobs").select("*").in("order_id", ids).neq("status", "cancelled") : none,
     fiscalPrinterReady(createAdminClient()),
     ids.length ? supabase.from("wtb_items").select("order_id").in("order_id", ids).eq("status", "active") : none,
     ids.length ? supabase.from("sales").select(`id, order_id, status, variant_id, shopify_line_id, shopify_line_index, unit:units(id, code, contract_id, owner_type, contract:contracts(${CONTRACT_LITE_FIELDS}))`).in("order_id", ids) : none,
@@ -128,6 +128,8 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
   ]);
   const staffNote = new Map(((noteRows ?? []) as { id: string; staff_note: string | null }[]).map((r) => [r.id, r.staff_note]));
   const jobOf = new Map((receiptJobs ?? []).map((j) => [j.order_id as string, j as unknown as JobView]));
+  // Zamówienia z paragonem częściowym (SQL 81) – resztę drukuje się w zamówieniu.
+  const partialReceipt = new Set(((receiptJobs ?? []) as { order_id: string; order_lines?: unknown }[]).filter((j) => j.order_lines).map((j) => j.order_id));
   const wtbOrders = new Set((wtbRows ?? []).map((w) => w.order_id as string));
   type ListSale = { id: string; status: string; variant_id: string | null; shopify_line_id: string | null; shopify_line_index: number | null; unit: { id: string; code: string; contract_id: string | null; owner_type: string; contract: ContractLite | null } | null };
   const variantOf = new Map((vLinks ?? []).map((l) => [l.shopify_variant_id as string, l.variant_id as string]));
@@ -276,7 +278,9 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
                     <div className="flex flex-col items-start gap-1.5 max-md:flex-row max-md:flex-wrap max-md:items-center max-md:pt-1">
                       {!isParOrder(o.shopify_order_id as string) && <ContractAction pieces={matchPieces(o.id, (o.line_items ?? []) as LineItem[], oSales, (g) => variantOf.get(g))} saleContract={saleContract} cancelled={status === "cancelled"} back={`/sprzedaz${tab ? `?status=${tab}` : ""}`} />}
                       {status === "new" && <Link className="btn-secondary relative z-10 whitespace-nowrap px-2.5 py-1 text-xs" href={`/sprzedaz/${o.id}#etykieta`}>Utwórz etykietę</Link>}
-                      {status !== "cancelled" && status !== "returned" && !isParOrder(o.shopify_order_id as string) && <ReceiptButton orderId={o.id} receiptId={o.receipt_id as number | null} job={jobOf.get(o.id) ?? null} printer={printer} compact />}
+                      {status !== "cancelled" && status !== "returned" && !isParOrder(o.shopify_order_id as string) && (partialReceipt.has(o.id)
+                        ? <Link href={`/sprzedaz/${o.id}#czesciowa`} className="relative z-10 whitespace-nowrap text-xs text-accent hover:underline">paragon częściowy</Link>
+                        : <ReceiptButton orderId={o.id} receiptId={o.receipt_id as number | null} job={jobOf.get(o.id) ?? null} printer={printer} compact />)}
                       <WtbOrderButton orderId={o.id} inWtb={wtbOrders.has(o.id)} />
                     </div>
                   </td>

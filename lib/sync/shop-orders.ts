@@ -470,7 +470,7 @@ export async function pushPendingTracking(db: SupabaseClient) {
       continue;
     }
     const { data: sh } = await db.from("shipments")
-      .select("id, external_id, tracking_number, tracking_url, service, state, order:orders(id, store_id, shopify_order_id, cancelled_at, store:stores(code, shopify_domain))")
+      .select("*, order:orders(id, store_id, shopify_order_id, cancelled_at, store:stores(code, shopify_domain))")
       .eq("id", v.shipmentId).maybeSingle();
     const order = sh?.order as unknown as { id: string; store_id: string; shopify_order_id: string; cancelled_at: string | null; store: { code: string; shopify_domain: string | null } | null } | null;
     if (!sh || !order || order.cancelled_at || !order.store?.shopify_domain || !order.shopify_order_id?.startsWith("gid://") || /cancel/i.test(sh.state ?? "")) { await drop(); continue; }
@@ -485,7 +485,8 @@ export async function pushPendingTracking(db: SupabaseClient) {
       }
       if (!number) throw new Error("Furgonetka nie podała jeszcze numeru przesyłki");
       const t = { number, url, company: carrierName(sh.service as string | null) };
-      const note = await fulfillWithTracking(order.store.shopify_domain, order.store.code, order.shopify_order_id, t, v.notify);
+      // Paczka z częścią zamówienia (SQL 81) – w Shopify tylko jej pozycje.
+      const note = await fulfillWithTracking(order.store.shopify_domain, order.store.code, order.shopify_order_id, t, v.notify, (sh as { order_lines?: Record<string, number> | null }).order_lines ?? null);
       // Brak otwartych pozycji = już oznaczone jako wysłane (np. ręcznie, bez numeru) → dopisujemy numer.
       if (note && !(await addTrackingToFulfillment(order.store.shopify_domain, order.store.code, order.shopify_order_id, t, v.notify))) {
         // Wszystko już wysłane z innym numerem – nie ma gdzie dopisać; zostawiamy ślad w dzienniku.

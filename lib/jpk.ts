@@ -84,7 +84,7 @@ function inChunks<T>(ids: (string | number)[], fn: (part: (string | number)[]) =
   return inChunksAll<T>(ids, fn);
 }
 
-type Receipt = { number: string | null; issued_at: string; base_order_id: number | null; pos_order_id: string | null; source: string; items: { name: string; price_brutto: number; tax_rate: number }[] };
+type Receipt = { number: string | null; issued_at: string; base_order_id: number | null; pos_order_id: string | null; source: string; items: { name: string; price_brutto: number; tax_rate: number }[]; order_lines?: string[] | null };
 const RECEIPT_FIELDS = "number, issued_at, base_order_id, pos_order_id, source, items";
 
 /** Dokument sprzedaży: paragon (ma pierwszeństwo – faktura do paragonu nie jest osobną sprzedażą) albo faktura. */
@@ -111,7 +111,8 @@ const ORDER_FIELDS = "id, name, ordered_at, cancelled_at, status, cod, financial
 type Sale = { id: string; order_id: string; variant_id: string | null; status: string; shopify_line_id: string | null; shopify_line_index: number | null; unit: Unit };
 
 /** Pozycje zamówień ze sklepu (każda sztuka osobno) z przypisanymi sztukami i umowami. */
-async function shopLines(db: SupabaseClient, orders: Order[], docOf: (o: Order) => Doc | undefined) {
+/** docOf(o, lineId) – dokument pozycji (paragon częściowy obejmuje tylko swoje pozycje); keepLine – filtr miesiąca. */
+async function shopLines(db: SupabaseClient, orders: Order[], docOf: (o: Order, lineId?: string) => Doc | undefined, keepLine?: (doc: Doc | undefined, o: Order) => boolean) {
   if (!orders.length) return [];
   const sales = await inChunks<Sale>(orders.map((o) => o.id), (part) =>
     db.from("sales").select(`id, order_id, variant_id, status, shopify_line_id, shopify_line_index, unit:units(${UNIT_FIELDS})`).in("order_id", part as string[]));
@@ -129,7 +130,6 @@ async function shopLines(db: SupabaseClient, orders: Order[], docOf: (o: Order) 
 
   const lines: JpkLine[] = [];
   for (const o of orders) {
-    const r = docOf(o);
     // Pobranie anulowane po wysłaniu = klient nie odebrał paczki.
     const sent = (o.fulfillments ?? []).some((f) => !/cancel|error|failure/i.test(f.status ?? ""));
     const orderNote = o.cod && o.cancelled_at && sent
@@ -140,6 +140,8 @@ async function shopLines(db: SupabaseClient, orders: Order[], docOf: (o: Order) 
     for (const p of matchPieces(o.id, o.line_items, salesBy.get(o.id) ?? [], (g) => variantOf.get(g))) {
       const l = p.line;
       const sale = p.sale;
+      const r = docOf(o, l.id);
+      if (keepLine && !keepLine(r, o)) continue;
       const item = r?.items?.find((i) => i.name && l.title && i.name.toLowerCase().includes(l.title.toLowerCase().slice(0, 12)));
       lines.push({
         key: `o:${o.id}:${p.lineIndex}:${p.n}`, source: "shop", kind: r?.kind ?? null, docNumber: r?.number ?? null, docDate: r?.date ?? null,
@@ -205,11 +207,16 @@ async function docsFor(db: SupabaseClient, orders: Order[], posIds: string[]) {
     inChunks<Receipt>(posIds, (part) => db.from("receipts").select(RECEIPT_FIELDS).in("pos_order_id", part as string[]).order("issued_at")),
     inChunks<InvoiceRow>(orders.map((o) => o.id), (part) => db.from("invoices").select(INVOICE_FIELDS).in("order_id", part as string[]).neq("kind", "receipt").in("status", KSEF_SENT)),
     inChunks<InvoiceRow>(posIds, (part) => db.from("invoices").select(INVOICE_FIELDS).in("pos_order_id", part as string[]).neq("kind", "receipt").in("status", KSEF_SENT)),
-    // Paragony z naszej drukarki fiskalnej do zamówień ze sklepu (bez migracji 0036 – brak kolumny, pomijamy).
-    inChunks<Receipt & { order_id: string }>(orders.map((o) => o.id), (part) => db.from("receipts").select(`${RECEIPT_FIELDS}, order_id`).in("order_id", part as string[]).order("issued_at")).catch(() => []),
+    // Paragony z naszej drukarki fiskalnej do zamówień ze sklepu (bez migracji 0036 – brak kolumny, pomijamy);
+    // z listą pozycji paragonu częściowego (SQL 81), a bez niej – jak dotąd.
+    inChunks<Receipt & { order_id: string }>(orders.map((o) => o.id), (part) => db.from("receipts").select(`${RECEIPT_FIELDS}, order_id, order_lines`).in("order_id", part as string[]).order("issued_at"))
+      .catch(() => inChunks<Receipt & { order_id: string }>(orders.map((o) => o.id), (part) => db.from("receipts").select(`${RECEIPT_FIELDS}, order_id`).in("order_id", part as string[]).order("issued_at")))
+      .catch(() => []),
   ]);
-  const byOrder = new Map<string, Receipt>();
-  for (const r of ro) if (!byOrder.has(r.order_id)) byOrder.set(r.order_id, r);
+  const byOrder = new Map<string, (Receipt & { order_id: string })[]>();
+  for (const r of ro) byOrder.set(r.order_id, [...(byOrder.get(r.order_id) ?? []), r]);
+  // Paragon pozycji: pierwszy obejmujący tę pozycję (paragon do całego zamówienia – wszystkie pozycje).
+  const receiptOf = (orderId: string, lineId?: string) => (byOrder.get(orderId) ?? []).find((r) => !r.order_lines || !lineId || r.order_lines.includes(lineId));
   const byBase = new Map<number, Receipt>();
   const byPos = new Map<string, Receipt>();
   // Paragon z naszego systemu (drukarka / ręczny) ma pierwszeństwo przed paragonem z Base.
@@ -220,7 +227,9 @@ async function docsFor(db: SupabaseClient, orders: Order[], posIds: string[]) {
   const invByOrder = new Map(ib.map((i) => [i.order_id as string, i]));
   const invByPos = new Map(ip.map((i) => [i.pos_order_id as string, i]));
   return {
-    orderDoc: (o: Order) => receiptDoc(byOrder.get(o.id)) ?? receiptDoc(o.base_order_id ? byBase.get(Number(o.base_order_id)) : undefined) ?? invoiceDoc(invByOrder.get(o.id)),
+    orderDoc: (o: Order, lineId?: string) => receiptDoc(receiptOf(o.id, lineId)) ?? receiptDoc(o.base_order_id ? byBase.get(Number(o.base_order_id)) : undefined) ?? invoiceDoc(invByOrder.get(o.id)),
+    /** Wszystkie dokumenty zamówienia (paragony częściowe osobno) – do wyboru miesiąca. */
+    orderDocs: (o: Order) => [...(byOrder.get(o.id) ?? []).map((r) => receiptDoc(r)), receiptDoc(o.base_order_id ? byBase.get(Number(o.base_order_id)) : undefined), invoiceDoc(invByOrder.get(o.id))].filter((d): d is Doc => !!d),
     posDoc: (id: string) => receiptDoc(byPos.get(id)) ?? invoiceDoc(invByPos.get(id)),
   };
 }
@@ -363,17 +372,19 @@ export async function loadJpkLines(db: SupabaseClient, opts: { from: Date; to: D
   const orders = [...ordersByReceipt, ...ordersMore];
   const posIds = [...new Set([...docPos, ...(monthPos ?? []).map((p) => p.id as string)])];
 
-  const { orderDoc, posDoc } = await docsFor(db, orders, posIds);
+  const { orderDoc, orderDocs, posDoc } = await docsFor(db, orders, posIds);
   const inMonth = (d: string | null) => !!d && d >= from && d < to;
   const posInMonth = new Set((monthPos ?? []).map((p) => p.id as string));
 
   const keepOrders = orders.filter((o) => {
     // Wysyłka z paragonu PAR – sprzedaż poza JPK.
     if (isParOrder(o.shopify_order_id)) return false;
-    const d = orderDoc(o);
-    if (d) return inMonth(d.date);
-    return !o.cancelled_at && inMonth(o.ordered_at);
+    // Paragony częściowe mogą być w różnych miesiącach – zamówienie wchodzi, gdy któryś dokument jest w miesiącu
+    // (albo jakaś pozycja jest bez dokumentu, a zamówienie złożono w tym miesiącu); pozycje filtruje keepLine.
+    const docs = orderDocs(o);
+    return docs.some((d) => inMonth(d.date)) || (!o.cancelled_at && inMonth(o.ordered_at));
   });
+  const keepLine = (d: Doc | undefined, o: Order) => (d ? inMonth(d.date) : !o.cancelled_at && inMonth(o.ordered_at));
   // Sprzedaż z Kasy z samym paragonem PDF (PAR, bez fiskalnego) – poza JPK, także poza „bez dokumentu”.
   const parPos = new Set((await inChunks<{ pos_order_id: string }>(posIds, (part) => db.from("invoices").select("pos_order_id").in("pos_order_id", part as string[]).eq("kind", "receipt").not("status", "in", "(rejected,cancelled)"))).map((i) => i.pos_order_id));
   const keepPos = posIds.filter((id) => {
@@ -389,7 +400,7 @@ export async function loadJpkLines(db: SupabaseClient, opts: { from: Date; to: D
   const correctionLines = correctionLinesFrom((corr ?? []) as CorrectionRow[]);
 
   const lines = [
-    ...(await shopLines(db, keepOrders, orderDoc)),
+    ...(await shopLines(db, keepOrders, orderDoc, keepLine)),
     ...(await posLines(db, keepPos, posDoc)),
     ...(await manualInvoiceLines(db, manual)),
     ...correctionLines,

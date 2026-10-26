@@ -139,6 +139,19 @@ export async function createLabel(_: LabelState, fd: FormData): Promise<LabelSta
 
   const service = str(fd, "service") as ServiceKey;
   if (!(service in SERVICE_LABEL)) return { error: "Wybierz przewoźnika." };
+  // Częściowa wysyłka: zaznaczone pozycje (pole „line:<ID pozycji>” = sztuk). Wszystkie zaznaczone w całości = całe zamówienie.
+  const orderLines = ((order.line_items ?? []) as LineItem[]);
+  const picked: Record<string, number> = {};
+  const anyPick = fd.has("pack");
+  for (const [k, v] of fd.entries()) {
+    if (!k.startsWith("line:")) continue;
+    const lid = k.slice(5);
+    const line = orderLines.find((l) => l.id === lid);
+    const q = Math.floor(Number(v) || 0);
+    if (line && q > 0) picked[lid] = Math.min(q, Number(line.quantity) || q);
+  }
+  if (anyPick && !Object.keys(picked).length) return { error: "Zaznacz, co jest w tej paczce." };
+  const partialLines = anyPick && orderLines.some((l) => (picked[l.id] ?? 0) < (Number(l.quantity) || 0)) ? picked : null;
   const built = await buildPackage(db, fd, service, String(order.number));
   if ("error" in built) return { error: built.error };
   const { body, carrier } = built;
@@ -160,11 +173,16 @@ export async function createLabel(_: LabelState, fd: FormData): Promise<LabelSta
   } catch (e) {
     return { error: errorMessage(e) };
   }
-  const { data: ship, error: insErr } = await db.from("shipments").insert({
+  let { data: ship, error: insErr } = await db.from("shipments").insert({
+    order_id: order.id, provider: "furgonetka", external_id: packageId, service: carrier, reference: order.number,
+    created_in_app: true, created_by: profile.id, state: "waiting", ...(partialLines ? { order_lines: partialLines } : {}),
+  }).select("id").single();
+  // Bez SQL 81 (brak kolumny) – zapis bez listy pozycji; w Shopify i tak tylko zaznaczone (poniżej).
+  if (insErr && partialLines && /order_lines/.test(insErr.message)) ({ data: ship, error: insErr } = await db.from("shipments").insert({
     order_id: order.id, provider: "furgonetka", external_id: packageId, service: carrier, reference: order.number,
     created_in_app: true, created_by: profile.id, state: "waiting",
-  }).select("id").single();
-  if (insErr) return { error: insErr.message };
+  }).select("id").single());
+  if (insErr || !ship) return { error: insErr?.message ?? "Nie udało się zapisać przesyłki." };
   // Numer do Shopify: od razu w kolejce (ponawianie co minutę) – nawet gdy dalsza część (nadanie, numer, Shopify)
   // się przerwie (np. limit czasu serwera), zamówienie w Shopify dostanie numer automatycznie.
   const store0 = order.store as { code: string; shopify_domain: string | null } | null;
@@ -212,7 +230,7 @@ export async function createLabel(_: LabelState, fd: FormData): Promise<LabelSta
       try {
         const note = await fulfillWithTracking(store.shopify_domain, store.code, order.shopify_order_id, {
           number: tracking, url: trackingUrl, company: carrier === "dpd" ? "DPD" : "InPost",
-        }, !!fd.get("notify"));
+        }, !!fd.get("notify"), partialLines);
         // Już oznaczone jako wysłane (np. ręcznie, bez numeru) – numer dopisze ponowienie (zostaje w kolejce).
         if (note) warning = `Shopify: ${note}. ${later}`;
         else await clearTrackingPush(db, ship.id);
@@ -226,7 +244,7 @@ export async function createLabel(_: LabelState, fd: FormData): Promise<LabelSta
   await refreshOrderStatus(db, [order.id]);
   revalidatePath(`/sprzedaz/${order.id}`);
   revalidatePath("/sprzedaz");
-  return { ok: "Etykieta utworzona.", shipmentId: ship.id, tracking: tracking ?? undefined, warning };
+  return { ok: partialLines ? "Etykieta utworzona (część zamówienia)." : "Etykieta utworzona.", shipmentId: ship.id, tracking: tracking ?? undefined, warning };
 }
 
 /** Odświeżenie jednego zamówienia ze Shopify i stanów przesyłek. */

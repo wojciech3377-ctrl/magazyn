@@ -265,22 +265,41 @@ export async function fulfillWithTracking(
   orderId: string,
   tracking: { number: string; url: string | null; company: string },
   notifyCustomer: boolean,
+  /** Paczka z częścią zamówienia: ID pozycji zamówienia (LineItem) → sztuk. Bez – wszystko, co jeszcze nie wysłane. */
+  lines?: Record<string, number> | null,
 ) {
-  const fo = await shopifyGraphql<{ order: { fulfillmentOrders: { nodes: { id: string; status: string }[] } } | null }>(
+  type FoLine = { id: string; remainingQuantity: number; lineItem: { id: string } };
+  const fo = await shopifyGraphql<{ order: { fulfillmentOrders: { nodes: { id: string; status: string; lineItems: { nodes: FoLine[] } }[] } } | null }>(
     domain,
     storeCode,
-    `query($id: ID!) { order(id: $id) { fulfillmentOrders(first: 10) { nodes { id status } } } }`,
+    `query($id: ID!) { order(id: $id) { fulfillmentOrders(first: 10) { nodes { id status lineItems(first: 250) { nodes { id remainingQuantity lineItem { id } } } } } } }`,
     { id: orderId },
   );
   const open = (fo.order?.fulfillmentOrders.nodes ?? []).filter((n) => n.status === "OPEN" || n.status === "IN_PROGRESS");
   if (!open.length) return "brak otwartych pozycji do wysłania w Shopify";
+  // Częściowa wysyłka: tylko wybrane pozycje (i najwyżej tyle sztuk, ile jeszcze nie wysłano).
+  let byFo: { fulfillmentOrderId: string; fulfillmentOrderLineItems?: { id: string; quantity: number }[] }[] = open.map((n) => ({ fulfillmentOrderId: n.id }));
+  if (lines && Object.keys(lines).length) {
+    const want = new Map(Object.entries(lines).map(([k, v]) => [k, Math.max(0, Math.floor(Number(v) || 0))]));
+    byFo = open.map((n) => ({
+      fulfillmentOrderId: n.id,
+      fulfillmentOrderLineItems: n.lineItems.nodes.flatMap((li) => {
+        const left = want.get(li.lineItem.id) ?? 0;
+        const q = Math.min(left, li.remainingQuantity);
+        if (q <= 0) return [];
+        want.set(li.lineItem.id, left - q);
+        return [{ id: li.id, quantity: q }];
+      }),
+    })).filter((x) => x.fulfillmentOrderLineItems.length);
+    if (!byFo.length) return "wybrane pozycje są już wysłane w Shopify";
+  }
   const data = await shopifyGraphql<{ fulfillmentCreate: { fulfillment: { id: string } | null; userErrors: { message: string }[] } }>(
     domain,
     storeCode,
     `mutation($f: FulfillmentInput!) { fulfillmentCreate(fulfillment: $f) { fulfillment { id status } userErrors { field message } } }`,
     {
       f: {
-        lineItemsByFulfillmentOrder: open.map((n) => ({ fulfillmentOrderId: n.id })),
+        lineItemsByFulfillmentOrder: byFo,
         trackingInfo: { number: tracking.number, company: tracking.company, ...(tracking.url ? { url: tracking.url } : {}) },
         notifyCustomer,
       },

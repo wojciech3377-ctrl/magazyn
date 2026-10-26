@@ -31,6 +31,22 @@ export async function enqueueReceipt(kind: "pos" | "order", id: string): Promise
   }
 }
 
+/** Paragon do wybranych pozycji zamówienia (częściowa realizacja); "shipping" – koszt wysyłki. */
+export async function enqueuePartialReceipt(orderId: string, lines: string[]): Promise<{ job?: JobView; error?: string }> {
+  const { profile } = await requireSection("sprzedaz");
+  if (!UUID.test(orderId)) return { error: "Złe zamówienie." };
+  const clean = [...new Set(lines.map(String).filter((l) => l === "shipping" || /^gid:\/\/shopify\/LineItem\/\d+$|^[A-Za-z0-9:_\/-]{1,120}$/.test(l)))];
+  if (!clean.length) return { error: "Zaznacz pozycje na paragon." };
+  const db = createAdminClient();
+  try {
+    const j = await enqueueOrderReceipt(db, orderId, profile.id, clean);
+    revalidatePath(`/sprzedaz/${orderId}`);
+    return { job: { id: j.id, status: j.status, receipt_number: null, error: null, claimed_at: null, number: j.number } };
+  } catch (e) {
+    return { error: errorMessage(e) };
+  }
+}
+
 /**
  * Ponów wydruk po błędzie. Paragon „drukuje się” dłużej niż 2 minuty (program przestał odpowiadać) też można ponowić –
  * wcześniej sprawdź na drukarce, czy paragon nie wyszedł, żeby nie wydrukować go dwa razy.
@@ -41,11 +57,11 @@ export async function retryReceiptJob(id: string): Promise<{ job?: JobView; erro
   const db = createAdminClient();
   const stuck = new Date(Date.now() - 120_000).toISOString();
   // Po błędzie – pozycje od nowa z bieżących danych i ustawień (np. zmieniona stawka PTU w Wykluczeniach).
-  const { data: job } = await db.from("receipt_jobs").select("status, source, order_id, pos_order_id").eq("id", id).maybeSingle();
+  const { data: job } = await db.from("receipt_jobs").select("*").eq("id", id).maybeSingle();
   let fresh: { lines: unknown; payment: string } | null = null;
   if (job?.status === "error") {
     try {
-      fresh = job.source === "order" && job.order_id ? await orderReceiptLines(db, job.order_id as string)
+      fresh = job.source === "order" && job.order_id ? await orderReceiptLines(db, job.order_id as string, (job as { order_lines?: string[] | null }).order_lines ?? null)
         : job.source === "pos" && job.pos_order_id ? await posReceiptLines(db, job.pos_order_id as string) : null;
     } catch (e) {
       return { error: errorMessage(e) };

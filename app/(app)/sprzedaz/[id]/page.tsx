@@ -28,6 +28,7 @@ import { LineDocEdit } from "./LineDocEdit";
 import { draftFromOrder, orderLineOverrides, type LineOverride } from "@/lib/invoices/service";
 import { ConfirmSubmit } from "@/components/ConfirmSubmit";
 import { PickupPanel } from "./PickupPanel";
+import { PartialReceipt } from "./PartialReceipt";
 import { isPersonalPickup } from "@/lib/orders/status";
 
 type Address = { name: string | null; company: string | null; address1: string | null; address2: string | null; city: string | null; zip: string | null; countryCodeV2: string | null; phone: string | null } | null;
@@ -49,17 +50,22 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
   const sp = await searchParams;
   const { supabase, profile } = await requireProfile();
   // Wszystko, co zależy tylko od id zamówienia – równolegle.
-  const [{ data: order }, { data: shipments }, { data: sales }, furgonetka, { data: invoice }, { data: receiptJob }, printer, { data: parDoc }] = await Promise.all([
+  const [{ data: order }, { data: shipments }, { data: sales }, furgonetka, { data: invoice }, { data: receiptJobs }, printer, { data: parDoc }] = await Promise.all([
     supabase.from("orders").select("*, store:stores(name, code, shopify_domain)").eq("id", id).maybeSingle(),
     supabase.from("shipments").select("*").eq("order_id", id).order("created_at", { ascending: false }),
     supabase.from("sales").select(SALE_SELECT).eq("order_id", id).order("sold_at"),
     furgonetkaConfigured() ? furgonetkaConnection(createAdminClient()) : Promise.resolve(null),
     supabase.from("invoices").select("id, number").eq("order_id", id).neq("kind", "receipt").not("status", "in", "(rejected,cancelled)").limit(1).maybeSingle(),
-    supabase.from("receipt_jobs").select("id, status, receipt_number, error, claimed_at, number").eq("order_id", id).neq("status", "cancelled").order("created_at", { ascending: false }).limit(1).maybeSingle(),
+    supabase.from("receipt_jobs").select("*").eq("order_id", id).order("created_at", { ascending: false }),
     fiscalPrinterReady(createAdminClient()),
     supabase.from("invoices").select("id, number").eq("order_id", id).eq("kind", "receipt").not("status", "in", "(rejected,cancelled)").limit(1).maybeSingle(),
   ]);
   if (!order) notFound();
+  // Paragony: do całego zamówienia (jak dotąd) albo częściowe – do wybranych pozycji (SQL 81).
+  const jobsAll = ((receiptJobs ?? []) as (JobView & { order_lines?: string[] | null; created_at?: string })[]);
+  const partialJobs = jobsAll.filter((j) => j.order_lines).map((j) => ({ id: j.id, status: j.status, receipt_number: j.receipt_number, error: j.error, claimed_at: j.claimed_at, number: j.number, order_lines: j.order_lines ?? null }));
+  const receiptJob = jobsAll.find((j) => !j.order_lines && j.status !== "cancelled") ?? null;
+  const anyActiveJob = jobsAll.some((j) => ["queued", "printing", "printed"].includes(j.status));
   // Jak pozycje pójdą na paragon / fakturę: nazwa i stawka VAT (z regułami wykluczeń i zmianami w zamówieniu).
   const [docDraft, lineOv] = await Promise.all([
     draftFromOrder(createAdminClient(), id).catch(() => null),
@@ -99,9 +105,11 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
         sub={<>{store?.name} · {dateTime(order.ordered_at)}</>}
         actions={
           <>
-            {!par && !parDoc && status !== "cancelled" && status !== "returned" && <ReceiptButton orderId={order.id} receiptId={order.receipt_id} job={receiptJob as JobView | null} printer={printer} className="btn-green" />}
+            {!par && !parDoc && status !== "cancelled" && status !== "returned" && (partialJobs.some((j) => j.status !== "cancelled")
+              ? <a className="btn-secondary btn-green" href="#czesciowa">Paragony częściowe</a>
+              : <ReceiptButton orderId={order.id} receiptId={order.receipt_id} job={receiptJob as JobView | null} printer={printer} className="btn-green" />)}
             {parDoc && <Link className="btn-secondary btn-yellow" href={`/sprzedaz/faktury/${parDoc.id}`}>Paragon PDF {parDoc.number}</Link>}
-            {!parDoc && !invoice && !order.receipt_id && status !== "cancelled" && (
+            {!parDoc && !invoice && !order.receipt_id && !anyActiveJob && status !== "cancelled" && (
               <form action={issueOrderReceiptPdf}>
                 <input type="hidden" name="order_id" value={order.id} />
                 <ConfirmSubmit className="btn-secondary btn-yellow" message="Wystawić paragon PDF (bez paragonu fiskalnego, poza JPK) do tego zamówienia?">Drukuj paragon PDF</ConfirmSubmit>
@@ -217,6 +225,19 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
         </table>
       </section>
 
+      {!par && !parDoc && !order.receipt_id && status !== "cancelled" && status !== "returned" && (lines.length > 1 || partialJobs.length > 0) && !(receiptJob && receiptJob.status !== "error") && (
+        <section id="czesciowa" className="card mt-5 p-4">
+          <h2 className="h2 mb-1">Paragon do części zamówienia</h2>
+          <p className="mb-3 text-sm text-muted">Zaznacz pozycje, które wydajesz teraz – pójdą na osobny paragon fiskalny, a ich sztuki z magazynu przejdą w „sprzedane”. Resztę wydrukujesz kolejnym paragonem. Wysyłkę części zamówienia wybierzesz w „Etykieta” → „Co jest w tej paczce”.</p>
+          <PartialReceipt
+            orderId={order.id}
+            lines={lines.map((l) => ({ id: l.id, title: l.title, variant: l.variant_title, quantity: Number(l.quantity) || 1, price: Number(l.price), refunded: refundedLines[l.id] ?? 0 }))}
+            shipping={Number(order.shipping_price ?? 0) > 0 ? Number(order.shipping_price) : null}
+            jobs={partialJobs}
+          />
+        </section>
+      )}
+
       <section className="card mt-5 overflow-x-auto">
         <h2 className="h2 p-4 pb-0">Sztuki z magazynu</h2>
         {loosePieces.length > 0 && (
@@ -266,6 +287,14 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
           <>
             {activeShipments.length > 0 && <p className="mb-3 text-sm text-warn">To zamówienie ma już przesyłkę. Kolejną etykietę twórz tylko, gdy wysyłasz drugą paczkę.</p>}
             <LabelForm
+              lines={lines.map((l) => {
+                // Sztuki tej pozycji w innych paczkach z aplikacji (paczka bez listy pozycji = całe zamówienie).
+                const sent = activeShipments.filter((s) => s.created_in_app).reduce((n, s) => {
+                  const ol = (s as { order_lines?: Record<string, number> | null }).order_lines;
+                  return n + (ol ? Number(ol[l.id] ?? 0) : Number(l.quantity) || 0);
+                }, 0);
+                return { id: l.id, title: l.title, variant: l.variant_title, quantity: Number(l.quantity) || 1, sent: Math.min(sent, Number(l.quantity) || 1) };
+              })}
               d={{
                 orderId: order.id,
                 service: guessService(order.shipping_method) ?? "inpost_locker",
