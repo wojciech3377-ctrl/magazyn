@@ -2,8 +2,8 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { shopifyGraphql } from "@/lib/integrations/shopify";
 import { errorMessage } from "@/lib/errors";
-import { lowestFromHistory } from "@/lib/price-tag";
-import { mirrorPairs, type MirrorPair } from "./mirror";
+import { lowestFromHistory, storefrontLowest } from "@/lib/price-tag";
+import { MIRROR_VARIANTS, mirrorPairs, optKey, recordShopPrices, SOURCE_QUERY, type MirrorPair, type SrcProduct } from "./mirror";
 
 /**
  * Najniższa cena z 30 dni (Omnibus) w sklepie-kopii (np. Owca Store): z historii cen aplikacji (ceny sklepu źródłowego –
@@ -74,9 +74,9 @@ export async function refreshMirrorOmnibus(db: SupabaseClient, opts: { deadline:
   for (const pair of await mirrorPairs(db, true)) {
     const key = `omnibus_mirror:${pair.mirror.id}`;
     const { data: st } = await db.from("sync_state").select("value").eq("key", key).maybeSingle();
-    let state = (st?.value as { day?: string; after?: string | null; done?: boolean } | null) ?? {};
-    if (state.day !== today) state = { day: today, after: null, done: false };
-    if (state.done) continue;
+    let state = (st?.value as { day?: string; after?: string | null; done?: boolean; extrasDone?: boolean; extraAfter?: string } | null) ?? {};
+    if (state.day !== today) state = { day: today, after: null, done: false, extrasDone: false };
+    if (state.done && state.extrasDone) continue;
     let products = 0, sent = 0;
     try {
       while (Date.now() < opts.deadline) {
@@ -101,11 +101,63 @@ export async function refreshMirrorOmnibus(db: SupabaseClient, opts: { deadline:
         state.after = String(chunk[chunk.length - 1].id);
         if (chunk.length < 50) { state.done = true; break; }
       }
-      out[pair.mirror.name] = { produkty: products, ceny: sent, ...(state.done ? { gotowe: true } : {}) };
+      // Produkty spoza magazynu (np. Rope) – po produktach z magazynu, w tym samym dniu.
+      let extras = 0;
+      if (state.done && !state.extrasDone) {
+        const { data: ex, error: exErr } = await db.from("mirror_extra").select("source_product_id, mirror_product_id").eq("store_id", pair.mirror.id).not("mirror_product_id", "is", null).order("source_product_id");
+        const todo = (ex ?? []).filter((x) => !state.extraAfter || (x.source_product_id as string) > state.extraAfter);
+        for (const x of exErr ? [] : todo) {
+          if (Date.now() > opts.deadline) break;
+          sent += await mirrorExtraOmnibus(db, pair, x.source_product_id as string, x.mirror_product_id as string).catch(() => 0);
+          state.extraAfter = x.source_product_id as string;
+          extras++;
+        }
+        if (exErr || extras === todo.length) state.extrasDone = true;
+      }
+      out[pair.mirror.name] = { produkty: products, ...(extras ? { spoza_magazynu: extras } : {}), ceny: sent, ...(state.done && state.extrasDone ? { gotowe: true } : {}) };
     } catch (e) {
       out[pair.mirror.name] = `błąd: ${errorMessage(e)}`;
     }
     await db.from("sync_state").upsert({ key, value: state, updated_at: new Date().toISOString() });
   }
   return out;
+}
+
+/**
+ * Produkt spoza magazynu (np. Rope, SQL 79/80): najniższa cena z 30 dni z historii cen tego rozmiaru w sklepie źródłowym
+ * (shop_price_history). Dopóki historia nie obejmuje 30 dni – kwota z bloku Omnibus na stronie produktu w sklepie
+ * źródłowym (np. Omnibus Insight w Sneakers Depot), a gdy go nie ma – z dotychczasowej historii.
+ */
+export async function mirrorExtraOmnibus(db: SupabaseClient, pair: MirrorPair, sourceGid: string, mirrorGid: string) {
+  const src = (await shopifyGraphql<{ product: SrcProduct | null }>(pair.source.shopify_domain, pair.source.code, SOURCE_QUERY, { id: sourceGid })).product;
+  if (!src) return 0;
+  await recordShopPrices(db, pair.source.id, src.variants.nodes).catch(() => false);
+  type MV = { id: string; selectedOptions: { name: string; value: string }[] };
+  const m = (await shopifyGraphql<{ product: { id: string; variants: { nodes: MV[] } } | null }>(pair.mirror.shopify_domain, pair.mirror.code, MIRROR_VARIANTS, { id: mirrorGid })).product;
+  if (!m) return 0;
+  const gids = src.variants.nodes.map((v) => v.id);
+  const { data, error } = await db.from("shop_price_history").select("shopify_variant_id, price, valid_from")
+    .eq("store_id", pair.source.id).in("shopify_variant_id", gids).order("valid_from").limit(1000);
+  if (error) return 0; // bez SQL 80
+  const hist = new Map<string, { variant_id: string; price: number; valid_from: string }[]>();
+  for (const h of (data ?? []) as { shopify_variant_id: string; price: number; valid_from: string }[]) {
+    hist.set(h.shopify_variant_id, [...(hist.get(h.shopify_variant_id) ?? []), { variant_id: h.shopify_variant_id, price: Number(h.price), valid_from: h.valid_from }]);
+  }
+  const byKey = new Map(m.variants.nodes.map((v) => [optKey(v.selectedOptions), v.id]));
+  const first = src.variants.nodes[0];
+  let shopValue: number | null | undefined;
+  const values = new Map<string, number>();
+  for (const v of src.variants.nodes) {
+    const mid = byKey.get(optKey(v.selectedOptions));
+    if (!mid) continue;
+    const rows = hist.get(v.id) ?? [];
+    const r = rows.length ? lowestFromHistory(rows, Number(v.price)) : { value: null as number | null, complete: false };
+    let val = r.value;
+    if (!r.complete && first && Number(v.price) === Number(first.price)) {
+      if (shopValue === undefined) shopValue = await storefrontLowest(pair.source.shopify_domain, src.handle, first.id);
+      if (shopValue !== null) val = shopValue;
+    }
+    if (val !== null && Number.isFinite(val)) values.set(mid, Math.round(val * 100) / 100);
+  }
+  return values.size ? setMetafields(pair, values) : 0;
 }

@@ -77,27 +77,27 @@ async function enqueueMissing(db: SupabaseClient, pair: MirrorPair, limit: numbe
   return { missing: [...src].filter((id) => !have.has(id)).length, queued: todo.length };
 }
 
-type SrcVariant = {
+export type SrcVariant = {
   id: string; title: string; sku: string | null; price: string; compareAtPrice: string | null; taxable: boolean; inventoryPolicy: string; inventoryQuantity?: number | null; position: number;
   barcode: string | null; selectedOptions: { name: string; value: string }[];
   inventoryItem: { id: string; tracked: boolean; requiresShipping: boolean } | null;
 };
-type SrcProduct = {
-  id: string; title: string; handle: string; descriptionHtml: string; vendor: string; productType: string; tags: string[]; status: string;
+export type SrcProduct = {
+  id: string; title: string; handle: string; isGiftCard?: boolean; descriptionHtml: string; vendor: string; productType: string; tags: string[]; status: string;
   templateSuffix: string | null; seo: { title: string | null; description: string | null };
   options: { name: string; position: number; values: string[] }[];
   media: { pageInfo?: { hasNextPage: boolean }; nodes: ({ image?: { url: string; altText: string | null } | null } | null)[] };
   variants: { pageInfo?: { hasNextPage: boolean }; nodes: SrcVariant[] };
 };
 
-const SOURCE_QUERY = `query P($id: ID!) { product(id: $id) {
-  id title handle descriptionHtml vendor productType tags status templateSuffix seo { title description }
+export const SOURCE_QUERY = `query P($id: ID!) { product(id: $id) {
+  id title handle isGiftCard descriptionHtml vendor productType tags status templateSuffix seo { title description }
   options { name position values }
   media(first: 50) { pageInfo { hasNextPage } nodes { ... on MediaImage { image { url altText } } } }
   variants(first: 250) { pageInfo { hasNextPage } nodes { id title sku price compareAtPrice taxable inventoryPolicy inventoryQuantity position barcode selectedOptions { name value } inventoryItem { id tracked requiresShipping } } }
 } }`;
 
-const MIRROR_VARIANTS = `query M($id: ID!) { product(id: $id) { id variants(first: 250) { nodes { id selectedOptions { name value } } } } }`;
+export const MIRROR_VARIANTS = `query M($id: ID!) { product(id: $id) { id variants(first: 250) { nodes { id selectedOptions { name value } } } } }`;
 
 const SET = `mutation S($identifier: ProductSetIdentifiers, $input: ProductSetInput!) {
   productSet(identifier: $identifier, input: $input, synchronous: true) {
@@ -106,7 +106,7 @@ const SET = `mutation S($identifier: ProductSetIdentifiers, $input: ProductSetIn
   }
 }`;
 
-const optKey = (opts: { name: string; value: string }[]) => opts.map((o) => `${o.name.trim().toLowerCase()}=${o.value.trim().toLowerCase()}`).join("|");
+export const optKey = (opts: { name: string; value: string }[]) => opts.map((o) => `${o.name.trim().toLowerCase()}=${o.value.trim().toLowerCase()}`).join("|");
 const sha = (v: unknown) => createHash("sha256").update(JSON.stringify(v)).digest("hex");
 
 /** Zamiany tekstu w opisach i wykluczone produkty (ID produktów aplikacji – nie trafiają do kopii, istniejące idą do archiwum). */
@@ -572,8 +572,11 @@ async function discoverExtras(db: SupabaseClient, pair: MirrorPair, deadline: nu
 async function mirrorExtraProduct(db: SupabaseClient, pair: MirrorPair, row: ExtraRow, settings: MirrorSettings) {
   const { mirror, source } = pair;
   const src = (await shopifyGraphql<{ product: SrcProduct | null }>(source.shopify_domain, source.code, SOURCE_QUERY, { id: row.source_product_id })).product;
-  if (!src) return { result: "bez zmian" as const, gone: true };
+  // Karta podarunkowa – nie da się jej utworzyć w kopii.
+  if (!src || src.isGiftCard) return { result: "bez zmian" as const, gone: true };
   if (src.variants.pageInfo?.hasNextPage) throw new Error(`${src.title}: ponad 250 rozmiarów – kopia tego produktu nie jest obsługiwana`);
+  // Historia cen (najniższa cena z 30 dni w kopii) – produkt nie jest w magazynie, więc osobno (SQL 80).
+  await recordShopPrices(db, source.id, src.variants.nodes).catch(() => false);
   type MV = { id: string; selectedOptions: { name: string; value: string }[] };
   const readMirror = async (id: string) => (await shopifyGraphql<{ product: { id: string; variants: { nodes: MV[] } } | null }>(mirror.shopify_domain, mirror.code, MIRROR_VARIANTS, { id })).product;
   let existingId = row.mirror_product_id;
@@ -669,26 +672,10 @@ export async function runMirrorExtras(db: SupabaseClient, opts: { deadline: numb
       const errors: string[] = [];
       for (const row of found.todo) {
         if (Date.now() > opts.deadline) break;
-        const { data: ok, error: ce } = await db.rpc("mirror_extra_claim", { p_store: pair.mirror.id, p_source: row.source_product_id });
-        if (ce || ok !== true) continue;
-        const now = new Date().toISOString();
-        try {
-          const r = await mirrorExtraProduct(db, pair, row, settings);
-          if ("gone" in r && r.gone) {
-            await db.from("mirror_extra").delete().eq("store_id", pair.mirror.id).eq("source_product_id", row.source_product_id);
-          } else {
-            await db.from("mirror_extra").update({
-              ...("id" in r && r.id ? { mirror_product_id: r.id, mirror_hash: r.hash, mirror_media_hash: r.mediaHash, mirrored_at: now } : {}),
-              source_updated_at: found.updatedAt.get(row.source_product_id) ?? now, attempts: 0, last_error: null, claimed_at: null,
-            }).eq("store_id", pair.mirror.id).eq("source_product_id", row.source_product_id);
-          }
-          stats[r.result === "utworzony" ? "utworzone" : r.result === "zaktualizowany" ? "zaktualizowane" : "bez_zmian"]++;
-        } catch (e) {
-          stats.bledy++;
-          if (errors.length < 3) errors.push(errorMessage(e));
-          await db.from("mirror_extra").update({ attempts: row.attempts + 1, last_error: errorMessage(e).slice(0, 500), claimed_at: null })
-            .eq("store_id", pair.mirror.id).eq("source_product_id", row.source_product_id);
-        }
+        const r = await processExtra(db, pair, row, settings, found.updatedAt.get(row.source_product_id));
+        if (r === null) continue;
+        if ("error" in r) { stats.bledy++; if (errors.length < 3) errors.push(r.error); continue; }
+        stats[r.result === "utworzony" ? "utworzone" : r.result === "zaktualizowany" ? "zaktualizowane" : "bez_zmian"]++;
       }
       const left = found.todo.length - stats.utworzone - stats.zaktualizowane - stats.bez_zmian - stats.bledy;
       out[pair.mirror.name] = { ...Object.fromEntries(Object.entries(stats).filter(([, v]) => v)), spoza_magazynu: found.total, ...(left > 0 ? { zostalo: left } : {}), ...(found.gone ? { usuniete_ze_zrodla: found.gone } : {}), ...(errors.length ? { errors } : {}) };
@@ -697,4 +684,66 @@ export async function runMirrorExtras(db: SupabaseClient, opts: { deadline: numb
     }
   }
   return out;
+}
+
+/** Ceny rozmiarów produktu spoza magazynu → shop_price_history (tylko zmiany). Bez SQL 80 – false. */
+export async function recordShopPrices(db: SupabaseClient, storeId: string, variants: { id: string; price: string; compareAtPrice: string | null }[]) {
+  if (!variants.length) return true;
+  const { data, error } = await db.from("shop_price_history").select("shopify_variant_id, price, compare_at_price")
+    .eq("store_id", storeId).in("shopify_variant_id", variants.map((v) => v.id)).order("valid_from", { ascending: false }).limit(1000);
+  if (error) return false;
+  const last = new Map<string, { price: number; compare_at_price: number | null }>();
+  for (const r of (data ?? []) as { shopify_variant_id: string; price: number; compare_at_price: number | null }[]) if (!last.has(r.shopify_variant_id)) last.set(r.shopify_variant_id, r);
+  const num = (x: string | number | null | undefined) => (x === null || x === undefined || x === "" || Number(x) === 0 ? null : Number(x));
+  const rows = variants.filter((v) => {
+    const l = last.get(v.id);
+    return !l || Number(l.price) !== Number(v.price) || num(l.compare_at_price) !== num(v.compareAtPrice);
+  }).map((v) => ({ store_id: storeId, shopify_variant_id: v.id, price: Number(v.price), compare_at_price: num(v.compareAtPrice) }));
+  if (rows.length) {
+    const { error: e2 } = await db.from("shop_price_history").insert(rows);
+    if (e2) return false;
+  }
+  return true;
+}
+
+/** Jeden produkt spoza magazynu: zajęcie, kopia, zapis wyniku, najniższa cena z 30 dni. null – zajęty gdzie indziej. */
+async function processExtra(db: SupabaseClient, pair: MirrorPair, row: ExtraRow, settings: MirrorSettings, updatedAt?: string) {
+  const { data: ok, error: ce } = await db.rpc("mirror_extra_claim", { p_store: pair.mirror.id, p_source: row.source_product_id });
+  if (ce || ok !== true) return null;
+  const now = new Date().toISOString();
+  try {
+    const r = await mirrorExtraProduct(db, pair, row, settings);
+    if ("gone" in r && r.gone) {
+      await db.from("mirror_extra").delete().eq("store_id", pair.mirror.id).eq("source_product_id", row.source_product_id);
+    } else {
+      await db.from("mirror_extra").update({
+        ...("id" in r && r.id ? { mirror_product_id: r.id, mirror_hash: r.hash, mirror_media_hash: r.mediaHash, mirrored_at: now } : {}),
+        source_updated_at: updatedAt ?? now, attempts: 0, last_error: null, claimed_at: null,
+      }).eq("store_id", pair.mirror.id).eq("source_product_id", row.source_product_id);
+      const mid = ("id" in r && r.id) || row.mirror_product_id;
+      if (mid) await (await import("./mirror-omnibus")).mirrorExtraOmnibus(db, pair, row.source_product_id, mid).catch(() => 0);
+    }
+    return r;
+  } catch (e) {
+    await db.from("mirror_extra").update({ attempts: row.attempts + 1, last_error: errorMessage(e).slice(0, 500), claimed_at: null })
+      .eq("store_id", pair.mirror.id).eq("source_product_id", row.source_product_id);
+    return { error: errorMessage(e) };
+  }
+}
+
+/**
+ * Webhook sklepu źródłowego: zmieniony produkt, którego nie ma w magazynie (np. Rope) – od razu do kopii
+ * (cena, najniższa cena z 30 dni). Bez SQL 79 – nic.
+ */
+export async function mirrorExtraNow(db: SupabaseClient, pair: MirrorPair, sourceGid: string) {
+  if (!pair.mirror.mirror_location_id) return null;
+  const { data: had, error } = await db.from("mirror_extra").select("*").eq("store_id", pair.mirror.id).eq("source_product_id", sourceGid).maybeSingle();
+  if (error) return null;
+  let row = had as ExtraRow | null;
+  if (!row) {
+    const { data: ins, error: ie } = await db.from("mirror_extra").upsert({ store_id: pair.mirror.id, source_product_id: sourceGid }, { onConflict: "store_id,source_product_id" }).select("*").maybeSingle();
+    if (ie || !ins) return null;
+    row = ins as ExtraRow;
+  }
+  return processExtra(db, pair, row, await mirrorSettings(db));
 }

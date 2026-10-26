@@ -43,7 +43,7 @@ export function isReused(links: { store_id: string; tags?: string[] | null }[], 
  * Najniższa cena z bloku Omnibus Insight na stronie produktu w sklepie (blok aplikacji w motywie).
  * Zwraca kwotę albo null, gdy blok się nie wyświetla (np. tylko przy promocjach) albo strona nie odpowiada.
  */
-async function storefrontLowest(domain: string, handle: string, variantGid: string | null): Promise<number | null> {
+export async function storefrontLowest(domain: string, handle: string, variantGid: string | null): Promise<number | null> {
   const vid = variantGid?.split("/").pop();
   try {
     const res = await fetch(`https://${domain}/products/${encodeURIComponent(handle)}${vid ? `?variant=${vid}` : ""}`, { redirect: "follow", signal: AbortSignal.timeout(6000), headers: { "user-agent": "MagazynApp/1.0 (metka)" } });

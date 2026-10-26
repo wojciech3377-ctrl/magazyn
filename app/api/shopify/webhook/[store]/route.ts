@@ -57,11 +57,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ sto
         else {
           await syncSingleProduct(db, store as Store, gid);
           // Kopie tego sklepu (np. Owca Store): ten produkt od razu (przy błędzie zostaje w kolejce automatu).
-          const { mirrorPairs, mirrorNow } = await import("@/lib/sync/mirror");
+          const { mirrorPairs, mirrorNow, mirrorExtraNow } = await import("@/lib/sync/mirror");
           const pairs = (await mirrorPairs(db)).filter((p) => p.source.id === store.id);
           if (pairs.length) {
             const { data: link } = await db.from("product_store_links").select("product_id").eq("store_id", store.id).eq("shopify_product_id", gid).maybeSingle();
-            for (const pair of link ? pairs : []) await mirrorNow(db, pair, link!.product_id as string).catch(() => null);
+            for (const pair of pairs) {
+              if (link) await mirrorNow(db, pair, link.product_id as string).catch(() => null);
+              // Produkt spoza magazynu (np. Rope z Wykluczeń) – też od razu (cena, historia cen, najniższa z 30 dni).
+              else await mirrorExtraNow(db, pair, gid).catch(() => null);
+            }
           }
         }
         // Usunięty produkt / rozmiar → z magazynu od razu (tylko sztuki bez historii).
