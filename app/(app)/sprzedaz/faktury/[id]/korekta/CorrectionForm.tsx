@@ -32,26 +32,29 @@ export function CorrectionForm({ originalId, before }: { originalId: string; bef
 
       <section className="card overflow-x-auto p-4">
         <h2 className="h2 mb-2">Po korekcie</h2>
-        <table className="table">
-          <thead><tr><th>Nazwa</th><th className="w-24 text-right">Ilość</th><th className="w-32 text-right">Cena brutto</th><th className="text-right">Wartość</th><th className="w-32">VAT</th><th /></tr></thead>
-          <tbody>
-            {after.map((r, i) => (
-              <tr key={i}>
-                <td><input className="input" value={r.name} onChange={(e) => set(i, { name: e.target.value })} aria-label="Nazwa" /></td>
-                <td><input className="input text-right" inputMode="decimal" value={r.quantity} onChange={(e) => set(i, { quantity: Number(e.target.value.replace(",", ".")) || 0 })} aria-label="Ilość" /></td>
-                <td><input className="input text-right" inputMode="decimal" value={r.unit_price_gross} onChange={(e) => set(i, { unit_price_gross: Number(e.target.value.replace(",", ".")) || 0 })} aria-label="Cena brutto" /></td>
-                <td className="text-right tabular-nums">{pln(r.quantity * r.unit_price_gross)}</td>
-                <td>
-                  <select className="input" value={r.vat} onChange={(e) => set(i, { vat: e.target.value as Row["vat"] })} aria-label="VAT">
-                    <option value="margin">marża</option><option value="23">23%</option>
-                  </select>
-                </td>
-                <td><button type="button" className="text-sm text-bad hover:underline" onClick={() => setAfter((a) => a.filter((_, k) => k !== i))}>usuń</button></td>
-              </tr>
-            ))}
-            {!after.length && <tr><td colSpan={6} className="py-4 text-center text-muted">Wszystkie pozycje usunięte – korekta do zera.</td></tr>}
-          </tbody>
-        </table>
+        {/* Na komputerze w wierszu, na telefonie jako karta z podpisami pól. */}
+        <div className="divide-y divide-line">
+          <div className="hidden gap-2 pb-2 text-xs font-medium text-muted sm:grid sm:grid-cols-[minmax(0,1fr)_6rem_8rem_7rem_8rem_3.5rem]">
+            <span>Nazwa</span><span className="text-right">Ilość</span><span className="text-right">Cena brutto</span><span className="text-right">Wartość</span><span>VAT</span><span />
+          </div>
+          {after.map((r, i) => (
+            <div key={i} className="grid grid-cols-6 items-end gap-2 py-3 sm:grid-cols-[minmax(0,1fr)_6rem_8rem_7rem_8rem_3.5rem] sm:items-center sm:py-2">
+              <label className="col-span-6 sm:col-span-1"><span className="mb-1 block text-xs text-muted sm:hidden">Nazwa</span>
+                <input className="input" value={r.name} onChange={(e) => set(i, { name: e.target.value })} aria-label="Nazwa" /></label>
+              <label className="col-span-2 sm:col-span-1"><span className="mb-1 block text-xs text-muted sm:hidden">Ilość</span>
+                <input className="input text-right" inputMode="decimal" value={r.quantity} onChange={(e) => set(i, { quantity: Number(e.target.value.replace(",", ".")) || 0 })} aria-label="Ilość" /></label>
+              <label className="col-span-2 sm:col-span-1"><span className="mb-1 block text-xs text-muted sm:hidden">Cena brutto</span>
+                <input className="input text-right" inputMode="decimal" value={r.unit_price_gross} onChange={(e) => set(i, { unit_price_gross: Number(e.target.value.replace(",", ".")) || 0 })} aria-label="Cena brutto" /></label>
+              <span className="col-span-2 min-w-0 pb-2.5 text-right text-sm tabular-nums sm:col-span-1 sm:pb-0"><span className="block text-xs text-muted sm:hidden">Wartość</span><span className="whitespace-nowrap">{pln(r.quantity * r.unit_price_gross)}</span></span>
+              <label className="col-span-4 sm:col-span-1"><span className="mb-1 block text-xs text-muted sm:hidden">VAT</span>
+                <select className="input" value={r.vat} onChange={(e) => set(i, { vat: e.target.value as Row["vat"] })} aria-label="VAT">
+                  <option value="margin">marża</option><option value="23">23%</option>
+                </select></label>
+              <button type="button" className="col-span-2 h-10 text-right text-sm text-bad hover:underline sm:col-span-1" onClick={() => setAfter((a) => a.filter((_, k) => k !== i))}>usuń</button>
+            </div>
+          ))}
+          {!after.length && <p className="py-4 text-center text-sm text-muted">Wszystkie pozycje usunięte – korekta do zera.</p>}
+        </div>
         <button type="button" className="btn-secondary mt-2" onClick={() => setAfter((a) => [...a, { name: "", quantity: 1, unit: "szt.", unit_price_gross: 0, vat: "margin" }])}>Dodaj pozycję</button>
         <button type="button" className="btn-secondary ml-2 mt-2" onClick={() => setAfter([])}>Korekta do zera (zwrot całości)</button>
       </section>
