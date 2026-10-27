@@ -5,12 +5,74 @@ import { Icon } from "@/components/icons";
 import { SubmitButton } from "@/components/SubmitButton";
 import { addTask, deleteTask, toggleTask, updateTask, type TaskState } from "./actions";
 import { REPEATS, type Repeat } from "./repeat";
+import { prepareTaskUpload } from "./upload-actions";
+import { createClient } from "@/lib/supabase/client";
 
 export type Person = { id: string; name: string; initials: string; color: string };
 export type Task = {
   id: string; title: string; notes: string | null; assignees: string[]; start_date?: string | null; due_date: string | null; repeat?: Repeat | null; priority: "low" | "normal" | "high";
   done_at: string | null; done_by: string | null; created_by: string | null; created_at: string;
+  files?: { path: string; name: string; size: number | null; type: string | null }[] | null;
 };
+
+type Upload = { path: string; sig: string; name: string; size: number; type: string };
+const fileSize = (n: number | null) => (n === null ? "" : n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`);
+
+/** Pliki zadania: wgrywane od razu po wybraniu (prosto do Storage), zapisują się razem z zadaniem. */
+function FilesField({ existing = [] }: { existing?: NonNullable<Task["files"]> }) {
+  const [keep, setKeep] = useState<string[]>(existing.map((f) => f.path));
+  const [added, setAdded] = useState<Upload[]>([]);
+  const [busy, setBusy] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  async function onFiles(list: FileList | null) {
+    setError(null);
+    for (const f of Array.from(list ?? [])) {
+      setBusy((b) => b + 1);
+      try {
+        const prep = await prepareTaskUpload(f.type || "application/octet-stream", f.size);
+        if ("error" in prep) { setError(`${f.name}: ${prep.error}`); continue; }
+        const { error: upErr } = await createClient().storage.from("task-files").uploadToSignedUrl(prep.path, prep.token, f, { contentType: f.type });
+        if (upErr) { setError(`${f.name}: nie udało się wgrać (${upErr.message})`); continue; }
+        setAdded((a) => [...a, { path: prep.path, sig: prep.sig, name: f.name, size: f.size, type: f.type }]);
+      } finally {
+        setBusy((b) => b - 1);
+      }
+    }
+  }
+  const shown = [...existing.filter((f) => keep.includes(f.path)).map((f) => ({ ...f, isNew: false })), ...added.map((f) => ({ ...f, isNew: true }))];
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-dashed border-accent/50 bg-sky-50 px-3 py-1.5 text-sm font-medium text-accent hover:border-accent">
+          <Icon name="plus" className="h-4 w-4" /> Dodaj plik
+          <input type="file" multiple className="sr-only" accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.csv,.txt"
+            onChange={(e) => { void onFiles(e.target.files); e.target.value = ""; }} />
+        </label>
+        <span className="text-xs text-muted">{busy ? "Wgrywam…" : "Zdjęcie, PDF, Word, Excel – do 25 MB"}</span>
+      </div>
+      {shown.length > 0 && (
+        <ul className="flex flex-wrap gap-2">
+          {shown.map((f) => (
+            <li key={f.path} className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-line bg-white py-1 pl-3 pr-1.5 text-sm">
+              <span className="truncate">{f.name}</span>
+              <span className="shrink-0 text-xs text-muted">{fileSize(f.size)}</span>
+              <button type="button" className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-muted hover:bg-red-50 hover:text-bad" aria-label={`Usuń ${f.name}`}
+                onClick={() => (f.isNew ? setAdded((a) => a.filter((x) => x.path !== f.path)) : setKeep((k) => k.filter((p) => p !== f.path)))}>×</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {keep.map((p) => <input key={p} type="hidden" name="keep_file" value={p} />)}
+      {added.map((f) => (
+        <span key={f.path} hidden>
+          <input type="hidden" name="file_path" value={f.path} /><input type="hidden" name="file_sig" value={f.sig} />
+          <input type="hidden" name="file_name" value={f.name} /><input type="hidden" name="file_size" value={f.size} /><input type="hidden" name="file_type" value={f.type} />
+        </span>
+      ))}
+      {error && <p className="text-sm text-bad">{error}</p>}
+    </div>
+  );
+}
 
 const PRIORITY = { high: "Pilne", normal: "Normalne", low: "Bez pośpiechu" } as const;
 
@@ -76,6 +138,7 @@ function Fields({ people, t }: { people: Person[]; t?: Task }) {
       </div>
       {repeat !== "none" && <p className="-mt-1 text-xs text-muted">Po oznaczeniu jako zrobione pojawi się kolejne zadanie ({REPEATS.find((r) => r.key === repeat)?.short}).</p>}
       <textarea className="input min-h-16" name="notes" defaultValue={t?.notes ?? ""} placeholder="Szczegóły (opcjonalnie)" aria-label="Szczegóły" maxLength={2000} />
+      <FilesField existing={t?.files ?? []} />
       <AssigneePicker people={people} initial={t?.assignees} />
     </div>
   );
@@ -147,7 +210,8 @@ export function TaskItem({ t, people, canDelete, doneByName, authorName }: { t: 
           {done && <Icon name="check" className="h-3.5 w-3.5" />}
         </button>
       </form>
-      <button type="button" className="min-w-0 flex-1 text-left" onClick={() => setEdit(true)} title="Kliknij, żeby zmienić">
+      <div className="min-w-0 flex-1">
+      <button type="button" className="w-full text-left" onClick={() => setEdit(true)} title="Kliknij, żeby zmienić">
         <span className={`block font-medium leading-snug ${done ? "text-muted line-through" : ""}`}>{t.title}</span>
         {t.notes && <span className={`mt-0.5 block whitespace-pre-line text-sm ${done ? "text-slate-400" : "text-muted"}`}>{t.notes}</span>}
         <span className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
@@ -170,6 +234,20 @@ export function TaskItem({ t, people, canDelete, doneByName, authorName }: { t: 
           {done ? <span>zrobione{doneByName ? ` przez ${doneByName}` : ""}</span> : authorName && <span>od {authorName}</span>}
         </span>
       </button>
+      {(t.files ?? []).length > 0 && (
+        <ul className="mt-2 flex flex-wrap gap-1.5">
+          {(t.files ?? []).map((f) => (
+            <li key={f.path}>
+              <a className="inline-flex max-w-64 items-center gap-1.5 rounded-full border border-line bg-white px-2.5 py-1 text-xs text-accent hover:border-accent"
+                href={`/api/zadania/plik?zadanie=${t.id}&plik=${encodeURIComponent(f.path)}`} target="_blank" rel="noreferrer">
+                <svg aria-hidden="true" viewBox="0 0 20 20" className="h-3.5 w-3.5 shrink-0 fill-current"><path d="M13.5 3a3.5 3.5 0 0 1 2.47 5.97l-6.36 6.37a2.5 2.5 0 0 1-3.54-3.54l5.66-5.66 1.06 1.06-5.66 5.66a1 1 0 0 0 1.42 1.42l6.36-6.37a2 2 0 0 0-2.83-2.83L5.73 11.4a3.5 3.5 0 0 0 4.95 4.95l4.6-4.6 1.06 1.06-4.6 4.6A5 5 0 0 1 4.67 10.34l6.36-6.36A3.48 3.48 0 0 1 13.5 3Z" /></svg>
+                <span className="truncate">{f.name}</span>
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+      </div>
     </li>
   );
 }
