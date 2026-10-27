@@ -381,7 +381,9 @@ export async function pushStockToShopify(db: SupabaseClient, maxChanges = 500, o
   for (const p of plan) {
     if (p.note) { results[p.store.name] = p.note; continue; }
     const seededInfo = { ...(p.seeded ? { nowe_ze_shopify: p.seeded } : {}), ...(p.waitingMatch ? { pasuje_do_nieprzypisanych: p.waitingMatch } : {}), ...(p.seedError ? { blad_nowych: p.seedError } : {}) };
-    const todo = p.changes.slice(0, maxChanges);
+    // Sklep-kopia (stan = te same sztuki co źródło) – większa porcja naraz, żeby zaległości schodziły w jednym przebiegu.
+    const limit = p.store.mirror_of ? Math.max(maxChanges, 3000) : maxChanges;
+    const todo = p.changes.slice(0, limit);
     let done = 0;
     const errors: string[] = [];
     const send = (batch: Change[]) => shopifyGraphql<{ inventorySetQuantities: { userErrors: { message: string; code: string | null }[] } }>(
@@ -402,7 +404,7 @@ export async function pushStockToShopify(db: SupabaseClient, maxChanges = 500, o
       }
     }
     // Rozmiary nieaktywne w lokalizacji Shopify, a z sztukami w aplikacji (np. nowy sklep) – aktywacja ze stanem, porcjami.
-    const toActivate = p.activate.slice(0, maxChanges);
+    const toActivate = p.activate.slice(0, limit);
     const act = toActivate.length ? await activateAtLocation(p.store.shopify_domain, p.store.code, toActivate) : null;
     if (act) errors.push(...act.errors);
     results[p.store.name] = { changed: done, left: p.changes.length - todo.length, ...(act ? { aktywowane: act.done, do_aktywacji: p.activate.length - toActivate.length } : {}), ...seededInfo, ...(errors.length ? { failed: errors.length, errors: [...new Set(errors)].slice(0, 3) } : {}) };
@@ -573,7 +575,26 @@ async function seedNewVariantLevel(db: SupabaseClient, storeId: string, inventor
     p_limit: 100, p_source: `Shopify ${store?.name ?? ""} (nowy produkt)`.trim(), p_scope: null, p_confirm_minutes: 0, p_remove: false,
   });
   if (error) throw error;
+  // Nowe sztuki – od razu stan w sklepach-kopiach (np. Owca Store), nie dopiero przy pełnym wyrównaniu.
+  if (Number((data as { created?: number } | null)?.created ?? 0) > 0) await pushVariantsNow(db, [link.variant_id as string], { mirrorsOnly: true }).catch(() => null);
   return data;
+}
+
+/**
+ * Co minutę: rozmiary, których sztuki zmieniły się od ostatniego sprawdzenia (przyjęcie, nowe ze Shopify, sprzedaż,
+ * zwrot, przesunięcie, usunięcie) → stan w sklepach-kopiach. Uzupełnia zapis „od razu” przy ruchu, gdyby się nie udał.
+ */
+export async function pushRecentToMirrors(db: SupabaseClient) {
+  if (!(await hasMirrorStores(db))) return null;
+  const { data: st } = await db.from("sync_state").select("value").eq("key", "mirror_recent").maybeSingle();
+  const since = (st?.value as { at?: string } | null)?.at ?? new Date(Date.now() - 15 * 60_000).toISOString();
+  const startedAt = new Date(Date.now() - 5_000).toISOString();
+  const { data: ev, error } = await db.from("unit_events").select("unit:units(variant_id)").gt("created_at", since).order("created_at").limit(1000);
+  if (error) throw error;
+  const variants = [...new Set(((ev ?? []) as unknown as { unit: { variant_id: string } | null }[]).map((e) => e.unit?.variant_id).filter((x): x is string => !!x))];
+  const r = variants.length ? await pushVariantsNow(db, variants, { mirrorsOnly: true }) : {};
+  await db.from("sync_state").upsert({ key: "mirror_recent", value: { at: startedAt }, updated_at: new Date().toISOString() });
+  return variants.length ? { variants: variants.length, ...r } : null;
 }
 
 /**

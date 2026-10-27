@@ -102,8 +102,8 @@ export async function runAutoCatalog(db: SupabaseClient, force = false) {
     return { ...r, ...(typeof omnibus === "string" || Object.keys(omnibus).length ? { omnibus } : {}), ...(typeof extras === "string" || Object.keys(extras).length ? { spoza_magazynu: extras } : {}), ...(typeof cleanup === "string" || Object.keys(cleanup).length ? { usuwanie: cleanup } : {}) };
   })().catch((e) => `błąd: ${errorMessage(e)}`);
   // Pełne wyrównanie stanów (wszystkie rozmiary wszystkich sklepów – sporo odczytu z bazy). Przy głównym magazynie
-  // aplikacji każdy ruch (sprzedaż, przyjęcie, przesunięcie, zamówienie ze sklepu) zmienia stan w obu sklepach od razu,
-  // więc pełne wyrównanie to tylko siatka bezpieczeństwa – raz na dobę, w nocy (przycisk w Ustawieniach – zawsze).
+  // aplikacji każdy ruch zmienia stan w obu sklepach od razu (i co minutę zmienione rozmiary → kopie), więc pełne
+  // wyrównanie to siatka bezpieczeństwa – co 3 godziny (przycisk „Sprawdź nowe produkty i stany” – zawsze).
   // Przy głównym Shopify – jak dotąd przy każdym przebiegu (to jego podstawowy odczyt).
   const stock: Awaited<ReturnType<typeof syncStock>> | { error: string; master?: undefined; result?: undefined } = await (async () => {
     const { getStockMaster } = await import("./shopify-stock");
@@ -112,7 +112,8 @@ export async function runAutoCatalog(db: SupabaseClient, force = false) {
       const prev = sf?.value as { at?: string; result?: unknown } | null;
       const age = prev?.at ? Date.now() - Date.parse(prev.at) : Infinity;
       const hour = Number(new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Warsaw", hour: "2-digit", hourCycle: "h23" }).format(new Date()));
-      const due = age > 26 * 3600_000 || (age > 20 * 3600_000 && hour >= 3 && hour < 6);
+      // Co 3 godziny (wcześniej co 15 min – dużo transferu, potem raz na dobę – za rzadko dla nowych produktów w kopii).
+      const due = age > 3 * 3600_000 || (age > 2 * 3600_000 && hour >= 3 && hour < 6);
       // Bez pełnego wyrównania – ostatni wynik (żeby „Błędy automatu” nie znikały między przebiegami).
       if (!due && prev?.result) return prev.result as Awaited<ReturnType<typeof syncStock>>;
       if (!due) return { master: "app" as const, result: {} } as unknown as Awaited<ReturnType<typeof syncStock>>;

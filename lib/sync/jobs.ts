@@ -88,6 +88,9 @@ export async function runFastJobs(db: SupabaseClient) {
       return r;
     })(),
   ]);
+  // Zmienione sztuki → stan w sklepach-kopiach (np. Owca Store) – mały odczyt (tylko zdarzenia od ostatniej minuty).
+  const mirrorStock = await run(db, "mirror-stock", async () => (await import("@/lib/sync/shopify-stock")).pushRecentToMirrors(db), false);
+  if (!mirrorStock.ok) failed.push(fastJobIssue("mirror-stock", mirrorStock.error));
   await syncIssues(db, "fast", failed);
   return { shop, live, ship, ok: shop.ok && ship.ok };
 }

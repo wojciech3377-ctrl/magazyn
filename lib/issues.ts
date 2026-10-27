@@ -118,6 +118,7 @@ export function fastJobIssue(job: string, error: unknown): Issue {
     settle: ["Rozliczanie rezerwacji (sprzedane po paragonie) nie działa", "Sztuki z zamówień z paragonem mogą zostać „zarezerwowane” zamiast „sprzedane”."],
     "tracking-shopify": ["Numery przesyłek nie trafiają do Shopify", "Zamówienia z etykietą z aplikacji zostają w Shopify jako niewysłane (klient nie dostaje numeru). Sprawdź połączenie ze Shopify; aplikacja ponawia co minutę."],
     "consignor-mail": ["E-maile do komisantów o sprzedaży nie wychodzą", "Sprawdź ustawienia poczty (Ustawienia → Faktury i KSeF → SMTP)."],
+    "mirror-stock": ["Stany w sklepie-kopii (np. Owca Store) nie aktualizują się na bieżąco", "Zmiany sztuk nie trafiają od razu do kopii – wyrówna je pełne porównanie (co 3 godziny) albo „Sprawdź nowe produkty i stany” w Magazynie."],
   };
   const [title, hint] = titles[job] ?? [`Zadanie „${job}” kończy się błędem`, null];
   return { key: job, title, detail: msg(error), hint, showAfter: 3 };
