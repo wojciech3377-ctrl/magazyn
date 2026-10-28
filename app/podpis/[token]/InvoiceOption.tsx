@@ -2,6 +2,7 @@
 
 import { useActionState, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { FileButton } from "@/components/FileButton";
 import { prepareSellerInvoiceUpload, submitSellerInvoice } from "../actions";
 
 /** Sprzedający-firma: zamiast podpisywać umowę – wgrywa fakturę (pozycje i ceny jak w linku). */
@@ -80,8 +81,8 @@ export function InvoiceOption({ token, currency }: { token: string; currency?: s
         )}
       </div>
       <div>
-        <label className="label" htmlFor="inv-file">Plik faktury (PDF, JPG, PNG – do 10 MB) / Invoice file</label>
-        <input id="inv-file" type="file" accept="application/pdf,image/jpeg,image/png" className="block text-sm" onChange={(e) => onFile(e.target.files?.[0])} />
+        <span className="label">Plik faktury / Invoice file</span>
+        <FileButton label="Wybierz plik / Choose file" accept="application/pdf,image/jpeg,image/png" onFile={onFile} disabled={upload.busy} hint="PDF, JPG, PNG – do 10 MB / up to 10 MB" />
         {upload.busy && <p className="mt-1 text-xs text-muted">Wgrywam…</p>}
         {file && <p className="mt-1 text-xs text-ok">Wgrano: {file.name}</p>}
         {upload.error && <p className="mt-1 text-xs text-bad">{upload.error}</p>}
