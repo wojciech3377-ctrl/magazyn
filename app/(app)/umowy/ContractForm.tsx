@@ -105,7 +105,7 @@ function CopiesCounter() {
   );
 }
 
-/** Rzeczy wpisane ręcznie i spoza katalogu → od razu sztuki na stanie, „nieprzypisane do Shopify”. */
+/** Rzeczy z umowy → od razu sztuki w drodze (albo na stanie); spoza Shopify jako „nieprzypisane do Shopify”. */
 export function StockOption({ locations, compact = false, canStock = false }: { locations: { id: string; label: string }[]; compact?: boolean; canStock?: boolean }) {
   const [on, setOn] = useState(true);
   return (
@@ -114,7 +114,7 @@ export function StockOption({ locations, compact = false, canStock = false }: { 
         <input type="checkbox" name="to_stock" value="1" checked={on} onChange={(e) => setOn(e.target.checked)} className="mt-0.5" />
         {compact
           ? <span>dodaj do magazynu („nieprzypisane do Shopify”)</span>
-          : <span><b>Rzeczy wpisane ręcznie i spoza katalogu Shopify – dodaj do magazynu</b> <span className="text-muted">(status „nieprzypisane do Shopify”; domyślnie w drodze – przyjmiesz je w Przyjęcie dostawy → W drodze; gdy produkt pojawi się w Shopify, połączysz go w Do zrobienia)</span></span>}
+          : <span><b>Rzeczy z umowy (z katalogu, spoza katalogu i wpisane ręcznie) – dodaj do magazynu</b> <span className="text-muted">(domyślnie w drodze – przyjmiesz je w Przyjęcie dostawy → W drodze. Rzeczy spoza Shopify dostają status „nieprzypisane do Shopify” – połączysz je w Do zrobienia. Odznacz, jeśli sztuki są już w magazynie i tylko je dopinasz)</span></span>}
       </label>
       {on && (
         <div className="flex flex-wrap items-center gap-2">

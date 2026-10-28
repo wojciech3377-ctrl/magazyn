@@ -7,7 +7,7 @@ import { Field, Notice, PageHeader, StatusBadge, Thumb } from "@/components/ui";
 import { searchWords, wordsOr } from "@/lib/search";
 import { UNIT_STATUS } from "@/lib/labels";
 import { SubmitButton } from "@/components/SubmitButton";
-import { acceptContract, addContractItem, removeContractItem, attachUnits, decideConsignorInvoice, cancelContract, deleteContract, detachUnit, markPaid, rejectContract, replaceFile, retryFinalize, sendSigningEmail, setContractPayment, setTemplateCurrency, updateContractMeta } from "../actions";
+import { acceptContract, addContractItem, stockPendingContractItems, removeContractItem, attachUnits, decideConsignorInvoice, cancelContract, deleteContract, detachUnit, markPaid, rejectContract, replaceFile, retryFinalize, sendSigningEmail, setContractPayment, setTemplateCurrency, updateContractMeta } from "../actions";
 import { appUrl } from "@/lib/app-url";
 import { mailConfigured } from "@/lib/mail";
 import { contractTotal, formatMoney } from "@/lib/contracts/purchase";
@@ -17,6 +17,7 @@ import { CopyLink } from "./CopyLink";
 import { AssignItems } from "./AssignItems";
 import { ContractFileInput } from "@/components/ContractFileInput";
 import { StockOption } from "../ContractForm";
+import { pendingContractItems } from "@/lib/contracts/pending";
 import { contractHistory } from "@/lib/contracts/history";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -32,7 +33,7 @@ export default async function ContractPage({ params, searchParams }: { params: P
   const stockLocations = (locRows ?? []).map((l) => ({ id: l.id as string, label: `${(l.store as unknown as { name: string } | null)?.name ?? ""} · ${l.name}` }));
   const { data: units } = await supabase
     .from("units")
-    .select("id, code, status, identifier, variant:variants(option, product:products(id, title, image_url))")
+    .select("id, code, status, identifier, variant_id, variant:variants(option, product:products(id, title, image_url))")
     .eq("contract_id", id)
     .order("number");
   // „Dopnij sztuki” po nazwie: sztuki własne bez umowy pasujące do wyszukiwania (ze zdjęciem).
@@ -161,7 +162,7 @@ export default async function ContractPage({ params, searchParams }: { params: P
                       <tbody>
                         {(c.items as { title: string; option?: string; qty?: number; price?: number | string; unit_id?: string; variant_id?: string; manual?: boolean }[]).map((i, k) => (
                           <tr key={k}>
-                            <td>{i.title}{!i.manual && !i.unit_id && i.variant_id && <span className="ml-1 text-xs text-muted">(z katalogu – dopnij sztukę poniżej)</span>}{i.unit_id && unassignedUnits.has(i.unit_id) && <span className="ml-1 text-xs text-warn">(w magazynie – nieprzypisane do Shopify)</span>}</td>
+                            <td>{i.title}{!i.manual && !i.unit_id && i.variant_id && <span className="ml-1 text-xs text-muted">(z katalogu – jeszcze bez sztuki)</span>}{i.unit_id && unassignedUnits.has(i.unit_id) && <span className="ml-1 text-xs text-warn">(w magazynie – nieprzypisane do Shopify)</span>}</td>
                             <td className="font-medium">{i.option || "–"}</td>
                             <td className="text-right tabular-nums">{Number(i.qty ?? 1)}</td>
                             {profile.can_see_prices && <td className="text-right tabular-nums">{Number(i.price ?? 0) > 0 ? formatMoney(Number(i.price), c.currency ?? "PLN") : "–"}</td>}
@@ -178,6 +179,26 @@ export default async function ContractPage({ params, searchParams }: { params: P
                     </table>
                   </div>
                 ) : <p className="text-sm text-muted">Brak – możesz wpisać, co jest na fakturze (nie jest wymagane).</p>}
+                {stockLocations.length > 0 && (() => {
+                  const pending = pendingContractItems((c.items ?? []) as { unit_id?: string; variant_id?: string; qty?: number }[], (units ?? []) as { id: string; variant_id: string | null }[]);
+                  const n = [...pending.values()].reduce((a, q) => a + q, 0);
+                  return n > 0 && (
+                    <form action={stockPendingContractItems} className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-sm">
+                      <input type="hidden" name="id" value={c.id} />
+                      <span><b>{n} szt.</b> z tej umowy nie ma jeszcze w magazynie.</span>
+                      {profile.role === "admin" ? (
+                        <select className="input w-auto" name="stock_status" defaultValue="in_transit" aria-label="Status nowych sztuk">
+                          <option value="in_transit">do W drodze</option>
+                          <option value="in_stock">od razu na stan</option>
+                        </select>
+                      ) : <input type="hidden" name="stock_status" value="in_transit" />}
+                      <select className="input w-auto" name="stock_location_id" defaultValue={stockLocations[0]?.id} aria-label="Lokalizacja">
+                        {stockLocations.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
+                      </select>
+                      <SubmitButton className="btn-secondary" pendingText="…">Dodaj do magazynu</SubmitButton>
+                    </form>
+                  );
+                })()}
                 <form action={addContractItem} className="mt-2 flex flex-wrap items-end gap-2">
                   <input type="hidden" name="id" value={c.id} />
                   <input className="input min-w-48 flex-1" name="title" placeholder="Nazwa przedmiotu" maxLength={120} aria-label="Nazwa przedmiotu" required />

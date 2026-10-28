@@ -62,7 +62,7 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
     const manualItems = parseManualItems(formData.get("manual_items"));
     // Rzeczy wpisane ręcznie / spoza katalogu → od razu sztuki na stanie („nieprzypisane do Shopify”).
     const stockLoc = formData.get("to_stock") === "1" && !formData.get("sale_id") ? String(formData.get("stock_location_id") ?? "") : "";
-    if (formData.get("to_stock") === "1" && !formData.get("sale_id") && manualItems.length && !stockLoc) return { error: "Wybierz lokalizację, na którą trafią rzeczy (albo odznacz „dodaj do magazynu”)." };
+    if (formData.get("to_stock") === "1" && !formData.get("sale_id") && (manualItems.length || catalogItems.length) && !stockLoc) return { error: "Wybierz lokalizację, na którą trafią rzeczy (albo odznacz „dodaj do magazynu”)." };
     const docNumber = String(formData.get("doc_number") ?? "").trim().slice(0, 60) || null;
     const perItem = formData.get("amount_per_item") === "1";
     const vatForm = ["vat_margin", "vat_23"].includes(String(formData.get("vat_form"))) ? String(formData.get("vat_form")) : null;
@@ -94,11 +94,18 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
     let stockErr = "";
     if (stockLoc && (catalogItems.length || manualItems.length)) {
       const { stockContractItems } = await import("@/lib/contracts/stock-items");
-      const r = await stockContractItems(supabase, id, [...catalogItems, ...manualItems], stockLoc, await stockStatusOf(formData)).catch((e: unknown) => ({ items: null, created: 0, error: errorMessage(e) }));
+      // Rzeczy z katalogu Shopify też dostają sztuki (w drodze / na stanie) – jak w umowie z szablonu. Pozycja, której
+      // sztukę dopinasz kodem w tym samym formularzu, nie dostaje drugiej.
+      const list = codes(String(formData.get("units") ?? ""));
+      const { data: byCode } = list.length
+        ? await supabase.from("units").select("id, variant_id").or(`code.in.(${list.join(",")}),identifier.in.(${list.join(",")})`)
+        : { data: [] };
+      const { pendingContractItems } = await import("@/lib/contracts/pending");
+      const all = [...catalogItems, ...manualItems];
+      const only = pendingContractItems(all, (byCode ?? []) as { id: string; variant_id: string | null }[]);
+      const r = await stockContractItems(supabase, id, all, stockLoc, await stockStatusOf(formData), { catalog: true, only }).catch((e: unknown) => ({ items: null, created: 0, error: errorMessage(e) }));
       if (r.items && r.created) await supabase.from("contracts").update({ items: r.items }).eq("id", id);
-      if (r.created) okNote = (await stockStatusOf(formData)) === "in_stock"
-        ? `Dodano na stan ${r.created} szt. „nieprzypisane do Shopify” – przypiszesz je, gdy produkt będzie w Shopify.`
-        : `${r.created} szt. „nieprzypisane do Shopify” w Przyjęcie dostawy → W drodze – przyjmiesz je, gdy dojdą.`;
+      if (r.created) okNote = stockedNote(r.created, r.items, await stockStatusOf(formData));
       if (r.error) stockErr = `Umowa zapisana, ale ${r.created ? "nie wszystkie rzeczy" : "rzeczy nie"} trafiły do magazynu: ${r.error}`;
     }
     // Kilka jednakowych umów z tym samym plikiem (np. jedna faktura na kilka osobnych umów). Rzeczy, sprzedaż
@@ -145,6 +152,48 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
     redirect(`${returnTo}${returnTo.includes("?") ? "&" : "?"}ok=${encodeURIComponent(["Umowa zapisana i przypięta.", okNote].filter(Boolean).join(" "))}`);
   }
   redirect(`/umowy/${id}${note || (okNote ? `?ok=${encodeURIComponent(okNote)}` : "")}`);
+}
+
+/** Komunikat po dodaniu rzeczy z umowy do magazynu. */
+function stockedNote(created: number, items: { unit_id?: string; unassigned?: boolean }[] | null, status: "in_transit" | "in_stock") {
+  const loose = (items ?? []).filter((i) => i.unit_id && i.unassigned).length;
+  const tail = loose ? ` (w tym ${loose} „nieprzypisane do Shopify” – przypiszesz je, gdy produkt będzie w Shopify)` : "";
+  return status === "in_stock"
+    ? `Dodano na stan ${created} szt.${tail}.`
+    : `${created} szt. w Przyjęcie dostawy → W drodze – przyjmiesz je, gdy dojdą${tail}.`;
+}
+
+/**
+ * Umowa (skan / faktura) z rzeczami bez sztuk – np. zapisana wcześniej z rzeczami z katalogu albo bez „dodaj do
+ * magazynu”: tworzy ich sztuki w drodze (albo od razu na stanie – administrator) w wybranej lokalizacji.
+ */
+export async function stockPendingContractItems(formData: FormData) {
+  const { supabase } = await requireSection("umowy", "dostawa");
+  const id = String(formData.get("id") ?? "");
+  if (!/^[0-9a-f-]{36}$/i.test(id)) redirect("/umowy");
+  const loc = String(formData.get("stock_location_id") ?? "");
+  if (!loc) redirect(`/umowy/${id}?blad=${encodeURIComponent("Wybierz lokalizację, na którą trafią rzeczy.")}`);
+  const { data: c } = await supabase.from("contracts").select("items, template").eq("id", id).maybeSingle();
+  if (!c || c.template) redirect(`/umowy/${id}`);
+  const items = (c.items ?? []) as { unit_id?: string; variant_id?: string; qty?: number }[];
+  // Pozycje z katalogu, do których sztuka jest już przypięta osobno (kodem), nie dostają drugiej sztuki.
+  const { data: attached } = await supabase.from("units").select("id, variant_id").eq("contract_id", id);
+  const { pendingContractItems } = await import("@/lib/contracts/pending");
+  const only = pendingContractItems(items, (attached ?? []) as { id: string; variant_id: string | null }[]);
+  if (!only.size) redirect(`/umowy/${id}?ok=${encodeURIComponent("Wszystkie rzeczy z tej umowy są już w magazynie.")}`);
+  const status = await stockStatusOf(formData);
+  const { stockContractItems } = await import("@/lib/contracts/stock-items");
+  const r = await stockContractItems(supabase, id, items as Parameters<typeof stockContractItems>[2], loc, status, { catalog: true, only })
+    .catch((e: unknown) => ({ items: null, created: 0, error: errorMessage(e) }));
+  if (r.items && r.created) {
+    const { error } = await supabase.from("contracts").update({ items: r.items }).eq("id", id);
+    if (error) redirect(`/umowy/${id}?blad=${encodeURIComponent(`Sztuki powstały, ale umowa nie zapisała pozycji: ${error.message}`)}`);
+  }
+  revalidatePath(`/umowy/${id}`);
+  revalidatePath("/dostawa");
+  revalidatePath("/magazyn");
+  if (r.error) redirect(`/umowy/${id}?blad=${encodeURIComponent(`${r.created ? `Dodano ${r.created} szt., ale nie wszystkie rzeczy` : "Rzeczy nie"} trafiły do magazynu: ${r.error}`)}`);
+  redirect(`/umowy/${id}?ok=${encodeURIComponent(stockedNote(r.created, r.items, status))}`);
 }
 
 type ManualItem = { title: string; option: string; qty: number; price: number; manual: true };

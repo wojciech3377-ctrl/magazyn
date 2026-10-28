@@ -14,10 +14,12 @@ const norm = (s: string) => s.trim().replace(/\s+/g, " ").toLowerCase();
  * NA STANIE w wybranej lokalizacji, jako „nieprzypisane do Shopify”. Rzeczy o tej samej nazwie trafiają do
  * jednego produktu (rozmiary = warianty) – potem jednym kliknięciem przypiszesz cały produkt do Shopify.
  * Każda sztuka dostaje własną pozycję umowy (ilość 1, unit_id) – usunięcie sztuki wydziela dokładnie ją.
- * Rzeczy z katalogu Shopify zostają bez zmian (do nich dopinasz istniejące sztuki).
+ * Rzeczy z katalogu Shopify: z `catalog: true` też dostają nowe sztuki (tego wariantu Shopify) – „w drodze”
+ * albo od razu na stanie; bez tego zostają bez zmian (do nich dopinasz istniejące sztuki).
  */
-export async function stockContractItems(db: SupabaseClient, contractId: string, items: ContractItem[], locationId: string, status: "in_transit" | "in_stock" = "in_transit") {
-  const todo = items.map((it, k) => ({ it, k })).filter(({ it }) => !it.unit_id);
+export async function stockContractItems(db: SupabaseClient, contractId: string, items: ContractItem[], locationId: string, status: "in_transit" | "in_stock" = "in_transit", opts: { catalog?: boolean; only?: Map<number, number> } = {}) {
+  // `only`: tylko te pozycje (indeks → ile sztuk utworzyć; reszta ilości zostaje w pozycji bez zmian).
+  const todo = items.map((it, k) => ({ it, k })).filter(({ it, k }) => !it.unit_id && (!opts.only || opts.only.has(k)));
   if (!todo.length) return { items, created: 0, error: null };
   const admin = createAdminClient();
 
@@ -27,7 +29,7 @@ export async function stockContractItems(db: SupabaseClient, contractId: string,
     ? await admin.from("variants").select("id, product:products(unassigned)").in("id", vids)
     : { data: [] };
   const unassignedVid = new Set((vrows ?? []).filter((v) => (v.product as unknown as { unassigned?: boolean } | null)?.unassigned).map((v) => v.id as string));
-  const stock = todo.filter(({ it }) => !it.variant_id || unassignedVid.has(it.variant_id));
+  const stock = todo.filter(({ it }) => !it.variant_id || unassignedVid.has(it.variant_id) || opts.catalog);
   if (!stock.length) return { items, created: 0, error: null };
 
   const [{ data: c }, { data: loc }] = await Promise.all([
@@ -38,7 +40,7 @@ export async function stockContractItems(db: SupabaseClient, contractId: string,
   if (!loc) throw new Error("Wybierz lokalizację, na którą trafią rzeczy.");
   const consignment = c.type === "consignment";
   if (consignment && !c.consignor_id) throw new Error("Umowa komisowa bez komisanta – wybierz komisanta, żeby dodać rzeczy do magazynu.");
-  const total = stock.reduce((n, { it }) => n + Math.max(1, Math.floor(Number(it.qty ?? 1)) || 1), 0);
+  const total = stock.reduce((n, { it, k }) => n + Math.min(Math.max(1, Math.floor(Number(it.qty ?? 1)) || 1), opts.only?.get(k) ?? Infinity), 0);
   if (total > 500) throw new Error("Najwyżej 500 sztuk naraz.");
 
   // Produkty „nieprzypisane” – jeden na nazwę, rozmiary jako warianty.
@@ -68,7 +70,8 @@ export async function stockContractItems(db: SupabaseClient, contractId: string,
   let failed: string | null = null;
   for (const { it, k } of stock) {
     try {
-    const qty = Math.max(1, Math.floor(Number(it.qty ?? 1)) || 1);
+    const full = Math.max(1, Math.floor(Number(it.qty ?? 1)) || 1);
+    const qty = Math.min(full, opts.only?.get(k) ?? full);
     const price = Number(it.price ?? 0) > 0 ? Number(it.price) : null;
     const variantId = it.variant_id ?? (await variantFor(it.title, it.option ?? ""));
     const { data, error } = await db.rpc("receive_delivery", {
@@ -86,8 +89,8 @@ export async function stockContractItems(db: SupabaseClient, contractId: string,
     const { data: v } = await admin.from("variants").select("option").eq("id", variantId).single();
     replaced.set(k, ids.map((unitId) => ({
       title: it.title, option: (v?.option as string | undefined) ?? it.option ?? "", qty: 1, price: price ?? 0,
-      variant_id: variantId, unit_id: unitId, unassigned: true,
-    })));
+      variant_id: variantId, unit_id: unitId, ...(!it.variant_id || unassignedVid.has(it.variant_id) ? { unassigned: true } : {}),
+    } as ContractItem)).concat(full > qty ? [{ ...it, qty: full - qty }] : []));
     } catch (e) {
       // Co już powstało, zostaje zapisane w umowie; reszta pozycji bez zmian.
       failed = e instanceof Error ? e.message : String(e);
@@ -95,5 +98,11 @@ export async function stockContractItems(db: SupabaseClient, contractId: string,
     }
   }
   if (deliveryId && c.currency) await db.from("units").update({ purchase_currency: c.currency }).eq("delivery_id", deliveryId).then(() => null, () => null);
+  // Sztuki z katalogu od razu na stanie → stan w Shopify (oba sklepy) od razu, nie przy następnym odczycie.
+  const shopVids = [...new Set(stock.filter(({ it }) => it.variant_id && !unassignedVid.has(it.variant_id)).map(({ it }) => it.variant_id as string))];
+  if (status === "in_stock" && used.size && shopVids.length) {
+    const { pushVariantsNow } = await import("@/lib/sync/shopify-stock");
+    await pushVariantsNow(admin, shopVids).catch(() => null);
+  }
   return { items: items.flatMap((it, k) => replaced.get(k) ?? [it]), created: used.size, error: failed };
 }
