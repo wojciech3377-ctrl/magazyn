@@ -3,6 +3,7 @@ import { requireProfile } from "@/lib/auth";
 import { PageHeader } from "@/components/ui";
 import { wtbPages } from "@/lib/wtb";
 import { groupWtb } from "@/lib/wtb-group";
+import { DownloadPng } from "./DownloadPng";
 
 /** Podgląd grafik WTB (po maks. 30 modeli na grafikę) z przyciskami pobierania. */
 export default async function WtbGrafikaPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
@@ -34,7 +35,7 @@ export default async function WtbGrafikaPage({ searchParams }: { searchParams: P
               <img src={`/api/wtb?${idsParam}strona=${i + 1}`} alt={`Grafika WTB ${i + 1}`} className="w-full rounded-lg border border-line" />
               <figcaption className="flex items-center justify-between">
                 <span className="text-sm text-muted">{pages.length > 1 ? `Grafika ${i + 1} z ${pages.length}` : "Grafika"}</span>
-                <a className="btn" href={`/api/wtb?${idsParam}strona=${i + 1}&pobierz=1`}>Pobierz PNG</a>
+                <DownloadPng src={`/api/wtb?${idsParam}strona=${i + 1}`} name={`wtb-${new Date().toISOString().slice(0, 10)}${pages.length > 1 ? `-${i + 1}` : ""}.png`} />
               </figcaption>
             </figure>
           ))}
