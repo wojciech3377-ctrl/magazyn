@@ -216,28 +216,29 @@ export function InvoiceForm({ draft, ksefReady, receipt = false, stores = [], de
             )}
           </div>
         </div>
-        {/* Pozycje: na komputerze w jednym wierszu, na telefonie jako karta (nazwa na całą szerokość, pola z podpisami). */}
+        {/* Pozycje: na szerokim ekranie w jednym wierszu; węższe (kasa POS, tablet, telefon) – nazwa na całą szerokość,
+            pod nią ilość, cena i VAT (wcześniej na średnim ekranie pole nazwy było wąskie i trudno było wpisać nazwę). */}
         <div className="divide-y divide-line">
-          <div className="hidden gap-2 pb-2 text-xs font-medium text-muted sm:grid sm:grid-cols-[minmax(0,1fr)_5rem_5rem_8rem_9rem_7rem_2rem]">
+          <div className="hidden gap-2 pb-2 text-xs font-medium text-muted xl:grid xl:grid-cols-[minmax(0,1fr)_5rem_5rem_8rem_9rem_7rem_2rem]">
             <span>Nazwa</span><span>Ilość</span><span>J.m.</span><span>Cena brutto</span><span>VAT</span><span className="text-right">Wartość</span><span />
           </div>
           {rows.map((r, i) => (
-            <div key={i} className="grid grid-cols-6 items-end gap-2 py-3 sm:grid-cols-[minmax(0,1fr)_5rem_5rem_8rem_9rem_7rem_2rem] sm:items-center sm:py-2">
-              <label className="col-span-5 sm:col-span-1"><span className="mb-1 block text-xs text-muted sm:hidden">Nazwa</span>
-                <input className="input" value={r.name} onChange={(e) => set(i, { name: e.target.value })} aria-label="Nazwa" required /></label>
-              <button type="button" className="col-span-1 h-10 text-lg text-muted hover:text-bad sm:order-last sm:col-span-1" onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))} aria-label="Usuń pozycję" disabled={rows.length === 1}>×</button>
-              <label className="col-span-2 sm:col-span-1"><span className="mb-1 block text-xs text-muted sm:hidden">Ilość</span>
+            <div key={i} className="grid grid-cols-6 items-end gap-2 py-3 sm:grid-cols-12 xl:grid-cols-[minmax(0,1fr)_5rem_5rem_8rem_9rem_7rem_2rem] xl:items-center xl:py-2">
+              <label className="col-span-5 sm:col-span-11 xl:col-span-1"><span className="mb-1 block text-xs text-muted xl:hidden">Nazwa</span>
+                <input className="input text-base" value={r.name} onChange={(e) => set(i, { name: e.target.value })} aria-label="Nazwa" required autoComplete="off" /></label>
+              <button type="button" className="col-span-1 h-10 text-lg text-muted hover:text-bad xl:order-last" onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))} aria-label="Usuń pozycję" disabled={rows.length === 1}>×</button>
+              <label className="col-span-2 xl:col-span-1"><span className="mb-1 block text-xs text-muted xl:hidden">Ilość</span>
                 <input className="input" inputMode="decimal" value={r.quantity} onChange={(e) => set(i, { quantity: e.target.value })} aria-label="Ilość" /></label>
-              <label className="col-span-2 sm:col-span-1"><span className="mb-1 block text-xs text-muted sm:hidden">J.m.</span>
+              <label className="col-span-2 xl:col-span-1"><span className="mb-1 block text-xs text-muted xl:hidden">J.m.</span>
                 <input className="input" value={r.unit} onChange={(e) => set(i, { unit: e.target.value })} aria-label="Jednostka" /></label>
-              <label className="col-span-2 sm:col-span-1"><span className="mb-1 block text-xs text-muted sm:hidden">Cena brutto</span>
+              <label className="col-span-2 sm:col-span-3 xl:col-span-1"><span className="mb-1 block text-xs text-muted xl:hidden">Cena brutto</span>
                 <input className="input" inputMode="decimal" value={r.price} onChange={(e) => set(i, { price: e.target.value })} aria-label="Cena brutto" required /></label>
-              <label className="col-span-4 sm:col-span-1"><span className="mb-1 block text-xs text-muted sm:hidden">VAT</span>
+              <label className="col-span-4 sm:col-span-3 xl:col-span-1"><span className="mb-1 block text-xs text-muted xl:hidden">VAT</span>
                 <select className={`input ${r.checkVat ? "border-amber-400 bg-amber-50" : ""}`} value={r.vat} onChange={(e) => set(i, { vat: e.target.value as Row["vat"] })} aria-label="Stawka" title={r.checkVat ? "Brak sztuki z magazynu – sprawdź, czy to towar używany (marża)" : undefined}>
                   <option value="margin">VAT marża</option>
                   <option value="23">23%</option>
                 </select></label>
-              <span className="col-span-2 min-w-0 pb-2.5 text-right text-sm font-medium tabular-nums sm:col-span-1 sm:pb-0"><span className="block text-xs font-normal text-muted sm:hidden">Wartość</span><span className="whitespace-nowrap">{pl(num(r.price) * num(r.quantity))}</span></span>
+              <span className="col-span-2 min-w-0 pb-2.5 text-right text-sm font-medium tabular-nums xl:col-span-1 xl:pb-0"><span className="block text-xs font-normal text-muted xl:hidden">Wartość</span><span className="whitespace-nowrap">{pl(num(r.price) * num(r.quantity))}</span></span>
             </div>
           ))}
         </div>
