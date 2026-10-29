@@ -7,7 +7,7 @@ import { Field, Notice, PageHeader, StatusBadge, Thumb } from "@/components/ui";
 import { searchWords, wordsOr } from "@/lib/search";
 import { UNIT_STATUS } from "@/lib/labels";
 import { SubmitButton } from "@/components/SubmitButton";
-import { acceptContract, addContractItem, stockPendingContractItems, removeContractItem, attachUnits, decideConsignorInvoice, cancelContract, deleteContract, detachUnit, markPaid, rejectContract, replaceFile, retryFinalize, sendSigningEmail, setContractPayment, setTemplateCurrency, updateContractMeta } from "../actions";
+import { acceptContract, addContractItem, setContractComplete, stockPendingContractItems, removeContractItem, attachUnits, decideConsignorInvoice, cancelContract, deleteContract, detachUnit, markPaid, rejectContract, replaceFile, retryFinalize, sendSigningEmail, setContractPayment, setTemplateCurrency, updateContractMeta } from "../actions";
 import { appUrl } from "@/lib/app-url";
 import { mailConfigured } from "@/lib/mail";
 import { contractTotal, formatMoney } from "@/lib/contracts/purchase";
@@ -18,6 +18,7 @@ import { AssignItems } from "./AssignItems";
 import { ContractFileInput } from "@/components/ContractFileInput";
 import { StockOption } from "../ContractForm";
 import { pendingContractItems } from "@/lib/contracts/pending";
+import { capacity } from "@/lib/contracts/free";
 import { contractHistory } from "@/lib/contracts/history";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -36,6 +37,10 @@ export default async function ContractPage({ params, searchParams }: { params: P
     .select("id, code, status, identifier, variant_id, variant:variants(option, product:products(id, title, image_url))")
     .eq("contract_id", id)
     .order("number");
+  // Ile rzeczy obejmuje umowa (pozycje / „Ile rzeczy na umowie”) i czy jest komplet.
+  const liveUnits = (units ?? []).filter((u) => !["removed", "consignor_returned"].includes(u.status as string)).length;
+  const cap = capacity(c.items, c.type, c.amount_per_item, c.item_limit);
+  const full = liveUnits >= cap;
   // „Dopnij sztuki” po nazwie: sztuki własne bez umowy pasujące do wyszukiwania (ze zdjęciem).
   const szukaj = (sp.szukaj ?? "").replace(/[%,()*\\]/g, " ").trim().slice(0, 100);
   const found: { id: string; code: string; title: string; option: string; status: string; identifier: string | null; location_name: string; image_url: string | null }[] = [];
@@ -70,7 +75,7 @@ export default async function ContractPage({ params, searchParams }: { params: P
         actions={
           <>
             {c.template && profile.can_see_prices && <a className="btn-secondary" href={`/api/umowy/${c.id}/pdf`} target="_blank" rel="noreferrer">{c.type === "invoice" ? "Faktura sprzedającego" : c.status === "signed" ? "PDF umowy" : "Podgląd PDF"}</a>}
-            {!["cancelled", "rejected", "sent"].includes(c.status) && <Link className={units?.length ? "btn-secondary" : "btn"} href={`/umowy/${c.id}/przypisz`}>Przypisz do rzeczy / sprzedaży</Link>}
+            {!["cancelled", "rejected", "sent"].includes(c.status) && !full && <Link className={units?.length ? "btn-secondary" : "btn"} href={`/umowy/${c.id}/przypisz`}>Przypisz do rzeczy / sprzedaży</Link>}
             <Link className="btn-secondary" href="/umowy">Wróć do listy</Link>
           </>
         }
@@ -132,6 +137,12 @@ export default async function ContractPage({ params, searchParams }: { params: P
                 <input type="checkbox" name="amount_per_item" value="1" defaultChecked={!!c.amount_per_item} className="mt-0.5" />
                 <span>Kwota za <b>każdą rzecz</b> – każda przypięta rzecz dostaje tę kwotę zakupu</span>
               </label>
+            )}
+            {!c.template && (
+              <div>
+                <label className="label" htmlFor="item_limit">Ile rzeczy na umowie</label>
+                <input id="item_limit" className="input w-28 tabular-nums" name="item_limit" type="number" min={1} max={10000} inputMode="numeric" defaultValue={c.item_limit ?? ""} placeholder="bez limitu" />
+              </div>
             )}
             <div>
               <label className="label" htmlFor="vat_form">Forma VAT</label>
@@ -243,12 +254,39 @@ export default async function ContractPage({ params, searchParams }: { params: P
                 })}
               </tbody>
             </table>
-            {!c.template && <form id="dopnij" action={attachUnits} className="flex flex-wrap gap-2 border-t border-line p-4">
+            {!c.template && !["cancelled", "rejected"].includes(c.status) && (
+              <div className="flex flex-wrap items-center gap-2 border-t border-line px-4 pt-3 text-sm">
+                {full ? (
+                  <>
+                    <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-ok">Komplet: {liveUnits} z {cap} {cap === 1 ? "rzeczy" : "rzeczy"}</span>
+                    <span className="text-xs text-muted">Umowy nie da się przypiąć do kolejnej rzeczy.</span>
+                    {c.item_limit && (
+                      <form action={setContractComplete}>
+                        <input type="hidden" name="id" value={c.id} />
+                        <input type="hidden" name="unlock" value="1" />
+                        <SubmitButton className="text-xs text-accent hover:underline" pendingText="…">zdejmij limit</SubmitButton>
+                      </form>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <span className="text-xs text-muted">{Number.isFinite(cap) ? `Rzeczy: ${liveUnits} z ${cap}` : `Rzeczy: ${liveUnits} (bez limitu)`}</span>
+                    {!Number.isFinite(cap) && liveUnits > 0 && (
+                      <form action={setContractComplete}>
+                        <input type="hidden" name="id" value={c.id} />
+                        <SubmitButton className="btn-secondary px-2.5 py-1 text-xs" pendingText="…">To wszystkie rzeczy – zablokuj umowę</SubmitButton>
+                      </form>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+            {!c.template && !full && <form id="dopnij" action={attachUnits} className="flex flex-wrap gap-2 border-t border-line p-4">
               <input type="hidden" name="id" value={c.id} />
               <SearchInput noIcon wrapperClassName="flex-1" type="text" name="units" defaultValue={szukaj} placeholder="Dopnij sztuki: nazwa, kod S000123 lub IMEI" aria-label="Nazwa albo kody sztuk" />
               <SubmitButton className="btn-secondary">Szukaj / dopnij</SubmitButton>
             </form>}
-            {!c.template && szukaj && (
+            {!c.template && !full && szukaj && (
               <div className="border-t border-line">
                 <div className="flex items-center justify-between px-4 pt-3 text-sm">
                   <span className="font-medium">Sztuki bez umowy dla „{szukaj}” ({found.length}{found.length === 30 ? "+" : ""})</span>

@@ -14,6 +14,7 @@ import { KSEF_STATUS } from "@/lib/invoices/labels";
 import { isSettled, MISSING_BTN, STAGE_TEXT } from "@/lib/contracts/stage";
 import { ConsignorWaiting } from "@/components/ContractBadges";
 import { JpkNote } from "./JpkNote";
+import { JpkNa } from "./JpkNa";
 
 const KINDS: { key: "all" | DocKind | "none"; label: string }[] = [
   { key: "all", label: "Do JPK: paragony i faktury" },
@@ -33,6 +34,14 @@ const SORTS: { key: JpkSort; label: string }[] = [
   { key: "kwota_asc", label: "Kwota: od najniższej" },
 ];
 
+const CONTRACT_FILTERS = [
+  { key: "", label: "Wszystkie" },
+  { key: "jest", label: "Z umową" },
+  { key: "brak", label: "Bez umowy (do uzupełnienia)" },
+  { key: "nd", label: "Nie dotyczy" },
+] as const;
+type ContractFilter = (typeof CONTRACT_FILTERS)[number]["key"];
+
 const isDay = (v: string | undefined): v is string => !!v && /^\d{4}-\d{2}-\d{2}$/.test(v);
 const dayStart = (v: string) => { const [y, m, d] = v.split("-").map(Number); return warsawMidnight(y, m, d); };
 
@@ -50,21 +59,27 @@ export async function Jpk({ sp }: { sp: Record<string, string | undefined> }) {
   const kind = KINDS.find((k) => k.key === sp.rodzaj)?.key ?? "all";
   const sort = SORTS.find((x) => x.key === sp.sort)?.key ?? "data_asc";
   const preselect = sp.zaznacz === "1";
+  const umowa = (CONTRACT_FILTERS.find((f) => f.key === sp.umowa)?.key ?? "") as ContractFilter;
   let lines: Awaited<ReturnType<typeof loadJpkLines>> = [];
   let error: string | null = null;
   try {
     lines = sortBy(await loadJpkLines(supabase, { from: range.from, to: range.to, kind }), sort);
+    // Filtr „umowa”: z umową (także w toku), bez umowy (do uzupełnienia), „nie dotyczy”.
+    if (umowa) {
+      const has = (l: (typeof lines)[number]) => !!(l.contractId || l.pendingContractId);
+      lines = lines.filter((l) => umowa === "jest" ? has(l) : umowa === "nd" ? !has(l) && !!l.na : !has(l) && !l.na);
+    }
   } catch (e) {
     error = errorMessage(e);
   }
   const prev = previousMonthKey();
   const total = lines.reduce((s, l) => s + (l.price ?? 0), 0);
   const prices = profile.can_see_prices;
-  const qs = new URLSearchParams(Object.entries({ widok: "jpk", miesiac: custom ? undefined : month.key, od: custom ? fromDay ?? undefined : undefined, do: custom ? toDay ?? undefined : undefined, rodzaj: kind, sort }).filter((e): e is [string, string] => !!e[1])).toString();
+  const qs = new URLSearchParams(Object.entries({ widok: "jpk", miesiac: custom ? undefined : month.key, od: custom ? fromDay ?? undefined : undefined, do: custom ? toDay ?? undefined : undefined, rodzaj: kind, sort, umowa: umowa || undefined }).filter((e): e is [string, string] => !!e[1])).toString();
 
   return (
     <>
-      <CollapsibleFilters summary={<>{range.label} · {KINDS.find((k) => k.key === kind)?.label ?? ""}</>}>
+      <CollapsibleFilters summary={<>{range.label} · {KINDS.find((k) => k.key === kind)?.label ?? ""}{umowa ? ` · ${CONTRACT_FILTERS.find((f) => f.key === umowa)?.label}` : ""}</>}>
       <form method="get" className="mb-3 flex flex-wrap items-end gap-2">
         <input type="hidden" name="widok" value="jpk" />
         <div>
@@ -84,6 +99,12 @@ export async function Jpk({ sp }: { sp: Record<string, string | undefined> }) {
           <label className="label" htmlFor="rodzaj">Dokument</label>
           <select id="rodzaj" className="input w-44" name="rodzaj" defaultValue={kind}>
             {KINDS.map((k) => <option key={k.key} value={k.key}>{k.label}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="label" htmlFor="umowa">Umowa</label>
+          <select id="umowa" className="input w-52" name="umowa" defaultValue={umowa}>
+            {CONTRACT_FILTERS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
           </select>
         </div>
         <div>
@@ -150,9 +171,10 @@ export async function Jpk({ sp }: { sp: Record<string, string | undefined> }) {
                         : l.contractId ? <Link className="rounded border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-emerald-800 hover:underline" href={`/umowy/${l.contractId}`}>{l.contractNumber ?? "bez numeru"} ✓</Link>
                         : l.pendingContractId ? <Link className="rounded border border-orange-300 bg-orange-50 px-1.5 py-0.5 text-xs text-orange-800 hover:underline" href={`/umowy/${l.pendingContractId}`}>umowa w toku</Link>
                         : l.consignorWait ? <ConsignorWaiting />
-                        : l.unitId ? <Link className={MISSING_BTN} href={`/sprzedaz/umowa?sztuka=${l.unitId}&back=${encodeURIComponent(`/sprzedaz?${qs}`)}`}>Dołącz umowę</Link>
-                        : l.pieceRef && !l.saleNote ? <button form="jpk-umowa" name="umowa_dla" value={l.pieceRef} className={MISSING_BTN} title={l.variantLinked ? undefined : "Produkt nie jest powiązany z katalogiem – wybierzesz go przy umowie"}>Dołącz umowę</button>
-                        : l.lineRef && !l.saleNote ? <Link className={MISSING_BTN} href={`/sprzedaz/umowa/pozycja?ref=${l.lineRef}&back=${encodeURIComponent(`/sprzedaz?${qs}`)}`} title="Pozycja bez sztuki z magazynu – wybierzesz produkt z katalogu">Dołącz umowę</Link>
+                        : l.na && (l.unitId || ((l.pieceRef || l.lineRef) && !l.saleNote)) ? <JpkNa lineKey={l.key} on />
+                        : l.unitId ? <span className="inline-flex flex-wrap items-center gap-1.5"><Link className={MISSING_BTN} href={`/sprzedaz/umowa?sztuka=${l.unitId}&back=${encodeURIComponent(`/sprzedaz?${qs}`)}`}>Dołącz umowę</Link><JpkNa lineKey={l.key} on={false} /></span>
+                        : l.pieceRef && !l.saleNote ? <span className="inline-flex flex-wrap items-center gap-1.5"><button form="jpk-umowa" name="umowa_dla" value={l.pieceRef} className={MISSING_BTN} title={l.variantLinked ? undefined : "Produkt nie jest powiązany z katalogiem – wybierzesz go przy umowie"}>Dołącz umowę</button><JpkNa lineKey={l.key} on={false} /></span>
+                        : l.lineRef && !l.saleNote ? <span className="inline-flex flex-wrap items-center gap-1.5"><Link className={MISSING_BTN} href={`/sprzedaz/umowa/pozycja?ref=${l.lineRef}&back=${encodeURIComponent(`/sprzedaz?${qs}`)}`} title="Pozycja bez sztuki z magazynu – wybierzesz produkt z katalogu">Dołącz umowę</Link><JpkNa lineKey={l.key} on={false} /></span>
                         : <span className="text-muted" title={l.saleNote === "SPRZEDAŻ USUNIĘTA" ? "Sprzedaż usunięta – został tylko paragon, nie ma do czego dołączyć umowy" : l.saleNote === "KOREKTA" ? "Korekta faktury – umowa jest przy fakturze korygowanej" : undefined}>–</span>}
                     </td>
                     <td className="whitespace-nowrap text-xs">

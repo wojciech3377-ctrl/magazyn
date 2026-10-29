@@ -222,6 +222,18 @@ export async function saveJpkNote(key: string, note: string): Promise<{ ok?: tru
   return { ok: true };
 }
 
+/** JPK: „nie dotyczy” przy pozycji bez umowy (włącz / cofnij). Pozycja dalej jest w JPK i w Excelu. */
+export async function setJpkNa(key: string, on: boolean): Promise<{ ok?: true; error?: string }> {
+  const { supabase } = await requireSection("sprzedaz", "faktury");
+  if (!JPK_KEY.test(key)) return { error: "Nieznana linia." };
+  const { error } = on
+    ? await supabase.from("jpk_na").upsert({ line_key: key })
+    : await supabase.from("jpk_na").delete().eq("line_key", key);
+  if (error) return { error: /jpk_na|schema cache/i.test(error.message) ? "„Nie dotyczy” wymaga SQL 85 w Supabase." : error.message };
+  revalidatePath("/sprzedaz");
+  return { ok: true };
+}
+
 /**
  * „Dołącz umowę” do pozycji bez sztuki z magazynu (kasa: pozycja wpisana z nazwy / produkt własny; faktura ręczna):
  * wybrany produkt i rozmiar z katalogu → sprzedana sztuka → zwykłe dołączanie umowy do sztuki.

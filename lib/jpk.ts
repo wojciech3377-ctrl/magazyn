@@ -44,6 +44,7 @@ export type JpkLine = {
   consignorWait: boolean;      // rzecz komisanta bez umowy – czeka na umowę / fakturę od komisanta
   lineRef: string | null;      // pos:<pozycja kasy> | fv:<pozycja faktury> – pozycja bez sztuki („Dołącz umowę” tworzy sztukę)
   note: string | null;         // notatka do linii JPK (jpk_notes)
+  na?: boolean;                // „nie dotyczy” – pozycja bez umowy celowo (jpk_na, SQL 85)
 };
 
 type Contract = { id: string; number: number | null; doc_number: string | null; contract_date: string | null; currency: string | null; template: string | null; status: string; paid_at: string | null; source: string | null };
@@ -339,7 +340,10 @@ async function withNotes(db: SupabaseClient, lines: JpkLine[]) {
   const keys = lines.map((l) => l.key);
   const notes = await inChunks<{ line_key: string; note: string }>(keys, (part) => db.from("jpk_notes").select("line_key, note").in("line_key", part as string[])).catch(() => []);
   const byKey = new Map(notes.map((n) => [n.line_key, n.note]));
-  for (const l of lines) l.note = byKey.get(l.key) ?? null;
+  // „Nie dotyczy” (SQL 85) – bez tabeli: brak oznaczeń.
+  const na = await inChunks<{ line_key: string }>(keys, (part) => db.from("jpk_na").select("line_key").in("line_key", part as string[])).catch(() => []);
+  const naSet = new Set(na.map((n) => n.line_key));
+  for (const l of lines) { l.note = byKey.get(l.key) ?? null; l.na = naSet.has(l.key); }
   return lines;
 }
 

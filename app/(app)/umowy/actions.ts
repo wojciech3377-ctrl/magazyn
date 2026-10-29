@@ -26,6 +26,9 @@ async function attachByCodes(supabase: Awaited<ReturnType<typeof requireSection>
   );
   const found = units ?? [];
   if (found.length) {
+    // Umowa z kompletem rzeczy („Ile rzeczy na umowie”) – bez kolejnej.
+    const taken = await contractTakenError(supabase, contractId, found.length, found.map((u) => u.id as string));
+    if (taken) throw new Error(taken);
     // Forma VAT umowy niezgodna z którąś sztuką – baza odrzuca całość z opisem (nic nie zostaje przypięte).
     const { error } = await supabase.from("units").update({ contract_id: contractId }).in("id", found.map((u) => u.id));
     if (error) throw new Error(error.message);
@@ -66,7 +69,12 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
     const docNumber = String(formData.get("doc_number") ?? "").trim().slice(0, 60) || null;
     const perItem = formData.get("amount_per_item") === "1";
     const vatForm = ["vat_margin", "vat_23"].includes(String(formData.get("vat_form"))) ? String(formData.get("vat_form")) : null;
+    // Ile rzeczy obejmuje umowa (SQL 85) – puste: bez limitu.
+    const limRaw = String(formData.get("item_limit") ?? "").trim();
+    const itemLimit = limRaw ? Math.floor(Number(limRaw)) : null;
+    if (itemLimit !== null && (!Number.isFinite(itemLimit) || itemLimit < 1 || itemLimit > 10000)) return { error: "„Ile rzeczy na umowie” – wpisz liczbę od 1 albo zostaw puste." };
     const payload = {
+      ...(itemLimit ? { item_limit: itemLimit } : {}),
       ...(perItem ? { amount_per_item: true } : {}),
       ...(vatForm ? { vat_form: vatForm } : {}),
       type,
@@ -87,6 +95,7 @@ export async function createContract(_: unknown, formData: FormData): Promise<{ 
     }).select("id").single();
     if (error && /amount_per_item/.test(error.message)) throw new Error("Aby zapisać „kwota za każdą rzecz”, uruchom w Supabase (SQL Editor) plik 0055_contract_amount_per_item.sql.");
     if (error && /vat_form/.test(error.message)) throw new Error("Aby zapisać formę VAT umowy, uruchom w Supabase (SQL Editor) plik 0056_contract_vat_form.sql.");
+    if (error && /item_limit/.test(error.message)) throw new Error("Aby zapisać „Ile rzeczy na umowie”, uruchom w Supabase (SQL Editor) plik 0085_contract_limit_pos_pieces.sql.");
     if (error) throw error;
     id = data.id;
     // Numer nie wpisany → odczyt z pliku PDF (klucz serwera – plik w prywatnym magazynie).
@@ -508,6 +517,21 @@ export async function markPaid(formData: FormData) {
 }
 
 /** Numer umowy z dokumentu i waluta (do JPK). */
+/** „To wszystkie rzeczy z tej umowy” – limit = obecna liczba rzeczy; kolejnej nie da się przypiąć. Ponownie – zdjęcie limitu. */
+export async function setContractComplete(formData: FormData) {
+  const { supabase } = await requireSection("umowy", "dostawa");
+  const id = String(formData.get("id") ?? "");
+  if (!/^[0-9a-f-]{36}$/i.test(id)) redirect("/umowy");
+  const unlock = formData.get("unlock") === "1";
+  const { count } = await supabase.from("units").select("id", { count: "exact", head: true }).eq("contract_id", id).not("status", "in", "(removed,consignor_returned)");
+  if (!unlock && !count) redirect(`/umowy/${id}?blad=${encodeURIComponent("Na umowie nie ma jeszcze żadnej rzeczy.")}`);
+  const { error } = await supabase.from("contracts").update({ item_limit: unlock ? null : count }).eq("id", id);
+  if (error) redirect(`/umowy/${id}?blad=${encodeURIComponent(/item_limit/.test(error.message) ? "Uruchom w Supabase SQL 0085_contract_limit_pos_pieces.sql." : error.message)}`);
+  revalidatePath(`/umowy/${id}`);
+  revalidatePath("/umowy");
+  redirect(`/umowy/${id}?ok=${encodeURIComponent(unlock ? "Limit zdjęty – można przypinać kolejne rzeczy." : `Komplet: ${count} rzeczy. Kolejnej nie da się przypiąć.`)}`);
+}
+
 export async function updateContractMeta(formData: FormData) {
   const { supabase, profile } = await requireSection("umowy", "dostawa");
   const id = String(formData.get("id"));
@@ -526,7 +550,23 @@ export async function updateContractMeta(formData: FormData) {
     }
     patch.amount_per_item = formData.get("amount_per_item") === "1";
   }
+  // Ile rzeczy obejmuje umowa (SQL 85); puste = bez limitu. Nie mniej niż już przypiętych.
+  if (formData.has("item_limit")) {
+    const raw = String(formData.get("item_limit") ?? "").trim();
+    const lim = raw ? Math.floor(Number(raw)) : null;
+    if (lim !== null && (!Number.isFinite(lim) || lim < 1 || lim > 10000)) redirect(`/umowy/${id}?blad=${encodeURIComponent("„Ile rzeczy na umowie” – wpisz liczbę od 1 albo zostaw puste (bez limitu).")}`);
+    if (lim !== null) {
+      const { count } = await supabase.from("units").select("id", { count: "exact", head: true }).eq("contract_id", id).not("status", "in", "(removed,consignor_returned)");
+      if ((count ?? 0) > lim) redirect(`/umowy/${id}?blad=${encodeURIComponent(`Na umowie jest już ${count} rzeczy – limit nie może być mniejszy (najpierw odepnij nadmiarowe).`)}`);
+    }
+    patch.item_limit = lim;
+  }
   let error: { message: string } | null = (await supabase.from("contracts").update(patch).eq("id", id)).error;
+  if (error && /item_limit/.test(error.message)) {
+    delete patch.item_limit;
+    error = (await supabase.from("contracts").update(patch).eq("id", id)).error;
+    if (!error) error = { message: "Zapisano bez „Ile rzeczy na umowie” – uruchom w Supabase SQL 0085_contract_limit_pos_pieces.sql." };
+  }
   if (error && /amount_per_item/.test(error.message)) {
     delete patch.amount_per_item;
     error = (await supabase.from("contracts").update(patch).eq("id", id)).error;
@@ -575,6 +615,8 @@ export async function assignContractToPiece(formData: FormData) {
   if (!ref) return fail("Nie rozpoznałem pozycji zamówienia.");
   const { data: c } = await supabase.from("contracts").select("id, amount, status").eq("id", contractId).maybeSingle();
   if (!c || ["cancelled", "rejected", "sent"].includes(c.status as string)) return fail("Ta umowa jest anulowana, czeka na podpis albo nie istnieje.");
+  const full = await contractTakenError(supabase, contractId, 1);
+  if (full) return fail(full);
   const { data: saleId, error } = await supabase.rpc("ensure_order_line_sale", { p_order_id: ref.orderId, p_line_id: ref.lineId, p_index: ref.n });
   if (error || !saleId) return fail(error?.message ?? "Nie udało się przygotować sprzedaży.");
   const { data: sale } = await supabase.from("sales").select("id, unit:units(id, contract_id)").eq("id", saleId as string).single();

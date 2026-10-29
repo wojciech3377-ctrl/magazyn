@@ -74,6 +74,11 @@ export function ContractForm({ consignors, defaultUnits, canSeePrices, returnTo 
           </label>
         </div>
       )}
+      <div>
+        <label className="label" htmlFor="item_limit">Ile rzeczy na umowie</label>
+        <input className="input w-32" id="item_limit" name="item_limit" type="number" min={1} max={10000} inputMode="numeric" placeholder="bez limitu" />
+        <p className="mt-1 text-xs text-muted">Np. faktura na 2 pary → 2. Gdy przypniesz tyle rzeczy, umowy nie da się przypiąć do kolejnej.</p>
+      </div>
       <ContractFileInput label="Plik (PDF lub zdjęcie)" />
       <ContractItemsPicker defaultCodes={defaultUnits.split(/[\s,]+/).filter(Boolean)} />
       <InvoiceItemsInput canSeePrices={canSeePrices} />
