@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { receiptJobStatus } from "@/app/(app)/sprzedaz/receipt-actions";
+import { watchReceiptJob } from "@/components/receipt-poll";
 
 /**
  * „Drukuj paragon PDF” w sprzedaży z Kasy. Gdy paragon fiskalny jeszcze się drukuje, czeka na numer z drukarki;
@@ -16,12 +16,10 @@ export function ReceiptPdfButton({ posOrderId, ready: initialReady, jobId, auto 
 
   useEffect(() => {
     if (ready || !jobId) return;
-    const t = setInterval(async () => {
-      const j = await receiptJobStatus(jobId);
-      if (j?.status === "printed") { setReady(true); clearInterval(t); }
-      if (j?.status === "error" || j?.status === "cancelled") { setFailed(true); clearInterval(t); }
-    }, 2500);
-    return () => clearInterval(t);
+    return watchReceiptJob(jobId, (j) => {
+      if (j.status === "printed") setReady(true);
+      if (j.status === "error" || j.status === "cancelled") setFailed(true);
+    });
   }, [ready, jobId]);
 
   useEffect(() => {

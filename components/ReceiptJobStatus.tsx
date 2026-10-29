@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState, useTransition } from "react";
-import { cancelReceiptJob, retryReceiptJob, receiptJobStatus, type JobView } from "@/app/(app)/sprzedaz/receipt-actions";
+import { cancelReceiptJob, retryReceiptJob, type JobView } from "@/app/(app)/sprzedaz/receipt-actions";
 import { Pill } from "@/components/ui";
+import { watchReceiptJob } from "@/components/receipt-poll";
 
 const TEXT: Record<string, { text: string; tone: "slate" | "amber" | "green" | "red" | "blue" }> = {
   queued: { text: "paragon w kolejce do drukarki", tone: "blue" },
@@ -20,11 +21,7 @@ export function ReceiptJobStatus({ job: initial, compact, onReset }: { job: JobV
   const waiting = job.status === "queued" || job.status === "printing";
   useEffect(() => {
     if (!waiting) return;
-    const t = setInterval(async () => {
-      const j = await receiptJobStatus(job.id);
-      if (j) setJob(j);
-    }, 2500);
-    return () => clearInterval(t);
+    return watchReceiptJob(job.id, setJob);
   }, [job.id, waiting]);
   const stuck = job.status === "printing" && job.claimed_at && Date.now() - new Date(job.claimed_at).getTime() > 120_000;
   const st = TEXT[job.status] ?? TEXT.queued;
