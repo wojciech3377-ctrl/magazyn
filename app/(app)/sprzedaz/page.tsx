@@ -87,8 +87,21 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
   // Nieopłacone: czeka na płatność (bez pobrań; anulowane i zwrócone to nie „nieopłacone”).
   if (sp.platnosc === "nieoplacone") query = query.in("financial_status", ["PENDING", "AUTHORIZED", "PARTIALLY_PAID", "EXPIRED"]).eq("cod", false).is("cancelled_at", null);
   const q = (sp.q ?? "").replace(/[%,()#*]/g, "").trim();
-  const qex = wordsOr(["number", "customer_name", "email", "phone"], searchWords(q));
-  if (qex) query = query.or(qex);
+  const qWords = searchWords(q);
+  if (qWords.length) {
+    // Także po sprzedanej rzeczy: nazwa / rozmiar pozycji (linie sprzedaży) oraz kod sztuki, IMEI, SKU, nazwa z Magazynu.
+    const [{ data: byName }, { data: units }] = await Promise.all([
+      supabase.from("sales").select("order_id").not("order_id", "is", null).or(wordsOr(["product_name"], qWords)!).order("sold_at", { ascending: false }).limit(300),
+      supabase.from("units_list").select("id").or(wordsOr(["title", "option", "style_sku", "code", "identifier", "base_sku"], qWords)!).limit(300),
+    ]);
+    const unitIds = (units ?? []).map((u) => u.id as string);
+    const { data: byUnit } = unitIds.length
+      ? await supabase.from("sales").select("order_id").not("order_id", "is", null).in("unit_id", unitIds.slice(0, 300)).limit(300)
+      : { data: [] as { order_id: string }[] };
+    const orderIds = [...new Set([...(byName ?? []), ...(byUnit ?? [])].map((r) => r.order_id as string))].slice(0, 150);
+    const qex = wordsOr(["number", "customer_name", "email", "phone"], qWords, orderIds.length ? [`id.in.(${orderIds.join(",")})`] : []);
+    if (qex) query = query.or(qex);
+  }
 
   const [{ data: orders, count }, counts, { count: problems }, { data: logs }] = await Promise.all([
     query,
@@ -188,7 +201,7 @@ export default async function SprzedazPage({ searchParams }: { searchParams: Pro
 
       <ListToolbar
         q={sp.q}
-        placeholder="Numer zamówienia, klient albo e-mail"
+        placeholder="Numer, klient, e-mail albo sprzedana rzecz (nazwa, kod, IMEI)"
         hidden={{ status: tab || undefined, sklep: sp.sklep }}
         sort={{ value: orderSort, options: Object.entries(ORDER_SORTS).map(([value, o]) => ({ value, label: o.label })) }}
         dirParam={null}
