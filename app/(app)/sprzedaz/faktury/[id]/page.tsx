@@ -39,8 +39,9 @@ export default async function InvoicePage({ params, searchParams }: { params: Pr
         actions={
           <>
             {isPar && <PrintPdfButton url={`/api/faktury/${inv.id}/pdf`}>Wydrukuj dokument</PrintPdfButton>}
-            <a className={isPar ? "btn-secondary" : "btn"} href={`/api/faktury/${inv.id}/pdf`} target="_blank" rel="noreferrer">PDF</a>
-            {!isPar && <a className="btn-secondary" href={`/api/faktury/${inv.id}/xml`}>XML</a>}
+            {/* Podgląd z paskiem Wróć / Pobierz / Udostępnij – działa też w aplikacji na telefonie (nowa karta tam nie działa). */}
+            <Link className={isPar ? "btn-secondary" : "btn"} href={`/druk/pdf?src=${encodeURIComponent(`/api/faktury/${inv.id}/pdf`)}&wroc=${encodeURIComponent(`/sprzedaz/faktury/${inv.id}`)}&nazwa=${encodeURIComponent(String(inv.number).replace(/[^A-Za-z0-9_.-]/g, "-"))}&tytul=${encodeURIComponent(`${isPar ? "Paragon" : "Faktura"} ${inv.number}`)}`}>PDF</Link>
+            {!isPar && <a className="btn-secondary" href={`/api/faktury/${inv.id}/xml`} download={`${String(inv.number).replace(/[^A-Za-z0-9_.-]/g, "-")}.xml`}>XML</a>}
             {inv.kind !== "correction" && !isPar && <Link className="btn-secondary" href={`/sprzedaz/faktury/nowa?typ=ksef&podobna=${inv.id}`}>Wystaw podobny</Link>}
             {inv.kind !== "correction" && inv.status === "accepted" && inv.ksef_number && <Link className="btn-secondary" href={`/sprzedaz/faktury/${inv.id}/korekta`}>Wystaw korektę</Link>}
             {profile.role === "admin" && !inKsef && (

@@ -36,7 +36,9 @@ async function fonts() {
 const pl = (n: number) => new Intl.NumberFormat("pl-PL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
 const date = (d: string | null) => (d ? d.split("-").reverse().join(".") : "–");
 
-function fit(font: PDFFont, text: string, size: number, width: number) {
+function fit(font: PDFFont, raw: string | null | undefined, size: number, width: number) {
+  // Brak tekstu (np. niepełne dane sprzedawcy) – pusty wiersz zamiast błędu całego PDF.
+  const text = String(raw ?? "");
   if (font.widthOfTextAtSize(text, size) <= width) return [text];
   const words = text.split(/\s+/);
   const lines: string[] = [];
@@ -73,11 +75,12 @@ export async function renderInvoicePdf(inv: InvoiceForPdf) {
   meta.forEach((m, i) => page.drawText(m, { x: right - regular.widthOfTextAtSize(m, 9), y: y - i * 12 + 4, size: 9, font: regular }));
   y -= 40;
 
-  const party = (title: string, p: Party, x: number) => {
+  const party = (title: string, party0: Party | null | undefined, x: number) => {
+    const p = (party0 ?? {}) as Party;
     let yy = y;
     page.drawText(title, { x, y: yy, size: 8, font: bold, color: grey });
     yy -= 13;
-    for (const l of [...fit(bold, p.name, 9.5, 240)]) {
+    for (const l of [...fit(bold, p.name || "–", 9.5, 240)]) {
       page.drawText(l, { x, y: yy, size: 9.5, font: bold });
       yy -= 12;
     }
@@ -117,7 +120,7 @@ export async function renderInvoicePdf(inv: InvoiceForPdf) {
     page.drawText(String(it.position), { x: cols[0], y, size: 9, font: regular });
     nameLines.forEach((l, i) => page.drawText(l, { x: cols[1], y: y - i * 11, size: 9, font: regular }));
     page.drawText(String(Number(it.quantity)), { x: cols[2], y, size: 9, font: regular });
-    page.drawText(it.unit, { x: cols[3], y, size: 9, font: regular });
+    page.drawText(String(it.unit ?? "szt."), { x: cols[3], y, size: 9, font: regular });
     page.drawText(pl(Number(it.unit_price_gross)), { x: cols[4], y, size: 9, font: regular });
     page.drawText(pl(Number(it.total_gross)), { x: cols[5], y, size: 9, font: regular });
     const vat = it.vat === "23" ? "23%" : "marża";
