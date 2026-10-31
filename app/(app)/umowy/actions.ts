@@ -429,14 +429,15 @@ export async function acceptContract(formData: FormData) {
     .eq("id", id).eq("status", "signed").select("id, source, items, type");
   if (!accepted?.length) redirect(withMsg(target, "blad", "Zatwierdzić można tylko umowę podpisaną przez sprzedającego."));
 
-  // Każda rzecz dostaje osobną umowę z własnym numerem (bez migracji 0040 – jedna umowa jak dotąd).
-  // Faktura sprzedającego (wgrana zamiast podpisu) obejmuje wszystkie pozycje – bez dzielenia.
+  // Każda rzecz dostaje osobną umowę z własnym numerem i swoją kwotą (bez migracji 0040 – jedna umowa jak dotąd).
+  // Także faktura wgrana przez sprzedającego zamiast podpisu (np. 5 par na jednej FV → 5 umów z tym samym plikiem FV);
+  // każda obejmuje jedną rzecz, więc po utworzeniu sztuki jest zablokowana.
   const isInvoice = (accepted![0] as { type?: string }).type === "invoice";
-  const split = isInvoice ? { data: [id], error: null } : await (await import("@/lib/supabase/admin")).createAdminClient().rpc("split_contract", { p_contract_id: id });
+  const split = await (await import("@/lib/supabase/admin")).createAdminClient().rpc("split_contract", { p_contract_id: id });
   const ids = (split.error ? [id] : (split.data as string[] | null) ?? [id]);
-  // split_contract (SQL 40) nie zna późniejszych pól – nowe umowy dostają je z pierwotnej.
+  // split_contract (SQL 40) nie zna późniejszych pól – nowe umowy dostają je z pierwotnej (także plik faktury).
   if (ids.length > 1) {
-    const { data: orig } = await supabase.from("contracts").select("doc_number, vat_form, amount_per_item").eq("id", id).maybeSingle();
+    const { data: orig } = await supabase.from("contracts").select("doc_number, vat_form, amount_per_item, file_path, file_name").eq("id", id).maybeSingle();
     if (orig) await supabase.from("contracts").update(orig).in("id", ids.filter((x) => x !== id));
   }
   const msgs: string[] = [ids.length > 1 ? `Umowa zatwierdzona i podzielona na ${ids.length} umowy – osobna dla każdej rzeczy.` : "Umowa zatwierdzona."];
@@ -483,7 +484,7 @@ export async function acceptContract(formData: FormData) {
   }
   const d = { error: pdfError };
   if (d.error) msgs.push(`PDF: ${d.error}`);
-  else if (isInvoice) msgs[0] = "Faktura sprzedającego zatwierdzona.";
+  else if (isInvoice) msgs[0] = ids.length > 1 ? `Faktura sprzedającego zatwierdzona i podzielona na ${ids.length} umowy – osobna dla każdej rzeczy, z jej kwotą (ten sam plik FV).` : "Faktura sprzedającego zatwierdzona.";
   else msgs.push(emailed ? `Sprzedający dostał ${emailed > 1 ? `${emailed} umowy` : "umowę"} e-mailem.` : "Sprzedający pobierze umowy ze swojego linku.");
   revalidatePath(`/umowy/${id}`);
   revalidatePath("/dostawa");
@@ -517,19 +518,25 @@ export async function markPaid(formData: FormData) {
 }
 
 /** Numer umowy z dokumentu i waluta (do JPK). */
-/** „To wszystkie rzeczy z tej umowy” – limit = obecna liczba rzeczy; kolejnej nie da się przypiąć. Ponownie – zdjęcie limitu. */
+/**
+ * Blokada / odblokowanie umowy: `limit` = do ilu rzeczy można ją przypiąć (nie mniej niż już przypiętych);
+ * bez `limit` – zablokuj na obecnej liczbie rzeczy.
+ */
 export async function setContractComplete(formData: FormData) {
   const { supabase } = await requireSection("umowy", "dostawa");
   const id = String(formData.get("id") ?? "");
   if (!/^[0-9a-f-]{36}$/i.test(id)) redirect("/umowy");
-  const unlock = formData.get("unlock") === "1";
   const { count } = await supabase.from("units").select("id", { count: "exact", head: true }).eq("contract_id", id).not("status", "in", "(removed,consignor_returned)");
-  if (!unlock && !count) redirect(`/umowy/${id}?blad=${encodeURIComponent("Na umowie nie ma jeszcze żadnej rzeczy.")}`);
-  const { error } = await supabase.from("contracts").update({ item_limit: unlock ? null : count }).eq("id", id);
+  const raw = String(formData.get("limit") ?? "").trim();
+  const limit = raw ? Math.floor(Number(raw)) : (count ?? 0);
+  if (!Number.isFinite(limit) || limit < 1 || limit > 10000) redirect(`/umowy/${id}?blad=${encodeURIComponent("Wpisz, do ilu rzeczy można przypiąć umowę (od 1).")}`);
+  if (limit < (count ?? 0)) redirect(`/umowy/${id}?blad=${encodeURIComponent(`Na umowie jest już ${count} rzeczy – limit nie może być mniejszy.`)}`);
+  const { error } = await supabase.from("contracts").update({ item_limit: limit }).eq("id", id);
   if (error) redirect(`/umowy/${id}?blad=${encodeURIComponent(/item_limit/.test(error.message) ? "Uruchom w Supabase SQL 0085_contract_limit_pos_pieces.sql." : error.message)}`);
   revalidatePath(`/umowy/${id}`);
   revalidatePath("/umowy");
-  redirect(`/umowy/${id}?ok=${encodeURIComponent(unlock ? "Limit zdjęty – można przypinać kolejne rzeczy." : `Komplet: ${count} rzeczy. Kolejnej nie da się przypiąć.`)}`);
+  const free = limit - (count ?? 0);
+  redirect(`/umowy/${id}?ok=${encodeURIComponent(free > 0 ? `Umowa odblokowana: można ją przypiąć jeszcze do ${free} ${free === 1 ? "rzeczy" : "rzeczy"} (razem ${limit}).` : `Umowa zablokowana: ${limit} ${limit === 1 ? "rzecz" : "rzeczy"}.`)}`);
 }
 
 export async function updateContractMeta(formData: FormData) {

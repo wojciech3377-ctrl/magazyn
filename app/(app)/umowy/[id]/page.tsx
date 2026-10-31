@@ -19,6 +19,7 @@ import { ContractFileInput } from "@/components/ContractFileInput";
 import { StockOption } from "../ContractForm";
 import { pendingContractItems } from "@/lib/contracts/pending";
 import { capacity } from "@/lib/contracts/free";
+import { expectedPrices } from "@/lib/contracts/inherit-price";
 import { contractHistory } from "@/lib/contracts/history";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -39,8 +40,23 @@ export default async function ContractPage({ params, searchParams }: { params: P
     .order("number");
   // Ile rzeczy obejmuje umowa (pozycje / „Ile rzeczy na umowie”) i czy jest komplet.
   const liveUnits = (units ?? []).filter((u) => !["removed", "consignor_returned"].includes(u.status as string)).length;
-  const cap = capacity(c.items, c.type, c.amount_per_item, c.item_limit);
+  const cap = capacity(c.items, c.type, c.amount_per_item, c.item_limit, liveUnits);
   const full = liveUnits >= cap;
+  // Rozliczenie kwoty umowy: ile kosztowały sprzedane rzeczy (z umowy) i ile kwoty zostało do wykorzystania.
+  const usage = (() => {
+    if (!profile.can_see_prices) return null;
+    const live = (units ?? []).filter((u) => !["removed", "consignor_returned"].includes(u.status as string)) as unknown as { id: string; variant_id: string; status: string }[];
+    const its = (c.items ?? []) as { qty?: number; price?: number | string }[];
+    const itemsTotal = its.reduce((n, i) => n + (Number(i.price) > 0 ? Number(i.price) * Math.max(1, Math.floor(Number(i.qty ?? 1)) || 1) : 0), 0);
+    const amount = c.amount === null || c.amount === undefined ? null : Number(c.amount);
+    const total = c.amount_per_item && amount !== null ? (Number.isFinite(cap) ? amount * cap : null) : itemsTotal > 0 ? itemsTotal : amount;
+    if (total === null || !live.length) return null;
+    const { expected } = expectedPrices(c, live);
+    const sold = live.filter((u) => ["sold", "shipped"].includes(u.status));
+    const soldValue = sold.reduce((n, u) => n + (expected.get(u.id) ?? 0), 0);
+    const soldUnknown = sold.filter((u) => !expected.has(u.id)).length;
+    return { total, sold: sold.length, soldValue, soldUnknown, left: Math.max(0, total - soldValue), notSold: live.length - sold.length, free: Number.isFinite(cap) ? Math.max(0, cap - live.length) : 0 };
+  })();
   // „Dopnij sztuki” po nazwie: sztuki własne bez umowy pasujące do wyszukiwania (ze zdjęciem).
   const szukaj = (sp.szukaj ?? "").replace(/[%,()*\\]/g, " ").trim().slice(0, 100);
   const found: { id: string; code: string; title: string; option: string; status: string; identifier: string | null; location_name: string; image_url: string | null }[] = [];
@@ -254,31 +270,41 @@ export default async function ContractPage({ params, searchParams }: { params: P
                 })}
               </tbody>
             </table>
-            {!c.template && !["cancelled", "rejected"].includes(c.status) && (
+            {(!c.template || liveUnits > 0) && !["cancelled", "rejected"].includes(c.status) && (
               <div className="flex flex-wrap items-center gap-2 border-t border-line px-4 pt-3 text-sm">
                 {full ? (
                   <>
-                    <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-ok">Komplet: {liveUnits} z {cap} {cap === 1 ? "rzeczy" : "rzeczy"}</span>
-                    <span className="text-xs text-muted">Umowy nie da się przypiąć do kolejnej rzeczy.</span>
-                    {c.item_limit && (
-                      <form action={setContractComplete}>
+                    <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">🔒 Zablokowana: {liveUnits} z {cap}</span>
+                    <span className="text-xs text-muted">Umowa jest przy {liveUnits === 1 ? "rzeczy" : "rzeczach"} – nie da się jej przypiąć do innej.</span>
+                    <details className="w-full sm:w-auto">
+                      <summary className="cursor-pointer text-xs text-accent hover:underline">Odblokuj</summary>
+                      <form action={setContractComplete} className="mt-2 flex flex-wrap items-center gap-2">
                         <input type="hidden" name="id" value={c.id} />
-                        <input type="hidden" name="unlock" value="1" />
-                        <SubmitButton className="text-xs text-accent hover:underline" pendingText="…">zdejmij limit</SubmitButton>
+                        <label className="text-xs text-muted" htmlFor="unlock_limit">Do ilu rzeczy (razem)</label>
+                        <input id="unlock_limit" className="input h-8 w-20 tabular-nums" name="limit" type="number" min={liveUnits + 1} max={10000} defaultValue={liveUnits + 1} inputMode="numeric" required />
+                        <SubmitButton className="btn-secondary px-2.5 py-1 text-xs" pendingText="…">Odblokuj</SubmitButton>
                       </form>
-                    )}
+                    </details>
                   </>
                 ) : (
                   <>
-                    <span className="text-xs text-muted">{Number.isFinite(cap) ? `Rzeczy: ${liveUnits} z ${cap}` : `Rzeczy: ${liveUnits} (bez limitu)`}</span>
-                    {!Number.isFinite(cap) && liveUnits > 0 && (
+                    <span className="text-xs text-muted">{Number.isFinite(cap) ? `Rzeczy: ${liveUnits} z ${cap} – wolne miejsca: ${cap - liveUnits}` : "Po pierwszym przypięciu umowa zablokuje się sama (jedna rzecz albo cała dostawa naraz)."}</span>
+                    {Number.isFinite(cap) && liveUnits > 0 && (
                       <form action={setContractComplete}>
                         <input type="hidden" name="id" value={c.id} />
-                        <SubmitButton className="btn-secondary px-2.5 py-1 text-xs" pendingText="…">To wszystkie rzeczy – zablokuj umowę</SubmitButton>
+                        <SubmitButton className="btn-secondary px-2.5 py-1 text-xs" pendingText="…">Zablokuj teraz ({liveUnits})</SubmitButton>
                       </form>
                     )}
                   </>
                 )}
+              </div>
+            )}
+            {usage && (
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-line px-4 pt-3 text-sm">
+                <span>Kwota umowy: <b className="tabular-nums">{formatMoney(usage.total, c.currency ?? "PLN")}</b></span>
+                <span className="text-muted">sprzedane: {usage.sold} szt. za <b className="tabular-nums text-ink">{formatMoney(usage.soldValue, c.currency ?? "PLN")}</b>{usage.soldUnknown ? ` (${usage.soldUnknown} bez kwoty z umowy)` : ""}</span>
+                <span className="rounded-full bg-amber-50 px-2.5 py-0.5 text-amber-900">zostało do wykorzystania: <b className="tabular-nums">{formatMoney(usage.left, c.currency ?? "PLN")}</b>
+                  <span className="text-xs"> · {usage.notSold} szt. niesprzedanych{usage.free ? ` · ${usage.free} wolnych miejsc` : ""}</span></span>
               </div>
             )}
             {!c.template && !full && <form id="dopnij" action={attachUnits} className="flex flex-wrap gap-2 border-t border-line p-4">

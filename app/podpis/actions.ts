@@ -232,7 +232,7 @@ export async function respondContractOffer(token: string, _: Result | null, form
   const split = await db.rpc("split_contract", { p_contract_id: c.id });
   const ids = split.error ? [c.id as string] : ((split.data as string[] | null) ?? [c.id as string]);
   if (ids.length > 1) {
-    const { data: orig } = await db.from("contracts").select("doc_number, vat_form, amount_per_item, offer, offer_responded_at").eq("id", c.id).maybeSingle();
+    const { data: orig } = await db.from("contracts").select("doc_number, vat_form, amount_per_item, offer, offer_responded_at, file_path, file_name").eq("id", c.id).maybeSingle();
     if (orig) await db.from("contracts").update(orig).in("id", ids.filter((x) => x !== c.id));
   }
   const its = items as { unit_id?: string; variant_id?: string }[];
